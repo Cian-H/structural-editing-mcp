@@ -112,21 +112,18 @@
      (values (list :path path :leaf atom) rest))))
 
 (defun string-to-sexp (string)
-  "Parse a raw Lisp/Clojure/Scheme string into an s-expression data structure.
-Delimiters are tagged with :paren, :square, or :curly, and all nodes are tagged with 0-indexed :path."
+  "Parse a raw string into an s-expression data structure.
+Always returns a (:path () :file ...) node representing the parsed file contents."
   (let ((tokens (tokenize string)))
     (if (null tokens)
-        nil
-        (multiple-value-bind (first-form remaining) (parse-single-form tokens '())
-          (if (null remaining)
-              first-form
-              (labels ((parse-top-level (toks idx)
-                         (match toks
-                           (nil nil)
-                           (_
-                            (multiple-value-bind (form rest) (parse-single-form toks (list idx))
-                              (cons form (parse-top-level rest (1+ idx))))))))
-                (parse-top-level tokens 0)))))))
+        (list :path '() :file)
+        (labels ((parse-top-level (toks idx)
+                   (match toks
+                     (nil nil)
+                     (_
+                      (multiple-value-bind (form rest) (parse-single-form toks (list idx))
+                        (cons form (parse-top-level rest (1+ idx))))))))
+          (list* :path '() :file (parse-top-level tokens 0))))))
 
 (defun format-collection (open close children indent)
   (if (null children)
@@ -170,7 +167,10 @@ Delimiters are tagged with :paren, :square, or :curly, and all nodes are tagged 
     ;; Tagged leaf node without :leaf: (:path _ val)
     ((list :path _ val)
      (format-atom val))
-    ;; Tagged collections with path metadata: (:path _ tag . children)
+    ((list* :path _ (or :file 'file) children)
+     (format nil "~{~A~^~%~%~}" (mapcar (lambda (c) (format-sexp c indent)) children)))
+    ((list* :path _ (or :workspace 'workspace) children)
+     (format nil "~{~A~^~%~%~}" (mapcar (lambda (c) (format-sexp c indent)) children)))
     ((list* :path _ (or :paren 'paren) children)
      (format-collection "(" ")" children indent))
     ((list* :path _ (or :square 'square) children)

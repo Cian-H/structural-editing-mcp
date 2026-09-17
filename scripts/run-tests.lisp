@@ -11,5 +11,19 @@
 
 (asdf:load-system :structural-editing-mcp/tests)
 
-(unless (rove:run :structural-editing-mcp/tests)
-  (uiop:quit 1))
+(let ((test-names (uiop:command-line-arguments)))
+  (if test-names
+      (let ((all-passed t))
+        (dolist (name test-names)
+          (let ((sym (find-symbol (string-upcase name) :structural-editing-mcp-tests)))
+            (if sym
+                (let ((*package* (find-package :structural-editing-mcp-tests)))
+                  (unless (rove:run-test sym)
+                    (setf all-passed nil)))
+                (progn
+                  (format *error-output* "~&Error: Test ~A not found in :structural-editing-mcp-tests~%" name)
+                  (setf all-passed nil)))))
+        (unless all-passed
+          (uiop:quit 1)))
+      (unless (rove:run :structural-editing-mcp/tests)
+        (uiop:quit 1))))

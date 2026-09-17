@@ -5,6 +5,7 @@ in {
     (pkgs.sbcl.withPackages (ps:
       with ps; [
         trivia
+        alexandria
         rove
         customLisp.isocline-repl
       ]))
