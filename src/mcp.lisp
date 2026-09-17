@@ -194,6 +194,19 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                            (structural-editing-mcp.tree:get-node-at-path tree target-path))))
           (values (butlast target-path) (lastcar target-path)))))
 
+(defun format-mutation-result (message target-path tree)
+  (let* ((preview-path (cond
+                         ((null target-path) nil)
+                         ((null (cdr target-path)) target-path)
+                         (t (butlast target-path))))
+         (preview-node (and preview-path (structural-editing-mcp.tree:get-node-at-path tree preview-path))))
+    (if preview-node
+        (format nil "~A~%~%Updated preview at ~A:~%~A"
+                message
+                preview-path
+                (format-node-preview preview-node :depth 2))
+        message)))
+
 (defun perform-search (tree target-path query)
   "Search the AST under TARGET-PATH for leaf nodes matching QUERY."
   (let ((results '())
@@ -258,7 +271,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                                                               "description" "Optional list of absolute filepaths to load into the workspace (e.g. ['/path/to/file.lisp'])."))))
 
    (dict "name" "ast_modify"
-         "description" "Mutate AST nodes. Actions: 'insert' (adds new_node before path, or at child index if index is given), 'overwrite' (replaces node at path with new_node), 'wrap' (wraps node at path with parens, brackets, or an enclosing form)."
+         "description" "Mutate AST nodes. Actions: 'insert' (adds new_node before path, or at child index if index is given), 'overwrite' (replaces node at path with new_node), 'wrap' (wraps node at path with parens, brackets, or an enclosing form). NOTE: Automatically returns an updated preview of the enclosing parent node; separate verification reads are unnecessary."
          "inputSchema" (dict "type" "object"
                              "properties" (dict
                                            "path" (dict "type" "array"
@@ -274,7 +287,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                              "required" (list "path" "action" "new_node")))
 
    (dict "name" "ast_remove"
-         "description" "Remove or unwrap AST nodes. Actions: 'delete' (deletes the node at path), 'unwrap' (removes enclosing collection, spilling children into parent), 'promote' (replaces parent node with the node at path)."
+         "description" "Remove or unwrap AST nodes. Actions: 'delete' (deletes the node at path), 'unwrap' (removes enclosing collection, spilling children into parent), 'promote' (replaces parent node with the node at path). NOTE: Automatically returns an updated preview."
          "inputSchema" (dict "type" "object"
                              "properties" (dict
                                            "path" (dict "type" "array"
@@ -286,7 +299,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                              "required" (list "path" "action")))
 
    (dict "name" "ast_relocate"
-         "description" "Move, copy, swap, or merge AST nodes. Actions: 'move' (moves source_path to target_path), 'copy' (duplicates source_path to target_path), 'swap' (swaps nodes at source_path and target_path), 'merge' (merges sibling collection nodes)."
+         "description" "Move, copy, swap, or merge AST nodes. Actions: 'move' (moves source_path to target_path), 'copy' (duplicates source_path to target_path), 'swap' (swaps nodes at source_path and target_path), 'merge' (merges sibling collection nodes). NOTE: Automatically returns an updated preview."
          "inputSchema" (dict "type" "object"
                              "properties" (dict
                                            "source_path" (dict "type" "array"
@@ -407,7 +420,9 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                        (setf structural-editing-mcp.workspace:*workspace-tree*
                              (perform-wrap structural-editing-mcp.workspace:*workspace-tree* path new-node-str)))
                       (t (error "Unknown action: ~A" action)))
-                    (format nil "Successfully executed ~A at ~A" action path)))
+                    (format-mutation-result (format nil "Successfully executed ~A at ~A" action path)
+                                           path
+                                           structural-editing-mcp.workspace:*workspace-tree*)))
 
                  ((equal name "ast_remove")
                   (let* ((path (to-list (gethash "path" args)))
@@ -423,7 +438,9 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                        (setf structural-editing-mcp.workspace:*workspace-tree*
                              (structural-editing-mcp.edit:promote-node structural-editing-mcp.workspace:*workspace-tree* path)))
                       (t (error "Unknown action: ~A" action)))
-                    (format nil "Successfully executed ~A at ~A" action path)))
+                    (format-mutation-result (format nil "Successfully executed ~A at ~A" action path)
+                                           path
+                                           structural-editing-mcp.workspace:*workspace-tree*)))
 
                  ((equal name "ast_relocate")
                   (let* ((src (to-list (gethash "source_path" args)))
@@ -441,12 +458,14 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                                (structural-editing-mcp.edit:copy-node structural-editing-mcp.workspace:*workspace-tree* src tgt-parent tgt-idx))))
                       ((equal action "swap")
                        (setf structural-editing-mcp.workspace:*workspace-tree*
-                             (structural-editing-mcp.edit:swap-nodes structural-editing-mcp.workspace:*workspace-tree* src tgt)))
+                               (structural-editing-mcp.edit:swap-nodes structural-editing-mcp.workspace:*workspace-tree* src tgt)))
                       ((equal action "merge")
                        (setf structural-editing-mcp.workspace:*workspace-tree*
                              (structural-editing-mcp.edit:merge-nodes structural-editing-mcp.workspace:*workspace-tree* src tgt)))
                       (t (error "Unknown action: ~A" action)))
-                    (format nil "Successfully executed ~A from ~A to ~A" action src tgt)))
+                    (format-mutation-result (format nil "Successfully executed ~A from ~A to ~A" action src tgt)
+                                           tgt
+                                           structural-editing-mcp.workspace:*workspace-tree*)))
 
                  ((equal name "ast_search")
                   (let* ((path (to-list (gethash "path" args)))
@@ -470,7 +489,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                     (setf structural-editing-mcp.workspace:*workspace-tree*
                           (structural-editing-mcp.refactor:replace-pattern 
                            structural-editing-mcp.workspace:*workspace-tree* pat rep))
-                    (format nil "Successfully executed pattern replacement.")))
+                    (format nil "Successfully executed pattern replacement across workspace.")))
 
                  ((equal name "ast_extract_variable")
                   (let ((path (to-list (gethash "path" args)))
@@ -482,7 +501,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 
                  ((equal name "commit_workspace")
                   (structural-editing-mcp.workspace:write-workspace)
-                  "Workspace committed to disk.")
+                  (format nil "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))
                  (t (error "Tool not found: ~A" name)))))
           (send-result id (dict "content" (list (dict "type" "text" "text" content)))))
       (error (e)

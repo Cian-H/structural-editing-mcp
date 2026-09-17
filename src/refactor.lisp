@@ -57,11 +57,12 @@
        (if bound
            bound
            pattern)))
-    ((eq (get-node-tag pattern) :leaf)
+    ((member (get-node-tag pattern) '(:leaf :comment))
      pattern)
     (t
-     (multiple-value-bind (path tag children) (parse-node pattern)
-       (list* :path path tag
+     (let ((children (get-node-children pattern)))
+       (list* :path (get-node-path pattern)
+              (get-node-tag pattern)
               (mapcar (lambda (c) (instantiate-pattern c bindings)) children))))))
 
 (defun replace-pattern (tree pattern-str replacement-str)
@@ -72,11 +73,14 @@
                (multiple-value-bind (match-p bindings) (match-pattern pat-ast node nil)
                  (if match-p
                      (instantiate-pattern rep-ast bindings)
-                     (multiple-value-bind (path tag children) (parse-node node)
-                       (if children
-                           (list* :path path tag
-                                  (mapcar #'walk children))
-                           node))))))
+                     (if (member (get-node-tag node) '(:leaf :comment))
+                         node
+                         (let ((children (get-node-children node)))
+                           (if children
+                               (list* :path (get-node-path node)
+                                      (get-node-tag node)
+                                      (mapcar #'walk children))
+                               node)))))))
       (reindex-paths (walk tree)))))
 
 ;;; --- Variable Extraction ---
