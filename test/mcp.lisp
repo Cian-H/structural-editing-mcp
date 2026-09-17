@@ -36,7 +36,7 @@
       (let* ((res (gethash "result" result-json))
              (tools (gethash "tools" res)))
         (ok (listp tools))
-        (ok (= (length tools) 5))
+        (ok (= (length tools) 9))
         (let ((names (mapcar (lambda (x) (gethash "name" x)) tools)))
           (ok (member "read_node" names :test #'equal))
           (ok (not (member "read_workspace" names :test #'equal)))
@@ -49,30 +49,29 @@
   (testing "unified read_node, ast_modify, ast_remove, ast_relocate in memory"
     ;; Setup a test workspace
     (structural-editing-mcp.workspace:init-workspace)
-    (let* ((text "(defun foo () 1) (defun bar () 2)")
-           (parsed (structural-editing-mcp.parser:string-to-sexp text)))
-      (setf (gethash 0 structural-editing-mcp.workspace:*file-registry*) "/tmp/test.lisp")
-      (setf structural-editing-mcp.workspace:*workspace-tree*
-            (structural-editing-mcp.tree:reindex-paths `(:path () :workspace ,parsed)))
+    (with-open-file (f "/tmp/test.lisp" :direction :output :if-exists :supersede)
+      (write-string "(defun foo () 1) (defun bar () 2)" f))
 
-      ;; Test unified read_node at workspace root (path [])
-      (let* ((root-msg (structural-editing-mcp.mcp::dict
-                        "jsonrpc" "2.0"
-                        "id" 9
-                        "method" "tools/call"
-                        "params" (structural-editing-mcp.mcp::dict
-                                  "name" "read_node"
-                                  "arguments" (make-hash-table))))
-             (*standard-output* (make-string-output-stream))
-             (out-str (progn
-                        (structural-editing-mcp.mcp:handle-message root-msg)
-                        (get-output-stream-string *standard-output*)))
-             (json (let ((yason:*parse-json-arrays-as-vectors* nil))
-                     (yason:parse out-str)))
-             (content (first (gethash "content" (gethash "result" json)))))
-        (ok (search "Tag: :WORKSPACE" (gethash "text" content)))
-        (ok (search "Files Loaded (1):" (gethash "text" content)))
-        (ok (search "/tmp/test.lisp" (gethash "text" content))))
+    ;; Load file implicitly through read_node
+    (let* ((req (structural-editing-mcp.mcp::dict
+                 "jsonrpc" "2.0"
+                 "id" 3
+                 "method" "tools/call"
+                 "params" (structural-editing-mcp.mcp::dict
+                           "name" "read_node"
+                           "arguments" (structural-editing-mcp.mcp::dict
+                                        "path" #()
+                                        "load_files" #("/tmp/test.lisp")))))
+           (*standard-output* (make-string-output-stream))
+           (out-str (progn
+                      (structural-editing-mcp.mcp:handle-message req)
+                      (get-output-stream-string *standard-output*)))
+           (json (let ((yason:*parse-json-arrays-as-vectors* nil))
+                   (yason:parse out-str)))
+           (content (first (gethash "content" (gethash "result" json)))))
+      (ok (search "Tag: WORKSPACE" (gethash "text" content)))
+      (ok (search "Files Loaded (1):" (gethash "text" content)))
+      (ok (search "/tmp/test.lisp" (gethash "text" content))))
 
       ;; Test read_node on file 0 (path [0])
       (let* ((read-msg (structural-editing-mcp.mcp::dict
@@ -160,4 +159,4 @@
              (*standard-output* (make-string-output-stream)))
         (structural-editing-mcp.mcp:handle-message swap-msg)
         (let ((first-node (structural-editing-mcp.tree:get-node-at-path structural-editing-mcp.workspace:*workspace-tree* '(0 0))))
-          (ok (search "defun baz" (structural-editing-mcp.parser:sexp-to-string first-node))))))))
+          (ok (search "defun baz" (structural-editing-mcp.parser:sexp-to-string first-node)))))))

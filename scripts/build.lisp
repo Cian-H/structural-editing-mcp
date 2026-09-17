@@ -11,7 +11,7 @@
 
 (asdf:load-system :structural-editing-mcp)
 
-(sb-ext:save-lisp-and-die "structural-editing-mcp-bin"
+(sb-ext:save-lisp-and-die "structural-editing-mcp-server"
                           :executable t
                           :toplevel 'structural-editing-mcp:main
                           :compression t)

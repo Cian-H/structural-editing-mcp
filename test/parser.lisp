@@ -18,7 +18,13 @@
                  (:path (0 0) :leaf a)
                  (:path (0 1) :leaf b)
                  (:path (0 2) :leaf c)))
-             (string-to-sexp "{a b c}"))))
+             (string-to-sexp "{a b c}")))
+  (ok (equal '(:path () :file
+               (:path (0) :comment "; hello
+")
+               (:path (1) :comment "#| block |#"))
+             (string-to-sexp "; hello
+#| block |#"))))
 
 (deftest test-sexp-to-string
   (ok (string= "(a b c)" (sexp-to-string (string-to-sexp "(a b c)"))))

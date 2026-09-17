@@ -186,6 +186,31 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (walk start-node)
       (nreverse results))))
 
+(defun perform-rename (tree target-path old-name new-name)
+  "Recursively rename all leaf nodes matching OLD-NAME to NEW-NAME under TARGET-PATH."
+  (let ((lower-old (string-downcase old-name))
+        (parsed-new (first (structural-editing-mcp.tree:get-node-children 
+                            (structural-editing-mcp.parser:string-to-sexp new-name)))))
+    (labels ((walk (node)
+               (match node
+                 ((leaf path val)
+                  (let* ((str (structural-editing-mcp.parser::format-atom val))
+                         (lower-str (string-downcase str)))
+                    (if (string= lower-old lower-str)
+                        ;; Replace with the new parsed leaf/node
+                        (match parsed-new
+                          ((node _ tag children) `(:path ,path ,tag ,@children))
+                          ((leaf _ new-val) `(:path ,path :leaf ,new-val))
+                          (_ node))
+                        node)))
+                 ((node path tag children)
+                  (list* :path path tag
+                         (mapcar #'walk children)))
+                 (_ node))))
+      (if target-path
+          (structural-editing-mcp.tree:update-node-at-path tree target-path #'walk)
+          (walk tree)))))
+
 ;;; Tool Definitions
 
 (defun get-tools-list ()
@@ -256,6 +281,40 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                                                         "items" (dict "type" "integer")
                                                         "description" "Optional AST path to constrain the search to a specific node/file. If omitted, searches the entire workspace."))
                              "required" (list "query")))
+
+   (dict "name" "ast_rename"
+         "description" "Bulk rename/replace a specific leaf node symbol anywhere in the workspace or under a specific AST path."
+         "inputSchema" (dict "type" "object"
+                             "properties" (dict
+                                           "old_name" (dict "type" "string"
+                                                           "description" "The exact symbol/string to replace (e.g. 'make-api-call').")
+                                           "new_name" (dict "type" "string"
+                                                           "description" "The new symbol/string to replace it with (e.g. 'execute-api-call').")
+                                           "path" (dict "type" "array"
+                                                        "items" (dict "type" "integer")
+                                                        "description" "Optional AST path to constrain the bulk rename to a specific subtree. If omitted, renames globally across the workspace."))
+                             "required" (list "old_name" "new_name")))
+
+   (dict "name" "ast_replace_pattern"
+         "description" "Search the workspace for a structural Lisp pattern and replace it with a new pattern, preserving matched variables (e.g. pattern='(foo ?x ?y)', replacement='(bar ?y ?x)')."
+         "inputSchema" (dict "type" "object"
+                             "properties" (dict
+                                           "pattern" (dict "type" "string"
+                                                           "description" "The pattern to match. Variables start with '?' (e.g. '(make-api-call ?method ?url ?headers ?body)').")
+                                           "replacement" (dict "type" "string"
+                                                           "description" "The replacement template (e.g. '(make-api-call ?url ?method :headers ?headers :body ?body)')."))
+                             "required" (list "pattern" "replacement")))
+
+   (dict "name" "ast_extract_variable"
+         "description" "Extracts an AST node into a local `let` binding wrapped around its immediate parent."
+         "inputSchema" (dict "type" "object"
+                             "properties" (dict
+                                           "path" (dict "type" "array"
+                                                        "items" (dict "type" "integer")
+                                                        "description" "AST path of the node to extract.")
+                                           "variable_name" (dict "type" "string"
+                                                           "description" "The name of the new variable to bind it to."))
+                             "required" (list "path" "variable_name")))
 
    (dict "name" "commit_workspace"
          "description" "Persists all in-memory workspace modifications back to their respective files on disk."
@@ -364,6 +423,30 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                     (if results
                         (format nil "Found ~A matches. Paths:~%~{~A~^~%~}" (length results) results)
                         (format nil "No matches found for '~A' at path ~A" query path))))
+
+                 ((equal name "ast_rename")
+                  (let* ((path (to-list (gethash "path" args)))
+                         (old (gethash "old_name" args))
+                         (new (gethash "new_name" args)))
+                    (setf structural-editing-mcp.workspace:*workspace-tree*
+                          (perform-rename structural-editing-mcp.workspace:*workspace-tree* path old new))
+                    (format nil "Successfully renamed all occurrences of '~A' to '~A'." old new)))
+
+                 ((equal name "ast_replace_pattern")
+                  (let ((pat (gethash "pattern" args))
+                        (rep (gethash "replacement" args)))
+                    (setf structural-editing-mcp.workspace:*workspace-tree*
+                          (structural-editing-mcp.refactor:replace-pattern 
+                           structural-editing-mcp.workspace:*workspace-tree* pat rep))
+                    (format nil "Successfully executed pattern replacement.")))
+
+                 ((equal name "ast_extract_variable")
+                  (let ((path (to-list (gethash "path" args)))
+                        (var-name (gethash "variable_name" args)))
+                    (setf structural-editing-mcp.workspace:*workspace-tree*
+                          (structural-editing-mcp.refactor:extract-variable 
+                           structural-editing-mcp.workspace:*workspace-tree* path var-name))
+                    (format nil "Successfully extracted node at ~A into variable '~A'." path var-name)))
 
                  ((equal name "commit_workspace")
                   (structural-editing-mcp.workspace:write-workspace)

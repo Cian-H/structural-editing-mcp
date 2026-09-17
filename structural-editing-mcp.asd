@@ -9,6 +9,7 @@
                (:file "tree")
                (:file "parser")
                (:file "edit")
+               (:file "refactor")
                (:file "workspace")
                (:file "mcp")
                (:file "main"))

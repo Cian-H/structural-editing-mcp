@@ -22,20 +22,25 @@
 (defpattern leaf (path val)
   `(list :path ,path :leaf ,val))
 
+(defpattern comment (path text)
+  `(list :path ,path :comment ,text))
+
 (declaim (inline get-node-path get-node-tag get-node-tags get-node-children))
 
 (defun get-node-path (node)
   "Return the path list of NODE, or NIL if invalid."
   (match node
     ((or (node path _ _)
-         (leaf path _))
+         (leaf path _)
+         (comment path _))
      path)
     (_ nil)))
 
 (defun get-node-tag (node)
-  "Return the tag keyword (:paren, :leaf, :file, :workspace, etc.) of NODE."
+  "Return the tag keyword (:paren, :leaf, :comment, :file, :workspace, etc.) of NODE."
   (match node
     ((leaf _ _) :leaf)
+    ((comment _ _) :comment)
     ((node _ tag _) tag)
     (_ nil)))
 
@@ -54,6 +59,8 @@
   (match node
     ((leaf path val)
      (values path :leaf val))
+    ((comment path text)
+     (values path :comment text))
     ((node path tag children)
      (values path tag children))
     (_ (values nil nil nil))))
@@ -77,6 +84,8 @@
   (match tree
     ((leaf _ val)
      (list :path current-path :leaf val))
+    ((comment _ text)
+     (list :path current-path :comment text))
     ((node _ tag children)
      (list* :path current-path tag
             (loop for child in children
