@@ -29,15 +29,19 @@
 
 (defun parse-atom-string (token)
   (cond
+    ;; Keyword (:foo)
     ((and (>= (length token) 2) (char= (char token 0) #\:))
      (intern (string-upcase (subseq token 1)) :keyword))
+    ;; Integer
     ((multiple-value-bind (val end) (parse-integer token :junk-allowed t)
        (when (and val (= end (length token)))
          val)))
+    ;; Float or ratio
     ((let ((*read-eval* nil))
        (let ((parsed (ignore-errors (read-from-string token))))
          (when (numberp parsed)
            parsed))))
+    ;; Standard symbol interned into *package*
     (t
      (intern (string-upcase token)))))
 
@@ -77,48 +81,52 @@
                   (push (parse-atom-string (subseq string start index)) tokens)))))
     (nreverse tokens)))
 
-(defun parse-collection (tag close-token tokens)
+(defun parse-collection (close-token tokens current-path child-index)
   (match tokens
     (nil
      (error "Unexpected end of input: missing ~A" close-token))
     ((list* (guard tok (eq tok close-token)) rest)
      (values nil rest))
     (_
-     (multiple-value-bind (item after-item) (parse-single-form tokens)
-       (multiple-value-bind (siblings after-siblings) (parse-collection tag close-token after-item)
-         (values (cons item siblings) after-siblings))))))
+     (let ((child-path (append current-path (list child-index))))
+       (multiple-value-bind (child after-child) (parse-single-form tokens child-path)
+         (multiple-value-bind (siblings after-siblings)
+             (parse-collection close-token after-child current-path (1+ child-index))
+           (values (cons child siblings) after-siblings)))))))
 
-(defun parse-single-form (tokens)
+(defun parse-single-form (tokens path)
   (match tokens
     (nil (values nil nil))
     ((list* :open-paren rest)
-     (multiple-value-bind (children remaining) (parse-collection :paren :close-paren rest)
-       (values (cons :paren children) remaining)))
+     (multiple-value-bind (children remaining) (parse-collection :close-paren rest path 0)
+       (values (list* :path path :paren children) remaining)))
     ((list* :open-square rest)
-     (multiple-value-bind (children remaining) (parse-collection :square :close-square rest)
-       (values (cons :square children) remaining)))
+     (multiple-value-bind (children remaining) (parse-collection :close-square rest path 0)
+       (values (list* :path path :square children) remaining)))
     ((list* :open-curly rest)
-     (multiple-value-bind (children remaining) (parse-collection :curly :close-curly rest)
-       (values (cons :curly children) remaining)))
+     (multiple-value-bind (children remaining) (parse-collection :close-curly rest path 0)
+       (values (list* :path path :curly children) remaining)))
     ((list* (or :close-paren :close-square :close-curly) _)
      (error "Unexpected closing delimiter: ~A" (car tokens)))
     ((list* atom rest)
-     (values atom rest))))
-
-(defun parse-all-forms (tokens)
-  (match tokens
-    (nil nil)
-    (_
-     (multiple-value-bind (form remaining) (parse-single-form tokens)
-       (cons form (parse-all-forms remaining))))))
+     (values (list :path path :leaf atom) rest))))
 
 (defun string-to-sexp (string)
   "Parse a raw Lisp/Clojure/Scheme string into an s-expression data structure.
-Delimiters are tagged with :paren, :square, or :curly."
-  (let ((forms (parse-all-forms (tokenize string))))
-    (if (null (cdr forms))
-        (car forms)
-        forms)))
+Delimiters are tagged with :paren, :square, or :curly, and all nodes are tagged with 0-indexed :path."
+  (let ((tokens (tokenize string)))
+    (if (null tokens)
+        nil
+        (multiple-value-bind (first-form remaining) (parse-single-form tokens '())
+          (if (null remaining)
+              first-form
+              (labels ((parse-top-level (toks idx)
+                         (match toks
+                           (nil nil)
+                           (_
+                            (multiple-value-bind (form rest) (parse-single-form toks (list idx))
+                              (cons form (parse-top-level rest (1+ idx))))))))
+                (parse-top-level tokens 0)))))))
 
 (defun format-collection (open close children indent)
   (if (null children)
@@ -139,18 +147,37 @@ Delimiters are tagged with :paren, :square, or :curly."
                     (write-string c out)))
                 (write-string close out)))))))
 
-(defun format-sexp (expr indent)
-  (match expr
+(defun format-atom (val)
+  (match val
     ((type string)
-     (format nil "~S" expr))
+     (format nil "~S" val))
     ((type keyword)
-     (format nil ":~A" (string-downcase (symbol-name expr))))
+     (format nil ":~A" (string-downcase (symbol-name val))))
     ((null)
      "()")
     ((type symbol)
-     (string-downcase (symbol-name expr)))
+     (string-downcase (symbol-name val)))
     ((type number)
-     (format nil "~A" expr))
+     (format nil "~A" val))
+    (_
+     (format nil "~A" val))))
+
+(defun format-sexp (expr indent)
+  (match expr
+    ;; Tagged leaf node: (:path _ :leaf val)
+    ((list :path _ :leaf val)
+     (format-atom val))
+    ;; Tagged leaf node without :leaf: (:path _ val)
+    ((list :path _ val)
+     (format-atom val))
+    ;; Tagged collections with path metadata: (:path _ tag . children)
+    ((list* :path _ (or :paren 'paren) children)
+     (format-collection "(" ")" children indent))
+    ((list* :path _ (or :square 'square) children)
+     (format-collection "[" "]" children indent))
+    ((list* :path _ (or :curly 'curly) children)
+     (format-collection "{" "}" children indent))
+    ;; Backward-compatible untagged collections:
     ((list* (or :paren 'paren) children)
      (format-collection "(" ")" children indent))
     ((list* (or :square 'square) children)
@@ -159,8 +186,9 @@ Delimiters are tagged with :paren, :square, or :curly."
      (format-collection "{" "}" children indent))
     ((list* _ _)
      (format-collection "(" ")" expr indent))
+    ;; Direct atoms:
     (_
-     (format nil "~A" expr))))
+     (format-atom expr))))
 
 (defun sexp-to-string (expr &key (indent 0))
   "Serialize an s-expression back into its string representation with proper formatting."

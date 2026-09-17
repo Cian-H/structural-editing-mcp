@@ -5,8 +5,9 @@
   :depends-on (:trivia)
   :pathname "src"
   :components ((:file "main")
-               (:file "parser")
-               (:file "paredit"))
+               (:file "tree")
+               (:file "edit")
+               (:file "parser"))
   :in-order-to ((test-op (test-op "structural-editing-mcp/tests"))))
 
 (defsystem "structural-editing-mcp/tests"
