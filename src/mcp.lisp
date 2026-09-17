@@ -420,7 +420,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                 "items"
                 (dict "type" "string")
                 "description"
-                "Optional list of absolute filepaths to load into the workspace (e.g. ['/path/to/file.lisp'])."))))
+                "Optional list of file or directory paths to load into the workspace (e.g. ['/path/to/project'] or ['/path/to/file.lisp']). Directories are recursively scanned for Lisp source files."))))
         (dict
           "name"
           "ast_modify"
@@ -685,9 +685,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                   ((files-to-load (to-list (gethash "load_files" args))))
                   (when
                         files-to-load
-                        (dolist
-                            (f files-to-load)
-                            (structural-editing-mcp.workspace:read-workspace-file f))))
+                        (structural-editing-mcp.workspace:load-into-workspace files-to-load)))
                (unless
                         structural-editing-mcp.workspace:*workspace-tree*
                         (structural-editing-mcp.workspace:init-workspace))
