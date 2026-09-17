@@ -70,10 +70,10 @@
                    (yason:parse out-str)))
            (content (first (gethash "content" (gethash "result" json)))))
       (ok (search "Tag: WORKSPACE" (gethash "text" content)))
-      (ok (search "Files Loaded (1):" (gethash "text" content)))
+      (ok (search "Active Dialects (1):" (gethash "text" content)))
       (ok (search "/tmp/test.lisp" (gethash "text" content))))
 
-      ;; Test read_node on file 0 (path [0])
+      ;; Test read_node on dialect 0 (path [0])
       (let* ((read-msg (structural-editing-mcp.mcp::dict
                         "jsonrpc" "2.0"
                         "id" 10
@@ -90,9 +90,29 @@
                      (yason:parse out-str)))
              (content (first (gethash "content" (gethash "result" json)))))
         (ok (search "Path: (0)" (gethash "text" content)))
+        (ok (search "Tag: COMMON-LISP" (gethash "text" content)))
+        (ok (search "Files Loaded (1):" (gethash "text" content))))
+
+      ;; Test read_node on file 0 in dialect 0 (path [0, 0])
+      (let* ((read-file-msg (structural-editing-mcp.mcp::dict
+                             "jsonrpc" "2.0"
+                             "id" 101
+                             "method" "tools/call"
+                             "params" (structural-editing-mcp.mcp::dict
+                                       "name" "read_node"
+                                       "arguments" (structural-editing-mcp.mcp::dict
+                                                    "path" '(0 0)))))
+             (*standard-output* (make-string-output-stream))
+             (out-str (progn
+                        (structural-editing-mcp.mcp:handle-message read-file-msg)
+                        (get-output-stream-string *standard-output*)))
+             (json (let ((yason:*parse-json-arrays-as-vectors* nil))
+                     (yason:parse out-str)))
+             (content (first (gethash "content" (gethash "result" json)))))
+        (ok (search "Path: (0 0)" (gethash "text" content)))
         (ok (search "Children (2 top-level forms):" (gethash "text" content))))
 
-      ;; Test ast_modify: insert new function at path [0, 1]
+      ;; Test ast_modify: insert new function at path [0, 0, 1]
       (let* ((insert-msg (structural-editing-mcp.mcp::dict
                           "jsonrpc" "2.0"
                           "id" 11
@@ -100,17 +120,17 @@
                           "params" (structural-editing-mcp.mcp::dict
                                     "name" "ast_modify"
                                     "arguments" (structural-editing-mcp.mcp::dict
-                                                 "path" '(0 1)
+                                                 "path" '(0 0 1)
                                                  "action" "insert"
                                                  "new_node" "(defun baz () 3)"))))
              (*standard-output* (make-string-output-stream)))
         (structural-editing-mcp.mcp:handle-message insert-msg)
         ;; The file now has 3 functions: foo, baz, bar
         (let ((file-children (structural-editing-mcp.tree:get-node-children
-                              (structural-editing-mcp.tree:get-node-at-path structural-editing-mcp.workspace:*workspace-tree* '(0)))))
+                              (structural-editing-mcp.tree:get-node-at-path structural-editing-mcp.workspace:*workspace-tree* '(0 0)))))
           (ok (= (length file-children) 3))))
 
-      ;; Test ast_modify: wrap [0, 0] in :paren
+      ;; Test ast_modify: wrap [0, 0, 0] in :paren
       (let* ((wrap-msg (structural-editing-mcp.mcp::dict
                         "jsonrpc" "2.0"
                         "id" 12
@@ -118,19 +138,19 @@
                         "params" (structural-editing-mcp.mcp::dict
                                   "name" "ast_modify"
                                   "arguments" (structural-editing-mcp.mcp::dict
-                                               "path" '(0 0)
+                                               "path" '(0 0 0)
                                                "action" "wrap"
                                                "new_node" ":paren"))))
              (*standard-output* (make-string-output-stream)))
         (structural-editing-mcp.mcp:handle-message wrap-msg)
-        (let ((wrapped (structural-editing-mcp.tree:get-node-at-path structural-editing-mcp.workspace:*workspace-tree* '(0 0))))
+        (let ((wrapped (structural-editing-mcp.tree:get-node-at-path structural-editing-mcp.workspace:*workspace-tree* '(0 0 0))))
           (ok (eq (structural-editing-mcp.tree:get-node-tag wrapped) :paren))
           ;; Verify rendered string does not contain raw :path keywords
           (let ((code (structural-editing-mcp.parser:sexp-to-string wrapped)))
             (ok (not (search ":path" code)))
             (ok (search "((defun foo" code)))))
 
-      ;; Test ast_remove: unwrap [0, 0]
+      ;; Test ast_remove: unwrap [0, 0, 0]
       (let* ((unwrap-msg (structural-editing-mcp.mcp::dict
                           "jsonrpc" "2.0"
                           "id" 13
@@ -138,14 +158,14 @@
                           "params" (structural-editing-mcp.mcp::dict
                                     "name" "ast_remove"
                                     "arguments" (structural-editing-mcp.mcp::dict
-                                                 "path" '(0 0)
+                                                 "path" '(0 0 0)
                                                  "action" "unwrap"))))
              (*standard-output* (make-string-output-stream)))
         (structural-editing-mcp.mcp:handle-message unwrap-msg)
-        (let ((node (structural-editing-mcp.tree:get-node-at-path structural-editing-mcp.workspace:*workspace-tree* '(0 0))))
+        (let ((node (structural-editing-mcp.tree:get-node-at-path structural-editing-mcp.workspace:*workspace-tree* '(0 0 0))))
           (ok (search "(defun foo" (structural-editing-mcp.parser:sexp-to-string node)))))
 
-      ;; Test ast_relocate: swap [0, 0] and [0, 1]
+      ;; Test ast_relocate: swap [0, 0, 0] and [0, 0, 1]
       (let* ((swap-msg (structural-editing-mcp.mcp::dict
                         "jsonrpc" "2.0"
                         "id" 14
@@ -153,10 +173,10 @@
                         "params" (structural-editing-mcp.mcp::dict
                                   "name" "ast_relocate"
                                   "arguments" (structural-editing-mcp.mcp::dict
-                                               "source_path" '(0 0)
-                                               "target_path" '(0 1)
+                                               "source_path" '(0 0 0)
+                                               "target_path" '(0 0 1)
                                                "action" "swap"))))
              (*standard-output* (make-string-output-stream)))
         (structural-editing-mcp.mcp:handle-message swap-msg)
-        (let ((first-node (structural-editing-mcp.tree:get-node-at-path structural-editing-mcp.workspace:*workspace-tree* '(0 0))))
+        (let ((first-node (structural-editing-mcp.tree:get-node-at-path structural-editing-mcp.workspace:*workspace-tree* '(0 0 0))))
           (ok (search "defun baz" (structural-editing-mcp.parser:sexp-to-string first-node)))))))

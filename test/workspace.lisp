@@ -3,28 +3,52 @@
 (deftest test-workspace
   (init-workspace)
   (ok (equal '(:path () :workspace) *workspace-tree*))
-  (uiop:with-temporary-file (:pathname p :stream s :direction :output)
+  (uiop:with-temporary-file (:pathname p :stream s :direction :output :type "lisp")
     (write-string "(defn add [a b] (+ a b))" s)
     :close-stream
     (let ((id (read-workspace-file p)))
       (ok (= 0 id))
       (ok (equal (namestring p) (namestring (get-filepath id))))
       (ok (= 1 (length (get-node-children *workspace-tree*))))
+      (let ((dialect-node (first (get-node-children *workspace-tree*))))
+        (ok (eq :common-lisp (get-node-tag dialect-node)))
+        (ok (= 1 (length (get-node-children dialect-node)))))
       (setf *workspace-tree*
-            (overwrite-node *workspace-tree* '(0 0 1) (list :path '(0 0 1) :leaf 'sum)))
+            (overwrite-node *workspace-tree* '(0 0 0 1) (list :path '(0 0 0 1) :leaf 'sum)))
       (write-workspace)
       (ok (search "sum" (uiop:read-file-string p))))))
 
 (deftest test-workspace-directory-scanning
-  (testing "lisp-file-p recognizes lisp extensions and ignores others"
+  (testing "lisp-file-p recognizes all supported dialect extensions and ignores others"
     (ok (lisp-file-p "foo.lisp"))
     (ok (lisp-file-p "foo.cl"))
     (ok (lisp-file-p "foo.asd"))
     (ok (lisp-file-p "foo.lsp"))
     (ok (lisp-file-p "FOO.LISP"))
+    (ok (lisp-file-p "foo.clj"))
+    (ok (lisp-file-p "foo.cljs"))
+    (ok (lisp-file-p "foo.cljc"))
+    (ok (lisp-file-p "foo.edn"))
+    (ok (lisp-file-p "foo.scm"))
+    (ok (lisp-file-p "foo.ss"))
+    (ok (lisp-file-p "foo.rkt"))
+    (ok (lisp-file-p "foo.sld"))
+    (ok (lisp-file-p "foo.el"))
+    (ok (lisp-file-p "foo.fnl"))
     (ok (not (lisp-file-p "license.md")))
     (ok (not (lisp-file-p "devenv.lock")))
     (ok (not (lisp-file-p "server-binary"))))
+
+  (testing "file-dialect classifies dialects correctly"
+    (ok (eq :common-lisp (file-dialect "test.lisp")))
+    (ok (eq :common-lisp (file-dialect "test.asd")))
+    (ok (eq :clojure (file-dialect "core.clj")))
+    (ok (eq :clojure (file-dialect "app.cljs")))
+    (ok (eq :scheme (file-dialect "sicp.scm")))
+    (ok (eq :scheme (file-dialect "macro.rkt")))
+    (ok (eq :emacs-lisp (file-dialect "init.el")))
+    (ok (eq :fennel (file-dialect "game.fnl")))
+    (ok (null (file-dialect "readme.txt"))))
 
   (testing "collect-lisp-files scans directories recursively and ignores non-lisp"
     (let ((files (collect-lisp-files "src/")))
@@ -36,8 +60,52 @@
     (init-workspace)
     (let ((ids1 (load-into-workspace "src/")))
       (ok (> (length ids1) 0))
-      (let ((count1 (length (get-node-children *workspace-tree*))))
+      (let* ((dialect-node (first (get-node-children *workspace-tree*)))
+             (count1 (length (get-node-children dialect-node))))
+        (ok (eq :common-lisp (get-node-tag dialect-node)))
         (ok (= count1 (length ids1)))
         ;; Calling again should deduplicate and not add extra files
         (let ((ids2 (load-into-workspace "src/")))
-          (ok (= (length (get-node-children *workspace-tree*)) count1)))))))
+          (let ((dialect-node-after (first (get-node-children *workspace-tree*))))
+            (ok (= (length (get-node-children dialect-node-after)) count1))))))))
+
+(deftest test-multi-dialect-workspace
+  (testing "multiple dialects are partitioned into separate sub-trees"
+    (init-workspace)
+    (uiop:with-temporary-file (:pathname p-cl :stream s-cl :direction :output :type "lisp")
+      (write-string "(defun cl-func () :common-lisp)" s-cl)
+      :close-stream
+      (uiop:with-temporary-file (:pathname p-clj :stream s-clj :direction :output :type "clj")
+        (write-string "(defn clj-func [x] (str \"clojure: \" x))" s-clj)
+        :close-stream
+        (uiop:with-temporary-file (:pathname p-scm :stream s-scm :direction :output :type "scm")
+          (write-string "(define (scm-func x) #t)" s-scm)
+          :close-stream
+          (let ((id-cl (read-workspace-file p-cl))
+                (id-clj (read-workspace-file p-clj))
+                (id-scm (read-workspace-file p-scm)))
+            (ok (= 0 id-cl))
+            (ok (= 1 id-clj))
+            (ok (= 2 id-scm))
+            ;; The workspace tree has 3 dialect children
+            (let ((dialect-nodes (get-node-children *workspace-tree*)))
+              (ok (= 3 (length dialect-nodes)))
+              (ok (eq :common-lisp (get-node-tag (first dialect-nodes))))
+              (ok (eq :clojure (get-node-tag (second dialect-nodes))))
+              (ok (eq :scheme (get-node-tag (third dialect-nodes)))))
+            ;; File nodes are under their respective dialect nodes
+            (let ((cl-file (get-node-at-path *workspace-tree* '(0 0)))
+                  (clj-file (get-node-at-path *workspace-tree* '(1 0)))
+                  (scm-file (get-node-at-path *workspace-tree* '(2 0))))
+              (ok (eq :file (get-node-tag cl-file)))
+              (ok (eq :file (get-node-tag clj-file)))
+              (ok (eq :file (get-node-tag scm-file)))
+              (ok (equal (namestring p-cl) (namestring (get-filepath '(0 0)))))
+              (ok (equal (namestring p-clj) (namestring (get-filepath '(1 0)))))
+              (ok (equal (namestring p-scm) (namestring (get-filepath '(2 0)))))
+              ;; Mutate Clojure form and persist across dialects
+              (setf *workspace-tree*
+                    (overwrite-node *workspace-tree* '(1 0 0 1) (list :path '(1 0 0 1) :leaf 'clj-updated)))
+              (write-workspace)
+              (ok (search "clj-updated" (uiop:read-file-string p-clj))))))))))
+

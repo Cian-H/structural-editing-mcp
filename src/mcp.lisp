@@ -112,45 +112,45 @@
         (format s "Tag: ~A~%" tag)
         (cond
           ((eq tag :workspace)
-           (if
-                (null children)
-                (format
-                      s
-                      "Workspace is empty. Provide load_files in read_node to load files into the workspace.~%")
-                (progn
-                     (format s "Files Loaded (~A):~%" (length children))
-                     (loop
-                      for
-                      file-node
-                      in
-                      children
-                      for
-                      idx
-                      from
-                      0
-                      for
-                      filepath
-                      =
-                      (structural-editing-mcp.workspace:get-filepath idx)
-                      for
-                      form-count
-                      =
-                      (length (structural-editing-mcp.tree:get-node-children file-node))
-                      do
-                      (format
-                          s
-                          "  [~A] :FILE (~A) — ~A top-level forms~%"
-                          idx
-                          (or filepath "unknown")
-                          form-count)))))
+           (if (null children)
+               (format s "Workspace is empty. Provide load_files in read_node to load files into the workspace.~%")
+               (progn
+                 (format s "Active Dialects (~A):~%" (length children))
+                 (loop for dialect-node in children
+                       for d-idx from 0
+                       for d-path = (or (structural-editing-mcp.tree:get-node-path dialect-node) (list d-idx))
+                       for d-tag = (structural-editing-mcp.tree:get-node-tag dialect-node)
+                       for file-nodes = (structural-editing-mcp.tree:get-node-children dialect-node)
+                       do
+                       (format s "  [~{~A~^, ~}] ~A (~A file~:P):~%"
+                               d-path d-tag (length file-nodes))
+                       (loop for file-node in file-nodes
+                             for f-idx from 0
+                             for f-path = (or (structural-editing-mcp.tree:get-node-path file-node)
+                                              (append d-path (list f-idx)))
+                             for filepath = (structural-editing-mcp.workspace:get-filepath f-path)
+                             for form-count = (length (structural-editing-mcp.tree:get-node-children file-node))
+                             do
+                             (format s "    [~{~A~^, ~}] :FILE (~A) — ~A top-level forms~%"
+                                     f-path (or filepath "unknown") form-count))))))
+          ((member tag structural-editing-mcp.workspace:*known-dialects*)
+           (format s "Dialect: ~A~%" tag)
+           (if (null children)
+               (format s "No files loaded for this dialect.~%")
+               (progn
+                 (format s "Files Loaded (~A):~%" (length children))
+                 (loop for file-node in children
+                       for idx from 0
+                       for f-path = (or (structural-editing-mcp.tree:get-node-path file-node)
+                                        (append path (list idx)))
+                       for filepath = (structural-editing-mcp.workspace:get-filepath f-path)
+                       for form-count = (length (structural-editing-mcp.tree:get-node-children file-node))
+                       do
+                       (format s "  [~{~A~^, ~}] :FILE (~A) — ~A top-level forms~%"
+                               f-path (or filepath "unknown") form-count)))))
           ((eq tag :file)
-           (let*
-              ((file-idx (first path))
-               (filepath
-                          (and
-                       (numberp file-idx)
-                       (structural-editing-mcp.workspace:get-filepath file-idx))))
-              (when filepath (format s "File: ~A~%" filepath)))
+           (let ((filepath (structural-editing-mcp.workspace:get-filepath path)))
+             (when filepath (format s "File: ~A~%" filepath)))
            (format s "Code:~%~A~%" code)
            (when
                   children
@@ -406,7 +406,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                 "items"
                 (dict "type" "integer")
                 "description"
-                "0-indexed array of integers specifying the AST path. Omit or pass [] for the workspace root, [0] for file 0, [0, 2] for top-level form 2 in file 0, [0, 3, 1] for child 1 of form 3.")
+                "0-indexed array of integers specifying the AST path. Omit or pass [] for the workspace root, [0] for dialect 0 (e.g. :common-lisp), [0, 0] for file 0 in dialect 0, [0, 0, 2] for top-level form 2 in file 0, [0, 0, 3, 1] for child 1 of form 3.")
               "depth"
               (dict
                 "type"

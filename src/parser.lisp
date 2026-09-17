@@ -8,20 +8,25 @@
            :sexp-to-string
            :print-sexp
            :format-sexp
-           :parse-atom-string)
+           :parse-atom-string
+           :*current-dialect*)
   (:documentation "Lexer, parser, and pretty-printer serializer for s-expressions."))
 
 (in-package :structural-editing-mcp.parser)
+
+(defvar *current-dialect* :common-lisp
+  "Current Lisp dialect being parsed or formatted (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel).")
 
 (declaim (optimize (speed 3) (safety 0) (debug 0)))
 
 (declaim (inline whitespace-p delimiter-p))
 
-(defun whitespace-p (char)
-  "Return T if CHAR is whitespace (space, tab, newline, return, comma)."
+(defun whitespace-p (char &optional (dialect *current-dialect*))
+  "Return T if CHAR is whitespace (space, tab, newline, return, and comma in Clojure)."
   (declare (type character char))
   (case char
     ((#\Space #\Tab #\Newline #\Return) t)
+    (#\, (eq dialect :clojure))
     (otherwise nil)))
 
 (defun delimiter-p (char)
@@ -98,10 +103,11 @@
   "Parse a token string into a keyword, number, or symbol (compatibility wrapper)."
   (parse-token token 0 (length token)))
 
-(defun tokenize (string)
+(defun tokenize (string &key (dialect *current-dialect*))
   "Tokenize a string into a flat list of delimiter keywords and atomic values."
   (declare (type string string))
-  (let ((index 0)
+  (let ((*current-dialect* dialect)
+        (index 0)
         (len (length string))
         (tokens '()))
     (declare (type fixnum index len)
@@ -109,7 +115,7 @@
     (loop while (< index len)
           for ch of-type character = (char string index)
           do (cond
-               ((whitespace-p ch)
+               ((whitespace-p ch dialect)
                 (incf index))
                ((char= ch (code-char 59))
                 (let ((start index))
@@ -146,9 +152,12 @@
                           (incf index)
                           (loop while (and (< index len)
                                            (let ((c (char string index)))
-                                             (not (or (whitespace-p c) (delimiter-p c)))))
-                                do (incf index))))
+                                             (not (or (whitespace-p c dialect) (delimiter-p c)))))
+                                 do (incf index))))
                   (push (parse-token string start index) tokens)))
+               ((and (char= ch (code-char 35)) (< (1+ index) len) (char= (char string (1+ index)) (code-char 123)))
+                (push '(:delim . :set-open) tokens)
+                (incf index 2))
                ((char= ch (code-char 40)) (push '(:delim . :paren-open) tokens) (incf index))
                ((char= ch (code-char 41)) (push '(:delim . :paren-close) tokens) (incf index))
                ((char= ch (code-char 91)) (push '(:delim . :square-open) tokens) (incf index))
@@ -163,7 +172,7 @@
                 (let ((start index))
                   (loop while (and (< index len)
                                    (let ((c (char string index)))
-                                     (not (or (whitespace-p c)
+                                     (not (or (whitespace-p c dialect)
                                               (delimiter-p c)))))
                         do (incf index))
                   (if (= start index)
@@ -207,6 +216,9 @@
     ((list* (cons :delim :curly-open) rest)
      (multiple-value-bind (children remaining) (parse-collection :curly-close rest path 0)
        (values (list* :path path :curly children) remaining)))
+    ((list* (cons :delim :set-open) rest)
+     (multiple-value-bind (children remaining) (parse-collection :curly-close rest path 0)
+       (values (list* :path path :set children) remaining)))
     ((list* (cons :delim (or :paren-close :square-close :curly-close)) _)
      (error 'sexp-parse-error
             :token (car tokens)
@@ -216,10 +228,11 @@
     ((list* atom rest)
      (values (list :path path :leaf atom) rest))))
 
-(defun string-to-sexp (string)
+(defun string-to-sexp (string &key (dialect *current-dialect*))
   "Parse a raw string into an s-expression data structure.
 Always returns a (:path () :file ...) node representing the parsed file contents."
-  (let ((tokens (tokenize string)))
+  (let* ((*current-dialect* dialect)
+         (tokens (tokenize string :dialect dialect)))
     (if (null tokens)
         (list :path '() :file)
         (let ((remaining tokens)
@@ -367,53 +380,66 @@ Always returns a (:path () :file ...) node representing the parsed file contents
                             (write-string c stream)))
                  (write-string close stream))))))))
 
-(defun print-sexp (expr stream &optional (indent 0))
+(defun print-sexp (expr stream &optional (indent 0) &key (dialect *current-dialect*))
   "Serialize EXPR directly to STREAM with proper formatting."
   (declare (type fixnum indent))
-  (match expr
-    ;; Tagged leaf node: (:path _ :leaf val)
-    ((leaf _ val)
-     (write-atom val stream))
-    ((structural-editing-mcp.tree::comment _ text)
-     (write-string text stream))
-    ((node _ (or :file 'file) children)
-     (loop for (c . rest) on children do
-       (print-sexp c stream indent)
-       (when rest
-         (terpri stream)
-         (terpri stream))))
-    ((node _ (or :workspace 'workspace) children)
-     (loop for (c . rest) on children do
-       (print-sexp c stream indent)
-       (when rest
-         (terpri stream)
-         (terpri stream))))
-    ((node _ (or :paren 'paren) children)
-     (print-collection "(" ")" children stream indent))
-    ((node _ (or :square 'square) children)
-     (print-collection "[" "]" children stream indent))
-    ((node _ (or :curly 'curly) children)
-     (print-collection "{" "}" children stream indent))
-    ;; Tagged leaf node without :leaf: (:path _ val)
-    ((list :path _ val)
-     (write-atom val stream))
-    ;; Backward-compatible untagged collections:
-    ((list* (or :paren 'paren) children)
-     (print-collection "(" ")" children stream indent))
-    ((list* (or :square 'square) children)
-     (print-collection "[" "]" children stream indent))
-    ((list* (or :curly 'curly) children)
-     (print-collection "{" "}" children stream indent))
-    ((list* _ _)
-     (print-collection "(" ")" expr stream indent))
-    ;; Direct atoms:
-    (_
-     (write-atom expr stream))))
+  (let ((*current-dialect* dialect))
+    (match expr
+      ;; Tagged leaf node: (:path _ :leaf val)
+      ((leaf _ val)
+       (write-atom val stream))
+      ((structural-editing-mcp.tree::comment _ text)
+       (write-string text stream))
+      ((node _ (or :file 'file) children)
+       (loop for (c . rest) on children do
+         (print-sexp c stream indent :dialect dialect)
+         (when rest
+           (terpri stream)
+           (terpri stream))))
+      ((node _ (or :workspace 'workspace) children)
+       (loop for (c . rest) on children do
+         (print-sexp c stream indent :dialect dialect)
+         (when rest
+           (terpri stream)
+           (terpri stream))))
+      ((guard (node _ tag children)
+              (member tag '(:common-lisp :clojure :scheme :emacs-lisp :fennel)))
+       (let ((*current-dialect* tag))
+         (loop for (c . rest) on children do
+           (print-sexp c stream indent :dialect tag)
+           (when rest
+             (terpri stream)
+             (terpri stream)))))
+      ((node _ (or :paren 'paren) children)
+       (print-collection "(" ")" children stream indent))
+      ((node _ (or :square 'square) children)
+       (print-collection "[" "]" children stream indent))
+      ((node _ (or :curly 'curly) children)
+       (print-collection "{" "}" children stream indent))
+      ((node _ (or :set 'set) children)
+       (print-collection "#{" "}" children stream indent))
+      ;; Tagged leaf node without :leaf: (:path _ val)
+      ((list :path _ val)
+       (write-atom val stream))
+      ;; Backward-compatible untagged collections:
+      ((list* (or :paren 'paren) children)
+       (print-collection "(" ")" children stream indent))
+      ((list* (or :square 'square) children)
+       (print-collection "[" "]" children stream indent))
+      ((list* (or :curly 'curly) children)
+       (print-collection "{" "}" children stream indent))
+      ((list* (or :set 'set) children)
+       (print-collection "#{" "}" children stream indent))
+      ((list* _ _)
+       (print-collection "(" ")" expr stream indent))
+      ;; Direct atoms:
+      (_
+       (write-atom expr stream)))))
 
-(defun sexp-to-string (expr &key (indent 0))
+(defun sexp-to-string (expr &key (indent 0) (dialect *current-dialect*))
   "Serialize an s-expression back into its string representation with proper formatting."
   (with-output-to-string (out)
-    (print-sexp expr out indent)))
+    (print-sexp expr out indent :dialect dialect)))
 
 (defun format-sexp (expr indent)
   "Serialize EXPR with INDENT (compatibility wrapper)."

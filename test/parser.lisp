@@ -68,3 +68,25 @@
                  (string-to-sexp code)))
       (ok (string= "(char= ch #\\; #\\( #\\) #\\\" #\\\\)"
                    (sexp-to-string (string-to-sexp code)))))))
+
+(deftest test-dialect-parsing-and-printing
+  (testing "clojure comma as whitespace"
+    (let ((ast (string-to-sexp "[a, b, c]" :dialect :clojure)))
+      (ok (equal '(:path () :file
+                   (:path (0) :square
+                     (:path (0 0) :leaf a)
+                     (:path (0 1) :leaf b)
+                     (:path (0 2) :leaf c)))
+                 ast))))
+
+  (testing "clojure set literals"
+    (let* ((code "#{:a :b :c}")
+           (ast (string-to-sexp code :dialect :clojure)))
+      (ok (eq :set (get-node-tag (first (get-node-children ast)))))
+      (ok (string= code (sexp-to-string ast :dialect :clojure)))))
+
+  (testing "scheme boolean tokens"
+    (let* ((code "(define flag #t)")
+           (ast (string-to-sexp code :dialect :scheme)))
+      (ok (string= code (sexp-to-string ast :dialect :scheme))))))
+

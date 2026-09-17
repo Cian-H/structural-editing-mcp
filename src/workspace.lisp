@@ -1,47 +1,80 @@
 (defpackage :structural-editing-mcp.workspace
-    (:use
-        :cl
+  (:use :cl
         :alexandria
         :structural-editing-mcp.parser
         :structural-editing-mcp.tree
         :structural-editing-mcp.conditions)
-  (:export
-           :*workspace-tree*
+  (:export :*workspace-tree*
            :*file-registry*
+           :*known-dialects*
+           :*dialect-extensions*
            :init-workspace
+           :file-dialect
            :read-workspace-file
            :write-workspace
            :get-filepath
            :lisp-file-p
            :collect-lisp-files
            :load-into-workspace)
-  (:documentation
-                  "Project-level multi-file workspace management, file tracking, and disk I/O."))
+  (:documentation "Project-level multi-file workspace management, file tracking, and disk I/O."))
 
 (in-package :structural-editing-mcp.workspace)
 
 (declaim (optimize (speed 3) (safety 0) (debug 0)))
 
+(defparameter *dialect-extensions*
+  '(("lisp" . :common-lisp)
+    ("cl"   . :common-lisp)
+    ("asd"  . :common-lisp)
+    ("lsp"  . :common-lisp)
+    ("clj"  . :clojure)
+    ("cljs" . :clojure)
+    ("cljc" . :clojure)
+    ("edn"  . :clojure)
+    ("scm"  . :scheme)
+    ("ss"   . :scheme)
+    ("rkt"  . :scheme)
+    ("sld"  . :scheme)
+    ("el"   . :emacs-lisp)
+    ("fnl"  . :fennel))
+  "Mapping of file extensions to dialect keywords.")
+
+(defparameter *known-dialects*
+  '(:common-lisp :clojure :scheme :emacs-lisp :fennel)
+  "List of supported Lisp dialect keywords.")
+
 (defvar *workspace-tree* nil
   "The global AST representing the entire loaded workspace.")
 
 (defvar *file-registry* (make-hash-table :test 'equal)
-  "Maps numerical file IDs (child indices) to file paths.")
+  "Maps numerical file IDs and tree paths to canonical file paths.")
+
+(defvar *next-file-id* 0
+  "Monotonically increasing counter for numerical file IDs.")
 
 (defun init-workspace ()
   "Initialize an empty workspace."
   (setf *file-registry* (make-hash-table :test 'equal))
-  (setf *workspace-tree* ' (:path () :workspace)))
+  (setf *next-file-id* 0)
+  (setf *workspace-tree* '(:path () :workspace)))
 
-(defun get-filepath (id)
-  "Get the filepath associated with the numerical ID."
-  (gethash id *file-registry*))
+(defun get-filepath (id-or-path)
+  "Get the filepath associated with numerical ID or tree path."
+  (let ((key (if (vectorp id-or-path) (coerce id-or-path 'list) id-or-path)))
+    (or (gethash key *file-registry*)
+        (when (and (listp key) (>= (length key) 2))
+          (gethash (subseq key 0 2) *file-registry*)))))
 
-(defun lisp-file-p (pathname-or-string)
-  "Return T if PATHNAME-OR-STRING has a recognized Lisp source extension."
+(defun file-dialect (pathname-or-string)
+  "Return the dialect keyword (:common-lisp, :clojure, etc.) for PATHNAME-OR-STRING, or NIL if unrecognized."
   (let* ((p (pathname pathname-or-string))
          (type (pathname-type p)))
-    (and type (member (string-downcase type) '("lisp" "cl" "asd" "lsp") :test #'string=))))
+    (when type
+      (cdr (assoc (string-downcase type) *dialect-extensions* :test #'string=)))))
+
+(defun lisp-file-p (pathname-or-string)
+  "Return T if PATHNAME-OR-STRING has a recognized Lisp dialect source extension."
+  (not (null (file-dialect pathname-or-string))))
 
 (defun ignored-dir-p (dir-pathname)
   "Return T if DIR-PATHNAME should be ignored when walking directories."
@@ -79,29 +112,46 @@ Non-Lisp files, ignored directories, and non-existent paths return NIL."
   (let ((true-target (ignore-errors (namestring (truename filepath)))))
     (when true-target
       (loop for path being the hash-values of *file-registry*
-            for true-path = (ignore-errors (namestring (truename path)))
-            thereis (and true-path (string= true-target true-path))))))
+            thereis (and (stringp path)
+                         (let ((true-path (ignore-errors (namestring (truename path)))))
+                           (and true-path (string= true-target true-path))))))))
 
 (defun read-workspace-file (filepath)
-  "Read a file from disk, parse it, add it to the workspace tree, and return its ID.
+  "Read a file from disk, parse it, add it to the dialect partition in the workspace tree, and return its ID.
 If the file is already loaded, returns its existing ID. Gracefully returns NIL on parse/read failure."
   (unless *workspace-tree* (init-workspace))
-  (let ((canonical-path (or (ignore-errors (namestring (truename filepath))) filepath)))
+  (let* ((canonical-path (or (ignore-errors (namestring (truename filepath))) filepath))
+         (dialect (or (file-dialect canonical-path) :common-lisp)))
     (when (file-loaded-p canonical-path)
       (loop for id being the hash-keys of *file-registry*
             using (hash-value path)
-            when (string= canonical-path (or (ignore-errors (namestring (truename path))) path))
+            when (and (integerp id)
+                      (string= canonical-path (or (ignore-errors (namestring (truename path))) path)))
             do (return-from read-workspace-file id)))
     (handler-case
         (let* ((text (uiop:read-file-string canonical-path))
-               (parsed-file-node (string-to-sexp text))
-               (existing-children (get-node-children *workspace-tree*))
-               (new-id (length existing-children)))
-          (setf (gethash new-id *file-registry*) canonical-path)
-          (setf *workspace-tree*
-                `(:path () :workspace ,@existing-children ,parsed-file-node))
-          (setf *workspace-tree* (reindex-paths *workspace-tree*))
-          new-id)
+               (parsed-file-node (string-to-sexp text :dialect dialect))
+               (workspace-children (get-node-children *workspace-tree*))
+               (new-id *next-file-id*))
+          (incf *next-file-id*)
+          ;; Locate or create dialect partition node
+          (let* ((dialect-pos (position dialect workspace-children :key #'get-node-tag))
+                 (d-idx (or dialect-pos (length workspace-children)))
+                 (dialect-node (if dialect-pos
+                                   (nth dialect-pos workspace-children)
+                                   `(:path () ,dialect)))
+                 (dialect-files (get-node-children dialect-node))
+                 (f-idx (length dialect-files))
+                 (updated-dialect-node `(:path () ,dialect ,@dialect-files ,parsed-file-node)))
+            (setf (gethash new-id *file-registry*) canonical-path)
+            (setf (gethash (list d-idx f-idx) *file-registry*) canonical-path)
+            (if dialect-pos
+                (let ((new-children (copy-list workspace-children)))
+                  (setf (nth dialect-pos new-children) updated-dialect-node)
+                  (setf *workspace-tree* `(:path () :workspace ,@new-children)))
+                (setf *workspace-tree* `(:path () :workspace ,@workspace-children ,updated-dialect-node)))
+            (setf *workspace-tree* (reindex-paths *workspace-tree*))
+            new-id))
       (error (c)
         (format *error-output* "~&[Workspace] Warning: failed to load ~A: ~A~%" filepath c)
         nil))))
@@ -121,25 +171,21 @@ Returns a list of loaded numerical file IDs."
 
 (defun write-workspace ()
   "Write all :file nodes in the workspace back to their respective paths on disk."
-  (unless
-          *workspace-tree*
-          (error 'workspace-error :message "No workspace initialized."))
-  (loop
-        for
-        file-node
-        in
-        (get-node-children *workspace-tree*)
-        for
-        id
-        from
-        0
-        for
-        filepath
-        =
-        (get-filepath id)
-        do
-        (when
-          filepath
-          (uiop:with-output-file
-        (out filepath :if-exists :supersede :if-does-not-exist :create)
-        (print-sexp file-node out 0)))))
+  (unless *workspace-tree*
+    (error 'workspace-error :message "No workspace initialized."))
+  (dolist (child (get-node-children *workspace-tree*))
+    (let ((child-tag (get-node-tag child)))
+      (cond
+        ((member child-tag *known-dialects*)
+         (dolist (file-node (get-node-children child))
+           (let* ((path (get-node-path file-node))
+                  (filepath (get-filepath path)))
+             (when filepath
+               (uiop:with-output-file (out filepath :if-exists :supersede :if-does-not-exist :create)
+                 (print-sexp file-node out 0 :dialect child-tag))))))
+        ((eq child-tag :file)
+         (let* ((path (get-node-path child))
+                (filepath (or (get-filepath path) (get-filepath (first path)))))
+           (when filepath
+             (uiop:with-output-file (out filepath :if-exists :supersede :if-does-not-exist :create)
+               (print-sexp child out 0 :dialect :common-lisp)))))))))
