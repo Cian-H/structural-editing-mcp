@@ -13,21 +13,31 @@
 
 (in-package :structural-editing-mcp.parser)
 
+(declaim (optimize (speed 3) (safety 0) (debug 0)))
+
 (declaim (inline whitespace-p delimiter-p))
 
 (defun whitespace-p (char)
   "Return T if CHAR is whitespace (space, tab, newline, return, comma)."
   (declare (type character char))
   (case char
-    ((#\Space #\Tab #\Newline #\Return #\,) t)
+    ((#\Space #\Tab #\Newline #\Return) t)
     (otherwise nil)))
 
 (defun delimiter-p (char)
   "Return T if CHAR is a delimiter character."
   (declare (type character char))
-  (case char
-    ((#\( #\) #\[ #\] #\{ #\} #\; #\") t)
-    (otherwise nil)))
+  (cond
+    ((char= char (code-char 40)) t)
+    ((char= char (code-char 41)) t)
+    ((char= char (code-char 91)) t)
+    ((char= char (code-char 93)) t)
+    ((char= char (code-char 123)) t)
+    ((char= char (code-char 125)) t)
+    ((char= char (code-char 59)) t)
+    ((char= char (code-char 34)) t)
+    ((char= char (code-char 96)) t)
+    (t nil)))
 
 (defun read-string-literal (string index len)
   "Read an escaped string literal starting after the opening quote."
@@ -43,7 +53,7 @@
                 (when (< index len)
                   (write-char (char string index) out)
                   (incf index)))
-               ((char= ch #\")
+               ((char= ch (code-char 34))
                 (incf index)
                 (return (values (get-output-stream-string out) index)))
                (t
@@ -102,32 +112,32 @@
                   (when (and (< index len) (char= (char string index) #\Newline))
                     (incf index))
                   (push (list :comment (subseq string start index)) tokens)))
-               ((and (char= ch #\#) (< (1+ index) len) (char= (char string (1+ index)) #\|))
+               ((and (char= ch (code-char 35)) (< (1+ index) len) (char= (char string (1+ index)) (code-char 124)))
                 (let ((start index)
                       (depth 1))
                   (incf index 2)
                   (loop while (and (< index len) (> depth 0))
                         do (cond
-                             ((and (char= (char string index) #\#)
+                             ((and (char= (char string index) (code-char 35))
                                    (< (1+ index) len)
-                                   (char= (char string (1+ index)) #\|))
+                                   (char= (char string (1+ index)) (code-char 124)))
                               (incf depth)
                               (incf index 2))
-                             ((and (char= (char string index) #\|)
+                             ((and (char= (char string index) (code-char 124))
                                    (< (1+ index) len)
-                                   (char= (char string (1+ index)) #\#))
+                                   (char= (char string (1+ index)) (code-char 35)))
                               (decf depth)
                               (incf index 2))
                              (t
                               (incf index))))
                   (push (list :comment (subseq string start index)) tokens)))
-               ((char= ch #\() (push :open-paren tokens) (incf index))
-               ((char= ch #\)) (push :close-paren tokens) (incf index))
-               ((char= ch #\[) (push :open-square tokens) (incf index))
-               ((char= ch #\]) (push :close-square tokens) (incf index))
-               ((char= ch #\{) (push :open-curly tokens) (incf index))
-               ((char= ch #\}) (push :close-curly tokens) (incf index))
-               ((char= ch #\")
+               ((char= ch (code-char 40)) (push '(:delim . :paren-open) tokens) (incf index))
+               ((char= ch (code-char 41)) (push '(:delim . :paren-close) tokens) (incf index))
+               ((char= ch (code-char 91)) (push '(:delim . :square-open) tokens) (incf index))
+               ((char= ch (code-char 93)) (push '(:delim . :square-close) tokens) (incf index))
+               ((char= ch (code-char 123)) (push '(:delim . :curly-open) tokens) (incf index))
+               ((char= ch (code-char 125)) (push '(:delim . :curly-close) tokens) (incf index))
+               ((char= ch (code-char 34))
                 (multiple-value-bind (str next) (read-string-literal string index len)
                   (push str tokens)
                   (setf index next)))
@@ -152,7 +162,7 @@
          (error 'sexp-parse-error
                 :token close-token
                 :message (format nil "Unexpected end of input: missing ~A" close-token)))
-        ((list* (guard tok (eq tok close-token)) rest)
+        ((list* (cons :delim (guard tok (eq tok close-token))) rest)
          (return (values (nreverse children) rest)))
         (_
          (let ((child-path (append current-path (list idx))))
@@ -165,16 +175,16 @@
   "Parse a single form (leaf or collection) from TOKENS at PATH."
   (match tokens
     (nil (values nil nil))
-    ((list* :open-paren rest)
-     (multiple-value-bind (children remaining) (parse-collection :close-paren rest path 0)
+    ((list* (cons :delim :paren-open) rest)
+     (multiple-value-bind (children remaining) (parse-collection :paren-close rest path 0)
        (values (list* :path path :paren children) remaining)))
-    ((list* :open-square rest)
-     (multiple-value-bind (children remaining) (parse-collection :close-square rest path 0)
+    ((list* (cons :delim :square-open) rest)
+     (multiple-value-bind (children remaining) (parse-collection :square-close rest path 0)
        (values (list* :path path :square children) remaining)))
-    ((list* :open-curly rest)
-     (multiple-value-bind (children remaining) (parse-collection :close-curly rest path 0)
+    ((list* (cons :delim :curly-open) rest)
+     (multiple-value-bind (children remaining) (parse-collection :curly-close rest path 0)
        (values (list* :path path :curly children) remaining)))
-    ((list* (or :close-paren :close-square :close-curly) _)
+    ((list* (cons :delim (or :paren-close :square-close :curly-close)) _)
      (error 'sexp-parse-error
             :token (car tokens)
             :message (format nil "Unexpected closing delimiter: ~A" (car tokens))))
