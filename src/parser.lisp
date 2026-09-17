@@ -183,8 +183,6 @@ Always returns a (:path () :file ...) node representing the parsed file contents
      (format stream "~S" val))
     ((type keyword)
      (format stream ":~A" (string-downcase (symbol-name val))))
-    ((null)
-     (write-string "()" stream))
     ((type symbol)
      (write-string (string-downcase (symbol-name val)) stream))
     ((type number)
