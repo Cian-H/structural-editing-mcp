@@ -6,65 +6,90 @@
            :reindex-paths
            :update-node-at-path
            :get-node-path
+           :get-node-tag
            :get-node-tags
            :get-node-children
-           :parse-node))
+           :parse-node
+           :node
+           :leaf)
+  (:documentation "Core AST representations, patterns, accessors, and path navigation."))
 
 (in-package :structural-editing-mcp.tree)
 
+(defpattern node (path tag children)
+  `(list* :path ,path ,tag ,children))
+
+(defpattern leaf (path val)
+  `(list :path ,path :leaf ,val))
+
+(declaim (inline get-node-path get-node-tag get-node-tags get-node-children))
+
 (defun get-node-path (node)
-  "Return the path list of NODE."
-  (second node))
+  "Return the path list of NODE, or NIL if invalid."
+  (match node
+    ((or (node path _ _)
+         (leaf path _))
+     path)
+    (_ nil)))
+
+(defun get-node-tag (node)
+  "Return the tag keyword (:paren, :leaf, :file, :workspace, etc.) of NODE."
+  (match node
+    ((leaf _ _) :leaf)
+    ((node _ tag _) tag)
+    (_ nil)))
 
 (defun get-node-tags (node)
-  "Return the tag keyword (:paren, :leaf, :file, :workspace, etc.) of NODE."
-  (third node))
+  "Return the tag keyword of NODE (alias for GET-NODE-TAG)."
+  (get-node-tag node))
 
 (defun get-node-children (node)
-  "Return the children of collection NODE, or NIL if it is a leaf."
-  (if (eq (get-node-tags node) :leaf)
-      nil
-      (cdddr node)))
+  "Return the children of collection NODE, or NIL if it is a leaf or invalid."
+  (match node
+    ((node _ _ children) children)
+    (_ nil)))
 
 (defun parse-node (node)
   "Destructure NODE and return (values path tag children-or-leaf-val)."
-  (values (get-node-path node)
-          (get-node-tags node)
-          (if (eq (get-node-tags node) :leaf)
-              (fourth node)
-              (cdddr node))))
+  (match node
+    ((leaf path val)
+     (values path :leaf val))
+    ((node path tag children)
+     (values path tag children))
+    (_ (values nil nil nil))))
 
 (defun get-node-at-path (tree path)
-  "Navigate to the node at PATH in TREE."
-  (if (null path)
-      tree
-      (let ((children (get-node-children tree)))
-        (when children
-          (let ((next-idx (car path)))
-            (when (and (>= next-idx 0) (< next-idx (length children)))
-              (get-node-at-path (nth next-idx children) (cdr path))))))))
+  "Navigate to the node at PATH in TREE, or NIL if not found."
+  (loop with current = tree
+        for idx in path
+        for children = (get-node-children current)
+        for sub = (and children (>= idx 0) (nthcdr idx children))
+        if sub
+          do (setf current (car sub))
+        else
+          return nil
+        finally (return current)))
 
 (defun reindex-paths (tree &optional (current-path '()))
   "Recompute and update all :path metadata in TREE starting at CURRENT-PATH."
   (match tree
-    ((list :path _ :leaf val)
+    ((leaf _ val)
      (list :path current-path :leaf val))
-    ((list* :path _ tag children)
-     (let ((idx 0))
-       (list* :path current-path tag
-              (mapcar (lambda (child)
-                        (prog1 (reindex-paths child (append current-path (list idx)))
-                          (incf idx)))
-                      children))))
+    ((node _ tag children)
+     (list* :path current-path tag
+            (loop for child in children
+                  for idx from 0
+                  for child-path = (append current-path (list idx))
+                  collect (reindex-paths child child-path))))
     (_ tree)))
 
 (defun update-node-at-path (tree path fn)
   "Navigate to PATH in TREE, apply FN to the node at PATH, and reconstruct the tree."
-  (labels ((walk (node p)
+  (labels ((walk (elem p)
              (if (null p)
-                 (funcall fn node)
-                 (match node
-                   ((list* :path node-path tag children)
+                 (funcall fn elem)
+                 (match elem
+                   ((node node-path tag children)
                     (let ((child-idx (car p)))
                       (list* :path node-path tag
                              (loop for child in children
@@ -72,6 +97,6 @@
                                    collect (if (= i child-idx)
                                                (walk child (cdr p))
                                                child)))))
-                   (_ node)))))
+                   (_ elem)))))
     (reindex-paths (walk tree path))))
 

@@ -1,13 +1,16 @@
 (defpackage :structural-editing-mcp.workspace
   (:use :cl
+        :alexandria
         :structural-editing-mcp.parser
-        :structural-editing-mcp.tree)
+        :structural-editing-mcp.tree
+        :structural-editing-mcp.conditions)
   (:export :*workspace-tree*
            :*file-registry*
            :init-workspace
            :read-workspace-file
            :write-workspace
-           :get-filepath))
+           :get-filepath)
+  (:documentation "Project-level multi-file workspace management, file tracking, and disk I/O."))
 
 (in-package :structural-editing-mcp.workspace)
 
@@ -20,7 +23,7 @@
 (defun init-workspace ()
   "Initialize an empty workspace."
   (setf *file-registry* (make-hash-table :test 'equal))
-  (setf *workspace-tree* (list :path '() :workspace)))
+  (setf *workspace-tree* '(:path () :workspace)))
 
 (defun get-filepath (id)
   "Get the filepath associated with the numerical ID."
@@ -37,7 +40,7 @@
     (setf (gethash new-id *file-registry*) filepath)
     ;; Append the new file node as a child of the workspace
     (setf *workspace-tree*
-          (list* :path '() :workspace (append existing-children (list parsed-file-node))))
+          `(:path () :workspace ,@existing-children ,parsed-file-node))
     ;; Re-index paths from the root to ensure everything has correct paths
     (setf *workspace-tree* (reindex-paths *workspace-tree*))
     new-id))
@@ -45,12 +48,11 @@
 (defun write-workspace ()
   "Write all :file nodes in the workspace back to their respective paths on disk."
   (unless *workspace-tree*
-    (error "No workspace initialized."))
-  (let ((file-nodes (get-node-children *workspace-tree*)))
-    (loop for file-node in file-nodes
-          for id from 0
-          for filepath = (get-filepath id)
-          do (when filepath
-               (let ((text (sexp-to-string file-node)))
-                 (uiop:with-output-file (out filepath :if-exists :supersede :if-does-not-exist :create)
-                   (write-string text out)))))))
+    (error 'workspace-error :message "No workspace initialized."))
+  (loop for file-node in (get-node-children *workspace-tree*)
+        for id from 0
+        for filepath = (get-filepath id)
+        do (when filepath
+             (let ((text (sexp-to-string file-node)))
+               (uiop:with-output-file (out filepath :if-exists :supersede :if-does-not-exist :create)
+                 (write-string text out))))))

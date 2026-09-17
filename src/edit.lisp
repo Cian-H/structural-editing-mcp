@@ -4,7 +4,12 @@
         :alexandria
         :structural-editing-mcp.parser
         :structural-editing-mcp.tree
-        :structural-editing-mcp.utils)
+        :structural-editing-mcp.utils
+        :structural-editing-mcp.conditions)
+  (:import-from :serapeum
+                :take
+                :drop
+                :halves)
   (:export :insert-node
            :insert-expression
            :delete-node
@@ -19,7 +24,8 @@
            :unwrap-node
            :promote-node
            :split-node
-           :merge-nodes))
+           :merge-nodes)
+  (:documentation "Functional tree surgery primitives for structural editing."))
 
 (in-package :structural-editing-mcp.edit)
 
@@ -28,8 +34,11 @@
   (update-node-at-path tree parent-path
     (lambda (parent)
       (match parent
-        ((list* :path p tag children)
-         (list* :path p tag (insert-at children index node)))
+        ((node p tag children)
+         `(:path ,p ,tag
+           ,@(take index children)
+           ,node
+           ,@(drop index children)))
         (_ parent)))))
 
 (defun insert-expression (tree parent-path index source-string)
@@ -41,12 +50,15 @@
   "Delete the node at PATH."
   (if (null path)
       nil
-      (update-node-at-path tree (butlast path)
-        (lambda (parent)
-          (match parent
-            ((list* :path p tag children)
-             (list* :path p tag (remove-at children (lastcar path))))
-            (_ parent))))))
+      (let ((idx (lastcar path)))
+        (update-node-at-path tree (butlast path)
+          (lambda (parent)
+            (match parent
+              ((node p tag children)
+               `(:path ,p ,tag
+                 ,@(take idx children)
+                 ,@(drop (1+ idx) children)))
+              (_ parent)))))))
 
 (defun overwrite-node (tree path node)
   "Replace the node at PATH with NODE."
@@ -69,16 +81,18 @@
   "Remove the node at TARGET-PATH from the tree and return both the new tree and the removed node."
   (if (null target-path)
       (values nil tree)
-      (let (popped-node)
-        (let ((new-tree (update-node-at-path tree (butlast target-path)
-                          (lambda (parent)
-                            (match parent
-                              ((list* :path p tag children)
-                               (let ((idx (lastcar target-path)))
-                                 (setf popped-node (nth idx children))
-                                 (list* :path p tag (remove-at children idx))))
-                              (_ parent))))))
-          (values new-tree popped-node)))))
+      (let* ((idx (lastcar target-path))
+             popped-node
+             (new-tree (update-node-at-path tree (butlast target-path)
+                         (lambda (parent)
+                           (match parent
+                             ((node p tag children)
+                              (setf popped-node (nth idx children))
+                              `(:path ,p ,tag
+                                ,@(take idx children)
+                                ,@(drop (1+ idx) children)))
+                             (_ parent))))))
+        (values new-tree popped-node))))
 
 (defun move-node (tree source-path target-parent-path target-index)
   "Move the node at SOURCE-PATH to TARGET-INDEX under TARGET-PARENT-PATH."
@@ -95,15 +109,15 @@
           (update-node-at-path tree parent1
             (lambda (parent)
               (match parent
-                ((list* :path p tag children)
+                ((node p tag children)
                  (let ((child1 (nth idx1 children))
                        (child2 (nth idx2 children)))
-                   (list* :path p tag
-                          (loop for c in children
-                                for i from 0
-                                collect (cond ((= i idx1) child2)
-                                              ((= i idx2) child1)
-                                              (t c))))))
+                   `(:path ,p ,tag
+                     ,@(loop for c in children
+                             for i from 0
+                             collect (cond ((= i idx1) child2)
+                                           ((= i idx2) child1)
+                                           (t c))))))
                 (_ parent)))))
         (let ((node1 (get-node-at-path tree path1))
               (node2 (get-node-at-path tree path2)))
@@ -120,10 +134,10 @@
   (update-node-at-path tree parent-path
     (lambda (parent)
       (match parent
-        ((list* :path p ptag children)
-         (let ((before (subseq children 0 start-index))
-               (slice (subseq children start-index (1+ end-index)))
-               (after (nthcdr (1+ end-index) children)))
+        ((node p ptag children)
+         (let ((before (take start-index children))
+               (slice (take (1+ (- end-index start-index)) (drop start-index children)))
+               (after (drop (1+ end-index) children)))
            `(:path ,p ,ptag
              ,@before
              (:path ,p ,tag ,@slice)
@@ -138,34 +152,35 @@
         (update-node-at-path tree (butlast path)
           (lambda (parent)
             (match parent
-              ((list* :path p ptag children)
-               (let ((before (subseq children 0 idx))
-                     (inner-children (get-node-children (nth idx children)))
-                     (after (nthcdr (1+ idx) children)))
-                 `(:path ,p ,ptag
-                   ,@before
-                   ,@inner-children
-                   ,@after)))
+              ((node p ptag children)
+               (match (nth idx children)
+                 ((node _ _ inner-children)
+                  `(:path ,p ,ptag
+                    ,@(take idx children)
+                    ,@inner-children
+                    ,@(drop (1+ idx) children)))
+                 (_ parent)))
               (_ parent)))))))
 
 (defun promote-node (tree path)
   "Promote the node at PATH to replace its parent node."
   (if (null path)
       tree
-      (update-node-at-path tree (butlast path)
-        (lambda (parent)
-          (match parent
-            ((list* :path _ _ children)
-             (nth (lastcar path) children))
-            (_ parent))))))
+      (let ((idx (lastcar path)))
+        (update-node-at-path tree (butlast path)
+          (lambda (parent)
+            (match parent
+              ((node _ _ children)
+               (nth idx children))
+              (_ parent)))))))
 
 (defun split-node (tree path child-index)
   "Split the collection node at PATH into two siblings at CHILD-INDEX."
   (update-node-at-path tree path
     (lambda (node)
       (match node
-        ((list* :path p tag children)
-         (multiple-value-bind (left right) (split-at child-index children)
+        ((node p tag children)
+         (multiple-value-bind (left right) (halves children child-index)
            `(:path ,p ,tag
              (:path ,p ,tag ,@left)
              (:path ,p ,tag ,@right))))
@@ -176,20 +191,23 @@
   (let ((parent1 (butlast path1))
         (parent2 (butlast path2)))
     (unless (equal parent1 parent2)
-      (error "Cannot merge nodes with different parents: ~A and ~A" path1 path2))
+      (error 'invalid-path-error
+             :path (list path1 path2)
+             :tree tree
+             :message "Cannot merge nodes with different parents"))
     (let ((left-idx (min (lastcar path1) (lastcar path2)))
           (right-idx (max (lastcar path1) (lastcar path2))))
       (update-node-at-path tree parent1
         (lambda (parent)
           (match parent
-            ((list* :path p ptag children)
+            ((node p ptag children)
              (match (list (nth left-idx children) (nth right-idx children))
-               ((list (list* :path p1 tag1 ch1)
-                      (list* :path _ _ ch2))
+               ((list (node p1 tag1 ch1)
+                      (node _ _ ch2))
                 `(:path ,p ,ptag
-                  ,@(subseq children 0 left-idx)
+                  ,@(take left-idx children)
                   (:path ,p1 ,tag1 ,@ch1 ,@ch2)
-                  ,@(subseq children (1+ left-idx) right-idx)
-                  ,@(nthcdr (1+ right-idx) children)))
+                  ,@(take (- right-idx (1+ left-idx)) (drop (1+ left-idx) children))
+                  ,@(drop (1+ right-idx) children)))
                (_ parent)))
             (_ parent)))))))

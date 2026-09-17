@@ -6,6 +6,7 @@ in {
       with ps; [
         trivia
         alexandria
+        serapeum
         rove
         customLisp.isocline-repl
       ]))
