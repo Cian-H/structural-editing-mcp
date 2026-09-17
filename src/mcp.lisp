@@ -165,6 +165,27 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                            (structural-editing-mcp.tree:get-node-at-path tree target-path))))
           (values (butlast target-path) (lastcar target-path)))))
 
+(defun perform-search (tree target-path query)
+  "Search the AST under TARGET-PATH for leaf nodes matching QUERY."
+  (let ((results '())
+        (lower-query (string-downcase query))
+        (start-node (if target-path
+                        (structural-editing-mcp.tree:get-node-at-path tree target-path)
+                        tree)))
+    (labels ((walk (node)
+               (match node
+                 ((leaf path val)
+                  (let* ((str (structural-editing-mcp.parser::format-atom val))
+                         (lower-str (string-downcase str)))
+                    (when (search lower-query lower-str)
+                      (push path results))))
+                 ((node _ _ children)
+                  (dolist (child children)
+                    (walk child)))
+                 (_ nil))))
+      (walk start-node)
+      (nreverse results))))
+
 ;;; Tool Definitions
 
 (defun get-tools-list ()
@@ -224,6 +245,17 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                                            "index" (dict "type" "integer"
                                                          "description" "Optional target child index for move/copy."))
                              "required" (list "source_path" "target_path" "action")))
+
+   (dict "name" "ast_search"
+         "description" "Search the workspace or a specific AST node for a string query. Returns a list of paths to all leaf nodes whose value contains the query (case-insensitive substring match). If path is omitted, searches the entire workspace."
+         "inputSchema" (dict "type" "object"
+                             "properties" (dict
+                                           "query" (dict "type" "string"
+                                                         "description" "The string to search for.")
+                                           "path" (dict "type" "array"
+                                                        "items" (dict "type" "integer")
+                                                        "description" "Optional AST path to constrain the search to a specific node/file. If omitted, searches the entire workspace."))
+                             "required" (list "query")))
 
    (dict "name" "commit_workspace"
          "description" "Persists all in-memory workspace modifications back to their respective files on disk."
@@ -324,6 +356,14 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                              (structural-editing-mcp.edit:merge-nodes structural-editing-mcp.workspace:*workspace-tree* src tgt)))
                       (t (error "Unknown action: ~A" action)))
                     (format nil "Successfully executed ~A from ~A to ~A" action src tgt)))
+
+                 ((equal name "ast_search")
+                  (let* ((path (to-list (gethash "path" args)))
+                         (query (gethash "query" args))
+                         (results (perform-search structural-editing-mcp.workspace:*workspace-tree* path query)))
+                    (if results
+                        (format nil "Found ~A matches. Paths:~%~{~A~^~%~}" (length results) results)
+                        (format nil "No matches found for '~A' at path ~A" query path))))
 
                  ((equal name "commit_workspace")
                   (structural-editing-mcp.workspace:write-workspace)
