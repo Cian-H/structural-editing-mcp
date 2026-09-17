@@ -8,10 +8,15 @@
 (in-package :structural-editing-mcp-tests)
 
 (deftest test-string-to-sexp
-  (ok (equal '(a b c) (string-to-sexp "(a b c)"))))
+  (ok (equal '(:paren a b c) (string-to-sexp "(a b c)")))
+  (ok (equal '(:square a b c) (string-to-sexp "[a b c]")))
+  (ok (equal '(:curly a b c) (string-to-sexp "{a b c}"))))
 
 (deftest test-sexp-to-string
-  (ok (string= "(a b c)" (sexp-to-string '(a b c)))))
+  (ok (string= "(a b c)" (sexp-to-string '(:paren a b c))))
+  (ok (string= "(a b c)" (sexp-to-string '(a b c))))
+  (ok (string= "[a b c]" (sexp-to-string '(:square a b c))))
+  (ok (string= "{a b c}" (sexp-to-string '(:curly a b c)))))
 
 (deftest test-slurp-right
   (ok (equal '((a b) c) (slurp-right '((a) b c)))))
