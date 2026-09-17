@@ -42,3 +42,29 @@
          (res (structural-editing-mcp.refactor:replace-pattern ast "(bar ?x ?y)" "(baz ?y ?x)")))
     (ok (search "(baz 2 1)" (sexp-to-string res)))
     (ok (not (search "(bar 1 2)" (sexp-to-string res))))))
+
+(deftest test-backquote-and-character-literals
+  (testing "backquote tokens do not hang the tokenizer"
+    (ok (equal '(:path () :file
+                 (:path (0) :paren
+                   (:path (0 0) :leaf |`|)
+                   (:path (0 1) :paren
+                     (:path (0 1 0) :leaf a)
+                     (:path (0 1 1) :leaf |,B|))))
+               (string-to-sexp "(` (a ,b))")))
+    (ok (string= "(` (a ,b))" (sexp-to-string (string-to-sexp "(` (a ,b))")))))
+
+  (testing "character literals parse without delimiter interference"
+    (let ((code "(char= ch #\\; #\\( #\\) #\\\" #\\\\)"))
+      (ok (equal '(:path () :file
+                   (:path (0) :paren
+                     (:path (0 0) :leaf char=)
+                     (:path (0 1) :leaf ch)
+                     (:path (0 2) :leaf #\;)
+                     (:path (0 3) :leaf #\()
+                     (:path (0 4) :leaf #\))
+                     (:path (0 5) :leaf #\")
+                     (:path (0 6) :leaf #\\)))
+                 (string-to-sexp code)))
+      (ok (string= "(char= ch #\\; #\\( #\\) #\\\" #\\\\)"
+                   (sexp-to-string (string-to-sexp code)))))))

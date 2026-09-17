@@ -36,7 +36,6 @@
     ((char= char (code-char 125)) t)
     ((char= char (code-char 59)) t)
     ((char= char (code-char 34)) t)
-    ((char= char (code-char 96)) t)
     (t nil)))
 
 (defun read-string-literal (string index len)
@@ -76,6 +75,14 @@
            (parse-integer string :start start :end end :junk-allowed t)
          (when (and val (= (the fixnum parsed-end) end))
            val)))
+      ;; Character literal (#\...)
+      ((and (>= len 2) (char= (char string start) (code-char 35)) (char= (char string (1+ start)) #\\))
+       (let* ((*read-eval* nil)
+              (tok (subseq string start end))
+              (parsed (ignore-errors (read-from-string tok))))
+         (if (characterp parsed)
+             parsed
+             (intern (string-upcase tok)))))
       ;; Float or ratio
       ((let* ((*read-eval* nil)
               (tok (subseq string start end))
@@ -104,7 +111,7 @@
           do (cond
                ((whitespace-p ch)
                 (incf index))
-               ((char= ch #\;)
+               ((char= ch (code-char 59))
                 (let ((start index))
                   (incf index)
                   (loop while (and (< index len) (not (char= (char string index) #\Newline)))
@@ -131,6 +138,17 @@
                              (t
                               (incf index))))
                   (push (list :comment (subseq string start index)) tokens)))
+               ((and (char= ch (code-char 35)) (< (1+ index) len) (char= (char string (1+ index)) #\\))
+                (let ((start index))
+                  (incf index 2)
+                  (if (< index len)
+                      (if (or (delimiter-p (char string index)) (char= (char string index) #\\))
+                          (incf index)
+                          (loop while (and (< index len)
+                                           (let ((c (char string index)))
+                                             (not (or (whitespace-p c) (delimiter-p c)))))
+                                do (incf index))))
+                  (push (parse-token string start index) tokens)))
                ((char= ch (code-char 40)) (push '(:delim . :paren-open) tokens) (incf index))
                ((char= ch (code-char 41)) (push '(:delim . :paren-close) tokens) (incf index))
                ((char= ch (code-char 91)) (push '(:delim . :square-open) tokens) (incf index))
@@ -148,7 +166,12 @@
                                      (not (or (whitespace-p c)
                                               (delimiter-p c)))))
                         do (incf index))
-                  (push (parse-token string start index) tokens)))))
+                  (if (= start index)
+                      ;; Invariant fallback: consume at least 1 character to guarantee progress
+                      (progn
+                        (push (parse-token string start (1+ start)) tokens)
+                        (incf index))
+                      (push (parse-token string start index) tokens))))))
     (nreverse tokens)))
 
 (defun parse-collection (close-token tokens current-path child-index)
@@ -214,6 +237,8 @@ Always returns a (:path () :file ...) node representing the parsed file contents
   "Write the string representation of atomic VAL to STREAM."
   (match val
     ((type string)
+     (format stream "~S" val))
+    ((type character)
      (format stream "~S" val))
     ((type keyword)
      (format stream ":~A" (string-downcase (symbol-name val))))
