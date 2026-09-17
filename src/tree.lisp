@@ -51,6 +51,9 @@
 (defun get-node-children (node)
   "Return the children of collection NODE, or NIL if it is a leaf or invalid."
   (match node
+    ((or (leaf _ _)
+         (comment _ _))
+     nil)
     ((node _ _ children) children)
     (_ nil)))
 

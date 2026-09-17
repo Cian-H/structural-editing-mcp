@@ -248,7 +248,7 @@ Always returns a (:path () :file ...) node representing the parsed file contents
               (write-string open stream)
               (write-string (first child-strings) stream)
               (cond
-                ((or is-def is-let)
+                ((or is-def is-let is-cond)
                  ;; Print second and optionally third child on same line if short, else indented 4
                  (let* ((indent-body (make-string (+ indent 2) :initial-element #\Space))
                         (indent-args (make-string (+ indent 4) :initial-element #\Space)))

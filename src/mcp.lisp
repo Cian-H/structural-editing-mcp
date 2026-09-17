@@ -48,8 +48,31 @@
 
 ;;; Node Presentation & Discovery Helpers
 
-(defun format-node-preview (node)
-  "Format a node with its path, tag, rendered code, and summary of immediate children."
+(defun print-children-tree (s node current-depth max-depth base-path)
+  (when (and (< current-depth max-depth)
+             (not (member (structural-editing-mcp.tree:get-node-tag node) '(:leaf :comment))))
+    (let ((children (structural-editing-mcp.tree:get-node-children node)))
+      (when children
+        (loop for child in children
+              for idx from 0
+              for cpath = (or (structural-editing-mcp.tree:get-node-path child)
+                              (append base-path (list idx)))
+              for ctag = (structural-editing-mcp.tree:get-node-tag child)
+              for raw-str = (structural-editing-mcp.parser:sexp-to-string child)
+              for single-line = (substitute #\Space #\Newline (string-trim '(#\Space #\Newline) raw-str))
+              for snippet = (if (> (length single-line) 70)
+                                (format nil "~A..." (subseq single-line 0 67))
+                                single-line)
+              for indent = (make-string (* (1+ current-depth) 2) :initial-element #\Space)
+              do (format s "~A[~{~A~^, ~}] ~A: ~A~%"
+                         indent
+                         cpath
+                         ctag
+                         snippet)
+                 (print-children-tree s child (1+ current-depth) max-depth cpath))))))
+
+(defun format-node-preview (node &key (depth 2))
+  "Format a node with its path, tag, rendered code, and summary of children up to DEPTH."
   (if (null node)
       "Node not found at given path."
       (let* ((path (structural-editing-mcp.tree:get-node-path node))
@@ -81,7 +104,8 @@
                (format s "~%Children (~A top-level forms):~%" (length children))
                (loop for child in children
                      for idx from 0
-                     for cpath = (structural-editing-mcp.tree:get-node-path child)
+                     for cpath = (or (structural-editing-mcp.tree:get-node-path child)
+                                     (append path (list idx)))
                      for ctag = (structural-editing-mcp.tree:get-node-tag child)
                      for raw-str = (structural-editing-mcp.parser:sexp-to-string child)
                      for single-line = (substitute #\Space #\Newline (string-trim '(#\Space #\Newline) raw-str))
@@ -89,16 +113,19 @@
                                        (format nil "~A..." (subseq single-line 0 67))
                                        single-line)
                      do (format s "  [~{~A~^, ~}] ~A: ~A~%"
-                                (or cpath (append path (list idx)))
+                                cpath
                                 ctag
-                                snippet))))
+                                snippet)
+                        (when (> depth 1)
+                          (print-children-tree s child 1 depth cpath)))))
             (t
              (format s "Code:~%~A~%" code)
              (when children
                (format s "~%Children (~A):~%" (length children))
                (loop for child in children
                      for idx from 0
-                     for cpath = (structural-editing-mcp.tree:get-node-path child)
+                     for cpath = (or (structural-editing-mcp.tree:get-node-path child)
+                                     (append path (list idx)))
                      for ctag = (structural-editing-mcp.tree:get-node-tag child)
                      for raw-str = (structural-editing-mcp.parser:sexp-to-string child)
                      for single-line = (substitute #\Space #\Newline (string-trim '(#\Space #\Newline) raw-str))
@@ -106,9 +133,11 @@
                                        (format nil "~A..." (subseq single-line 0 67))
                                        single-line)
                      do (format s "  [~{~A~^, ~}] ~A: ~A~%"
-                                (or cpath (append path (list idx)))
+                                cpath
                                 ctag
-                                snippet)))))))))
+                                snippet)
+                        (when (> depth 1)
+                          (print-children-tree s child 1 depth cpath))))))))))
 
 ;;; AST Mutation Dispatchers
 
@@ -216,12 +245,14 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 (defun get-tools-list ()
   (list
    (dict "name" "read_node"
-         "description" "Inspect any node in the AST or workspace. If path is [] or omitted, inspects the workspace root and lists loaded files. Supports loading new files into the workspace via optional load_files."
+         "description" "Inspect any node in the AST or workspace. Returns rendered code and a nested tree of child paths up to 'depth' levels. BEST PRACTICE: Always read parent forms (e.g. [0, 10]) to see the entire expression and its child paths at once—do NOT probe child indices one-by-one. Use 'ast_search' to find symbols/calls across the workspace."
          "inputSchema" (dict "type" "object"
                              "properties" (dict
                                            "path" (dict "type" "array"
                                                         "items" (dict "type" "integer")
                                                         "description" "0-indexed array of integers specifying the AST path. Omit or pass [] for the workspace root, [0] for file 0, [0, 2] for top-level form 2 in file 0, [0, 3, 1] for child 1 of form 3.")
+                                           "depth" (dict "type" "integer"
+                                                         "description" "Recursion depth for displaying nested children and their paths (default: 2). Use depth 1 for only immediate children, 2 or 3 to inspect deeper sub-expressions.")
                                            "load_files" (dict "type" "array"
                                                               "items" (dict "type" "string")
                                                               "description" "Optional list of absolute filepaths to load into the workspace (e.g. ['/path/to/file.lisp'])."))))
@@ -272,11 +303,11 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                              "required" (list "source_path" "target_path" "action")))
 
    (dict "name" "ast_search"
-         "description" "Search the workspace or a specific AST node for a string query. Returns a list of paths to all leaf nodes whose value contains the query (case-insensitive substring match). If path is omitted, searches the entire workspace."
+         "description" "FAST SEARCH: Find all occurrences of a symbol, function name, or keyword across the entire workspace or under a specific path. Returns exact AST paths to each match without needing to walk the tree manually."
          "inputSchema" (dict "type" "object"
                              "properties" (dict
                                            "query" (dict "type" "string"
-                                                         "description" "The string to search for.")
+                                                         "description" "The symbol or text to search for (e.g. 'make-api-call').")
                                            "path" (dict "type" "array"
                                                         "items" (dict "type" "integer")
                                                         "description" "Optional AST path to constrain the search to a specific node/file. If omitted, searches the entire workspace."))
@@ -350,11 +381,12 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                   (unless structural-editing-mcp.workspace:*workspace-tree*
                     (structural-editing-mcp.workspace:init-workspace))
                   (let* ((path (to-list (gethash "path" args)))
+                         (depth (or (gethash "depth" args) 2))
                          (node (if (null path)
                                    structural-editing-mcp.workspace:*workspace-tree*
                                    (structural-editing-mcp.tree:get-node-at-path
                                     structural-editing-mcp.workspace:*workspace-tree* path))))
-                    (format-node-preview node)))
+                    (format-node-preview node :depth depth)))
 
                  ((equal name "ast_modify")
                   (let* ((path (to-list (gethash "path" args)))
