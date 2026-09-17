@@ -4,7 +4,10 @@
         :structural-editing-mcp.tree
         :structural-editing-mcp.conditions)
   (:export :string-to-sexp
-           :sexp-to-string)
+           :sexp-to-string
+           :print-sexp
+           :format-sexp
+           :parse-atom-string)
   (:documentation "Lexer, parser, and pretty-printer serializer for s-expressions."))
 
 (in-package :structural-editing-mcp.parser)
@@ -13,22 +16,26 @@
 
 (defun whitespace-p (char)
   "Return T if CHAR is whitespace (space, tab, newline, return, comma)."
+  (declare (type character char))
   (case char
     ((#\Space #\Tab #\Newline #\Return #\,) t)
     (otherwise nil)))
 
 (defun delimiter-p (char)
   "Return T if CHAR is a delimiter character."
+  (declare (type character char))
   (case char
     ((#\( #\) #\[ #\] #\{ #\} #\; #\") t)
     (otherwise nil)))
 
 (defun read-string-literal (string index len)
   "Read an escaped string literal starting after the opening quote."
+  (declare (type string string)
+           (type fixnum index len))
   (let ((out (make-string-output-stream)))
     (incf index)
     (loop while (< index len)
-          for ch = (char string index)
+          for ch of-type character = (char string index)
           do (cond
                ((char= ch #\\)
                 (incf index)
@@ -43,32 +50,46 @@
                 (incf index)))
           finally (return (values (get-output-stream-string out) index)))))
 
+(defun parse-token (string start end)
+  "Parse a token delimited by [START, END) in STRING into a keyword, number, or symbol."
+  (declare (type string string)
+           (type fixnum start end))
+  (let ((len (- end start)))
+    (declare (type fixnum len))
+    (cond
+      ;; Keyword (:foo)
+      ((and (>= len 2) (char= (char string start) #\:))
+       (intern (string-upcase (subseq string (1+ start) end)) :keyword))
+      ;; Integer: parses directly from the string buffer without subseq
+      ((multiple-value-bind (val parsed-end)
+           (parse-integer string :start start :end end :junk-allowed t)
+         (when (and val (= (the fixnum parsed-end) end))
+           val)))
+      ;; Float or ratio
+      ((let* ((*read-eval* nil)
+              (tok (subseq string start end))
+              (parsed (ignore-errors (read-from-string tok))))
+         (if (numberp parsed)
+             parsed
+             (intern (string-upcase tok)))))
+      ;; Standard symbol
+      (t
+       (intern (string-upcase (subseq string start end)))))))
+
 (defun parse-atom-string (token)
-  "Parse a non-delimiter token string into a keyword, number, or symbol."
-  (cond
-    ;; Keyword (:foo)
-    ((and (>= (length token) 2) (char= (char token 0) #\:))
-     (intern (string-upcase (subseq token 1)) :keyword))
-    ;; Integer
-    ((multiple-value-bind (val end) (parse-integer token :junk-allowed t)
-       (when (and val (= end (length token)))
-         val)))
-    ;; Float or ratio
-    ((let ((*read-eval* nil))
-       (let ((parsed (ignore-errors (read-from-string token))))
-         (when (numberp parsed)
-           parsed))))
-    ;; Standard symbol interned into *package*
-    (t
-     (intern (string-upcase token)))))
+  "Parse a token string into a keyword, number, or symbol (compatibility wrapper)."
+  (parse-token token 0 (length token)))
 
 (defun tokenize (string)
   "Tokenize a string into a flat list of delimiter keywords and atomic values."
+  (declare (type string string))
   (let ((index 0)
         (len (length string))
         (tokens '()))
+    (declare (type fixnum index len)
+             (type list tokens))
     (loop while (< index len)
-          for ch = (char string index)
+          for ch of-type character = (char string index)
           do (cond
                ((whitespace-p ch)
                 (incf index))
@@ -95,7 +116,7 @@
                                      (not (or (whitespace-p c)
                                               (delimiter-p c)))))
                         do (incf index))
-                  (push (parse-atom-string (subseq string start index)) tokens)))))
+                  (push (parse-token string start index) tokens)))))
     (nreverse tokens)))
 
 (defun parse-collection (close-token tokens current-path child-index)
@@ -155,71 +176,93 @@ Always returns a (:path () :file ...) node representing the parsed file contents
               (setf remaining rest)))
           (list* :path '() :file (nreverse forms))))))
 
-(defun format-collection (open close children indent)
+(defun write-atom (val stream)
+  "Write the string representation of atomic VAL to STREAM."
+  (match val
+    ((type string)
+     (format stream "~S" val))
+    ((type keyword)
+     (format stream ":~A" (string-downcase (symbol-name val))))
+    ((null)
+     (write-string "()" stream))
+    ((type symbol)
+     (write-string (string-downcase (symbol-name val)) stream))
+    ((type number)
+     (format stream "~A" val))
+    (_
+     (format stream "~A" val))))
+
+(defun format-atom (val)
+  "Return the formatted string representation of VAL (compatibility wrapper)."
+  (with-output-to-string (s)
+    (write-atom val s)))
+
+(defun print-collection (open close children stream indent)
+  "Format and print a collection delimited by OPEN and CLOSE to STREAM."
   (if (null children)
-      (format nil "~A~A" open close)
-      (let ((child-strings (mapcar (lambda (c) (format-sexp c (+ indent 2)))
+      (format stream "~A~A" open close)
+      (let ((child-strings (mapcar (lambda (c) (sexp-to-string c :indent (+ indent 2)))
                                    children)))
         (let ((single-line (format nil "~A~{~A~^ ~}~A" open child-strings close)))
           (if (and (not (find #\Newline single-line))
                    (<= (length single-line) 60))
-              single-line
-              (with-output-to-string (out)
-                (write-string open out)
-                (write-string (first child-strings) out)
+              (write-string single-line stream)
+              (progn
+                (write-string open stream)
+                (write-string (first child-strings) stream)
                 (let ((indent-str (make-string (+ indent 2) :initial-element #\Space)))
                   (dolist (c (rest child-strings))
-                    (terpri out)
-                    (write-string indent-str out)
-                    (write-string c out)))
-                (write-string close out)))))))
+                    (terpri stream)
+                    (write-string indent-str stream)
+                    (write-string c stream)))
+                (write-string close stream)))))))
 
-(defun format-atom (val)
-  (match val
-    ((type string)
-     (format nil "~S" val))
-    ((type keyword)
-     (format nil ":~A" (string-downcase (symbol-name val))))
-    ((null)
-     "()")
-    ((type symbol)
-     (string-downcase (symbol-name val)))
-    ((type number)
-     (format nil "~A" val))
-    (_
-     (format nil "~A" val))))
-
-(defun format-sexp (expr indent)
+(defun print-sexp (expr stream &optional (indent 0))
+  "Serialize EXPR directly to STREAM with proper formatting."
+  (declare (type fixnum indent))
   (match expr
     ;; Tagged leaf node: (:path _ :leaf val)
     ((leaf _ val)
-     (format-atom val))
+     (write-atom val stream))
     ;; Tagged leaf node without :leaf: (:path _ val)
     ((list :path _ val)
-     (format-atom val))
+     (write-atom val stream))
     ((node _ (or :file 'file) children)
-     (format nil "~{~A~^~%~%~}" (mapcar (lambda (c) (format-sexp c indent)) children)))
+     (loop for (c . rest) on children do
+       (print-sexp c stream indent)
+       (when rest
+         (terpri stream)
+         (terpri stream))))
     ((node _ (or :workspace 'workspace) children)
-     (format nil "~{~A~^~%~%~}" (mapcar (lambda (c) (format-sexp c indent)) children)))
+     (loop for (c . rest) on children do
+       (print-sexp c stream indent)
+       (when rest
+         (terpri stream)
+         (terpri stream))))
     ((node _ (or :paren 'paren) children)
-     (format-collection "(" ")" children indent))
+     (print-collection "(" ")" children stream indent))
     ((node _ (or :square 'square) children)
-     (format-collection "[" "]" children indent))
+     (print-collection "[" "]" children stream indent))
     ((node _ (or :curly 'curly) children)
-     (format-collection "{" "}" children indent))
+     (print-collection "{" "}" children stream indent))
     ;; Backward-compatible untagged collections:
     ((list* (or :paren 'paren) children)
-     (format-collection "(" ")" children indent))
+     (print-collection "(" ")" children stream indent))
     ((list* (or :square 'square) children)
-     (format-collection "[" "]" children indent))
+     (print-collection "[" "]" children stream indent))
     ((list* (or :curly 'curly) children)
-     (format-collection "{" "}" children indent))
+     (print-collection "{" "}" children stream indent))
     ((list* _ _)
-     (format-collection "(" ")" expr indent))
+     (print-collection "(" ")" expr stream indent))
     ;; Direct atoms:
     (_
-     (format-atom expr))))
+     (write-atom expr stream))))
 
 (defun sexp-to-string (expr &key (indent 0))
   "Serialize an s-expression back into its string representation with proper formatting."
-  (format-sexp expr indent))
+  (with-output-to-string (out)
+    (print-sexp expr out indent)))
+
+(defun format-sexp (expr indent)
+  "Serialize EXPR with INDENT (compatibility wrapper)."
+  (sexp-to-string expr :indent indent))

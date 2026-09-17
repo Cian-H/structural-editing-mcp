@@ -53,6 +53,5 @@
         for id from 0
         for filepath = (get-filepath id)
         do (when filepath
-             (let ((text (sexp-to-string file-node)))
-               (uiop:with-output-file (out filepath :if-exists :supersede :if-does-not-exist :create)
-                 (write-string text out))))))
+             (uiop:with-output-file (out filepath :if-exists :supersede :if-does-not-exist :create)
+               (print-sexp file-node out 0)))))

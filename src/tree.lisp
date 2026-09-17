@@ -60,8 +60,9 @@
 
 (defun get-node-at-path (tree path)
   "Navigate to the node at PATH in TREE, or NIL if not found."
+  (declare (type list path))
   (loop with current = tree
-        for idx in path
+        for idx of-type fixnum in path
         for children = (get-node-children current)
         for sub = (and children (>= idx 0) (nthcdr idx children))
         if sub
@@ -72,31 +73,34 @@
 
 (defun reindex-paths (tree &optional (current-path '()))
   "Recompute and update all :path metadata in TREE starting at CURRENT-PATH."
+  (declare (type list current-path))
   (match tree
     ((leaf _ val)
      (list :path current-path :leaf val))
     ((node _ tag children)
      (list* :path current-path tag
             (loop for child in children
-                  for idx from 0
+                  for idx of-type fixnum from 0
                   for child-path = (append current-path (list idx))
                   collect (reindex-paths child child-path))))
     (_ tree)))
 
 (defun update-node-at-path (tree path fn)
-  "Navigate to PATH in TREE, apply FN to the node at PATH, and reconstruct the tree."
-  (labels ((walk (elem p)
+  "Navigate to PATH in TREE, apply FN to the node at PATH, and reconstruct the tree.
+Only re-indexes the modified subtree at PATH rather than traversing the entire tree root."
+  (declare (type list path))
+  (labels ((walk (elem p curr-path)
              (if (null p)
-                 (funcall fn elem)
+                 (reindex-paths (funcall fn elem) curr-path)
                  (match elem
                    ((node node-path tag children)
                     (let ((child-idx (car p)))
                       (list* :path node-path tag
                              (loop for child in children
-                                   for i from 0
+                                   for i of-type fixnum from 0
                                    collect (if (= i child-idx)
-                                               (walk child (cdr p))
+                                               (walk child (cdr p) (append curr-path (list i)))
                                                child)))))
                    (_ elem)))))
-    (reindex-paths (walk tree path))))
+    (walk tree path '())))
 
