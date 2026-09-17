@@ -8,6 +8,7 @@ in {
         alexandria
         serapeum
         rove
+        yason
         customLisp.isocline-repl
       ]))
   ];

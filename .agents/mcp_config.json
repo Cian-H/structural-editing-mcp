@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "structural-editing": {
+      "command": "devenv",
+      "args": [
+        "shell",
+        "--",
+        "sbcl",
+        "--noinform",
+        "--noprint",
+        "--disable-debugger",
+        "--script",
+        "/home/cianh/Projects/structural-editing-mcp/scripts/run-server.lisp"
+      ]
+    }
+  }
+}

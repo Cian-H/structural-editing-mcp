@@ -6,6 +6,7 @@
         :structural-editing-mcp.tree
         :structural-editing-mcp.edit
         :structural-editing-mcp.parser
-        :structural-editing-mcp.workspace)
+        :structural-editing-mcp.workspace
+        :structural-editing-mcp.mcp)
   (:export)
   (:documentation "Test suite package for structural-editing-mcp."))

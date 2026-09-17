@@ -2,7 +2,7 @@
   :version "0.1.0"
   :author "Cian Hughes"
   :license "LGPLv3"
-  :depends-on (:trivia :alexandria :serapeum)
+  :depends-on (:trivia :alexandria :serapeum :yason)
   :pathname "src"
   :components ((:file "conditions")
                (:file "utils")
@@ -10,6 +10,7 @@
                (:file "parser")
                (:file "edit")
                (:file "workspace")
+               (:file "mcp")
                (:file "main"))
   :in-order-to ((test-op (test-op "structural-editing-mcp/tests"))))
 
@@ -23,5 +24,6 @@
                (:file "tree")
                (:file "parser")
                (:file "edit")
-               (:file "workspace"))
+               (:file "workspace")
+               (:file "mcp"))
   :perform (test-op (o c) (uiop:symbol-call :rove :run c)))
