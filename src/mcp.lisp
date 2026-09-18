@@ -763,6 +763,43 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                 "Optional dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel)."))))
         (dict
           "name"
+          "ast_find_duplicates"
+          "description"
+          "Find repeated expressions and structural code clones across the workspace or within a file. Groups duplicate subtrees, filters redundant child occurrences, and recommends extraction into helper functions or local variables."
+          "inputSchema"
+          (dict
+            "type"
+            "object"
+            "properties"
+            (dict
+              "path"
+              (dict
+                "type"
+                "array"
+                "items"
+                (dict "type" "integer")
+                "description"
+                "Optional AST path to constrain the duplicate search to a specific file or subtree. If omitted, searches the entire workspace.")
+              "min_nodes"
+              (dict
+                "type"
+                "integer"
+                "description"
+                "Optional minimum AST node count threshold for subtrees (default: 4).")
+              "min_depth"
+              (dict
+                "type"
+                "integer"
+                "description"
+                "Optional minimum parenthetical nesting depth threshold for subtrees (default: 2).")
+              "exact"
+              (dict
+                "type"
+                "boolean"
+                "description"
+                "If true (default), matches exact identical code. If false, matches structural clones where variables/literals can vary."))))
+        (dict
+          "name"
           "commit_workspace"
           "description"
           "Persists all in-memory workspace modifications back to their respective files on disk."
@@ -1028,6 +1065,19 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                                 :min-complexity min-cc
                                 :min-depth min-depth)))
                  (structural-editing-mcp.analysis:format-complexity-report results)))
+              ((equal name "ast_find_duplicates")
+               (let* ((path (to-list (gethash "path" args)))
+                      (min-nodes (or (gethash "min_nodes" args) 4))
+                      (min-depth (or (gethash "min_depth" args) 2))
+                      (exact (let ((val (gethash "exact" args)))
+                               (if (null val) t val)))
+                      (results (structural-editing-mcp.analysis:find-duplicate-subtrees
+                                structural-editing-mcp.workspace:*workspace-tree*
+                                :path path
+                                :min-nodes min-nodes
+                                :min-depth min-depth
+                                :exact exact)))
+                 (structural-editing-mcp.analysis:format-duplicate-report results)))
               ((equal name "commit_workspace")
                (structural-editing-mcp.workspace:write-workspace)
                (format

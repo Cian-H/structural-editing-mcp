@@ -35,7 +35,18 @@
            :count-ast-nodes
            :analyze-form-complexity
            :analyze-complexity
-           :format-complexity-report)
+           :format-complexity-report
+           :duplicate-group
+           :make-duplicate-group
+           :duplicate-group-code-snippet
+           :duplicate-group-occurrence-count
+           :duplicate-group-paths
+           :duplicate-group-node-count
+           :duplicate-group-depth
+           :duplicate-group-recommendation
+           :canonicalize-subtree
+           :find-duplicate-subtrees
+           :format-duplicate-report)
   (:documentation "Static analysis, pattern matching, structural search, and linting."))
 
 (in-package :structural-editing-mcp.analysis)
@@ -789,4 +800,181 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
                 (dolist (r recs)
                   (format s "     - ~A~%" r)))
               (format s "~%")))))
+
+;;; --- Duplicate & Structural Clone Detection ---
+
+(defstruct (duplicate-group (:constructor make-duplicate-group))
+  code-snippet
+  occurrence-count
+  paths
+  node-count
+  depth
+  recommendation)
+
+(defun canonicalize-subtree (node &key (exact t))
+  "Produce a canonical string fingerprint of NODE for equality/clone matching."
+  (if exact
+      (let* ((raw (sexp-to-string node))
+             (cleaned (string-trim '(#\Space #\Newline #\Tab) raw)))
+        cleaned)
+      ;; Structural mode: preserve operators and structure, replace variables and literals with ?_
+      (labels ((anonymize (curr is-head)
+                 (match curr
+                   ((leaf path val)
+                    (declare (ignore path))
+                    (if is-head
+                        curr
+                        (list :path nil :leaf '?_)))
+                   ((node path tag children)
+                    (list* :path path tag
+                           (loop for c in children
+                                 for i from 0
+                                 collect (anonymize c (zerop i)))))
+                   (_ curr))))
+        (sexp-to-string (anonymize node t)))))
+
+(defun path-prefix-p (prefix path)
+  "Return T if PREFIX is a strict prefix of PATH."
+  (and (< (length prefix) (length path))
+       (every #'= prefix (subseq path 0 (length prefix)))))
+
+(defun same-top-level-form-p (paths)
+  "Return T if all PATHS share the same parent form (e.g. within the same function)."
+  (when (and paths (cdr paths))
+    (let ((first-parent (if (<= (length (first paths)) 3)
+                            (first paths)
+                            (subseq (first paths) 0 3))))
+      (every (lambda (p)
+               (let ((parent (if (<= (length p) 3) p (subseq p 0 3))))
+                 (equal first-parent parent)))
+             (rest paths)))))
+
+(defun find-duplicate-subtrees (tree &key path (min-nodes 4) (min-depth 2) (exact t))
+  "Find repeated AST subtrees in TREE (or under PATH).
+Groups matching subtrees, removes redundant subsumed sub-expressions, and generates refactoring recommendations."
+  (let* ((start-node (if (and path (not (null path)))
+                         (get-node-at-path tree path)
+                         tree))
+         (buckets (make-hash-table :test 'equal))
+         (node-metadata (make-hash-table :test 'equal)))
+    (when start-node
+      (labels ((harvest (curr curr-path)
+                 (let ((tag (get-node-tag curr))
+                       (children (get-node-children curr)))
+                   ;; Only inspect compound collections that are not workspace or dialect roots
+                   (when (and (member tag '(:paren :square :curly))
+                              children
+                              (not (member tag '(:workspace :common-lisp :clojure :scheme :emacs-lisp :fennel))))
+                     (let ((node-cnt (count-ast-nodes curr))
+                           (depth (compute-nesting-depth curr 0)))
+                       (when (and (>= node-cnt (or min-nodes 4))
+                                  (>= depth (or min-depth 2)))
+                         (let ((fingerprint (canonicalize-subtree curr :exact exact)))
+                           (push (cons curr-path curr) (gethash fingerprint buckets nil))
+                           (unless (gethash fingerprint node-metadata)
+                             (setf (gethash fingerprint node-metadata)
+                                   (list :node-count node-cnt :depth depth :sample curr)))))))
+                   ;; Recurse into children
+                   (loop for child in children
+                         for idx from 0
+                         for child-path = (or (get-node-path child) (append curr-path (list idx)))
+                         do (harvest child child-path)))))
+        (harvest start-node (or (get-node-path start-node) path '()))))
+
+    ;; Filter buckets with at least 2 occurrences
+    (let ((raw-candidates '()))
+      (maphash
+       (lambda (fingerprint entries)
+         (when (>= (length entries) 2)
+           (let* ((meta (gethash fingerprint node-metadata))
+                  (paths (mapcar #'car entries))
+                  (node-cnt (getf meta :node-count))
+                  (depth (getf meta :depth))
+                  (sample (getf meta :sample)))
+             (push (list :fingerprint fingerprint
+                         :paths (nreverse paths)
+                         :node-count node-cnt
+                         :depth depth
+                         :sample sample)
+                   raw-candidates))))
+       buckets)
+
+      ;; Subsumption filtering:
+      ;; If candidate B is contained within candidate A for all occurrences of B,
+      ;; and occurrence count of B equals occurrence count of A, B is subsumed by A.
+      (let ((filtered-candidates '()))
+        (dolist (cand raw-candidates)
+          (let* ((c-paths (getf cand :paths))
+                 (c-count (length c-paths))
+                 (subsumed-p
+                   (some (lambda (other)
+                           (unless (eq cand other)
+                             (let ((o-paths (getf other :paths))
+                                   (o-count (length (getf other :paths))))
+                               (and (= c-count o-count)
+                                    (> (getf other :node-count) (getf cand :node-count))
+                                    ;; Every path in c-paths has a prefix in o-paths
+                                    (every (lambda (cp)
+                                             (some (lambda (op) (path-prefix-p op cp)) o-paths))
+                                           c-paths)))))
+                         raw-candidates)))
+            (unless subsumed-p
+              (push cand filtered-candidates))))
+
+        ;; Convert to duplicate-group instances
+        (let ((groups
+                (mapcar
+                 (lambda (cand)
+                   (let* ((paths (getf cand :paths))
+                          (sample (getf cand :sample))
+                          (raw-str (sexp-to-string sample))
+                          (single-line (substitute #\Space #\Newline (string-trim '(#\Space #\Newline #\Tab) raw-str)))
+                          (snippet (if (> (length single-line) 80)
+                                       (format nil "~A..." (subseq single-line 0 77))
+                                       single-line))
+                          (node-cnt (getf cand :node-count))
+                          (depth (getf cand :depth))
+                          (recomm (if (same-top-level-form-p paths)
+                                      "Repeated expression within the same function — consider extracting into a local variable using 'ast_extract_variable'."
+                                      "Repeated code across multiple locations — consider extracting into a shared helper function using 'ast_extract_function'.")))
+                     (make-duplicate-group
+                      :code-snippet snippet
+                      :occurrence-count (length paths)
+                      :paths paths
+                      :node-count node-cnt
+                      :depth depth
+                      :recommendation recomm)))
+                 filtered-candidates)))
+          ;; Sort by total AST node savings: node-count * (occurrence-count - 1) descending
+          (sort groups
+                (lambda (a b)
+                  (let ((savings-a (* (duplicate-group-node-count a) (1- (duplicate-group-occurrence-count a))))
+                        (savings-b (* (duplicate-group-node-count b) (1- (duplicate-group-occurrence-count b)))))
+                    (if (= savings-a savings-b)
+                        (> (duplicate-group-occurrence-count a) (duplicate-group-occurrence-count b))
+                        (> savings-a savings-b))))))))))
+
+(defun format-duplicate-report (duplicate-groups)
+  "Format a list of DUPLICATE-GROUP instances into a readable diagnostic report."
+  (if (null duplicate-groups)
+      "No duplicate subtrees or structural clones detected."
+      (with-output-to-string (s)
+        (format s "Duplicate Subtrees Report (~A duplicate group~:P found):~%~%" (length duplicate-groups))
+        (loop for g in duplicate-groups
+              for i from 1
+              for snippet = (duplicate-group-code-snippet g)
+              for count = (duplicate-group-occurrence-count g)
+              for paths = (duplicate-group-paths g)
+              for node-cnt = (duplicate-group-node-count g)
+              for depth = (duplicate-group-depth g)
+              for rec = (duplicate-group-recommendation g)
+              do
+              (format s "~A. [~A occurrences | ~A nodes | depth ~A]~%   Code: ~A~%   Paths:~%"
+                      i count node-cnt depth snippet)
+              (dolist (p paths)
+                (format s "     - [~{~A~^, ~}]~%" p))
+              (when rec
+                (format s "   Recommendation: ~A~%" rec))
+              (format s "~%")))))
+
 

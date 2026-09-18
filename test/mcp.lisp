@@ -36,7 +36,7 @@
       (let* ((res (gethash "result" result-json))
              (tools (gethash "tools" res)))
         (ok (listp tools))
-        (ok (= (length tools) 12))
+        (ok (= (length tools) 13))
         (let ((names (mapcar (lambda (x) (gethash "name" x)) tools)))
           (ok (member "read_node" names :test #'equal))
           (ok (not (member "read_workspace" names :test #'equal)))
@@ -45,6 +45,7 @@
           (ok (member "ast_relocate" names :test #'equal))
           (ok (member "ast_lint" names :test #'equal))
           (ok (member "ast_complexity_metrics" names :test #'equal))
+          (ok (member "ast_find_duplicates" names :test #'equal))
           (ok (member "ast_extract_function" names :test #'equal))
           (ok (member "commit_workspace" names :test #'equal)))))))
 
@@ -271,4 +272,26 @@
                (content (first (gethash "content" res)))
                (text (gethash "text" content)))
           (ok (stringp text))
-          (ok (search "Structural Complexity Report" text))))))
+          (ok (search "Structural Complexity Report" text))))
+      ;; Test ast_find_duplicates
+      (let* ((dup-msg (structural-editing-mcp.mcp::dict
+                       "jsonrpc" "2.0"
+                       "id" 20
+                       "method" "tools/call"
+                       "params" (structural-editing-mcp.mcp::dict
+                                 "name" "ast_find_duplicates"
+                                 "arguments" (structural-editing-mcp.mcp::dict
+                                              "min_nodes" 2
+                                              "min_depth" 1))))
+             (*standard-output* (make-string-output-stream))
+             (raw-resp (progn
+                         (structural-editing-mcp.mcp:handle-message dup-msg)
+                         (get-output-stream-string *standard-output*)))
+             (parsed-resp (let ((yason:*parse-json-arrays-as-vectors* nil))
+                            (yason:parse raw-resp))))
+        (let* ((res (gethash "result" parsed-resp))
+               (content (first (gethash "content" res)))
+               (text (gethash "text" content)))
+          (ok (stringp text))
+          (ok (or (search "Duplicate Subtrees Report" text)
+                  (search "No duplicate subtrees or structural clones detected" text)))))))

@@ -212,3 +212,53 @@
         (ok (search "Cyclomatic Complexity" report))
         (ok (search "Recommendations:" report))))))
 
+(deftest test-duplicate-detection
+  (testing "canonicalize-subtree exact vs structural"
+    (let ((node1 (first (get-node-children (string-to-sexp "(+ (* x 2) 1)"))))
+          (node2 (first (get-node-children (string-to-sexp "(+ (* y 2) 1)")))))
+      (ok (string/= (canonicalize-subtree node1 :exact t)
+                    (canonicalize-subtree node2 :exact t)))
+      (ok (string= (canonicalize-subtree node1 :exact nil)
+                   (canonicalize-subtree node2 :exact nil)))))
+
+  (testing "find exact duplicates within a function"
+    (let* ((code "(defun calculate (a b)
+                    (let ((x (+ (* a 2) (* b 3)))
+                          (y (+ (* a 2) (* b 3))))
+                      (+ x y)))")
+           (ast (string-to-sexp code))
+           (dups (find-duplicate-subtrees ast :min-nodes 4 :min-depth 2)))
+      (ok (>= (length dups) 1))
+      (let ((g (first dups)))
+        (ok (= (duplicate-group-occurrence-count g) 2))
+        (ok (search "(+ (* a 2) (* b 3))" (duplicate-group-code-snippet g)))
+        ;; Intra-function recommendation should mention ast_extract_variable
+        (ok (search "ast_extract_variable" (duplicate-group-recommendation g))))))
+
+  (testing "find exact duplicates across functions"
+    (let* ((code "(defun fn-one (items)
+                    (process-batch (filter-active items)))
+                  (defun fn-two (items)
+                    (save (process-batch (filter-active items))))")
+           (ast (string-to-sexp code))
+           (dups (find-duplicate-subtrees ast :min-nodes 3 :min-depth 2)))
+      (ok (>= (length dups) 1))
+      (let ((g (first dups)))
+        (ok (= (duplicate-group-occurrence-count g) 2))
+        (ok (search "process-batch" (duplicate-group-code-snippet g)))
+        ;; Inter-function recommendation should mention ast_extract_function
+        (ok (search "ast_extract_function" (duplicate-group-recommendation g))))))
+
+  (testing "format duplicate report"
+    (let* ((code "(defun calculate (a b)
+                    (let ((x (+ (* a 2) (* b 3)))
+                          (y (+ (* a 2) (* b 3))))
+                      (+ x y)))")
+           (ast (string-to-sexp code))
+           (dups (find-duplicate-subtrees ast :min-nodes 4 :min-depth 2))
+           (report (format-duplicate-report dups)))
+      (ok (search "Duplicate Subtrees Report" report))
+      (ok (search "occurrences" report))
+      (ok (search "ast_extract_variable" report)))))
+
+
