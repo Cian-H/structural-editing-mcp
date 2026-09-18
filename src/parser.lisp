@@ -9,6 +9,7 @@
            :print-sexp
            :format-sexp
            :parse-atom-string
+           :format-atom
            :*current-dialect*)
   (:documentation "Lexer, parser, and pretty-printer serializer for s-expressions."))
 

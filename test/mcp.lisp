@@ -36,13 +36,14 @@
       (let* ((res (gethash "result" result-json))
              (tools (gethash "tools" res)))
         (ok (listp tools))
-        (ok (= (length tools) 10))
+        (ok (= (length tools) 11))
         (let ((names (mapcar (lambda (x) (gethash "name" x)) tools)))
           (ok (member "read_node" names :test #'equal))
           (ok (not (member "read_workspace" names :test #'equal)))
           (ok (member "ast_modify" names :test #'equal))
           (ok (member "ast_remove" names :test #'equal))
           (ok (member "ast_relocate" names :test #'equal))
+          (ok (member "ast_lint" names :test #'equal))
           (ok (member "ast_extract_function" names :test #'equal))
           (ok (member "commit_workspace" names :test #'equal)))))))
 
@@ -230,6 +231,23 @@
              (*standard-output* (make-string-output-stream)))
         (structural-editing-mcp.mcp:handle-message ext-msg)
         (let ((code (structural-editing-mcp.parser:sexp-to-string structural-editing-mcp.workspace:*workspace-tree*)))
-          (ok (search "defun extracted-helper" code))))))
-
-
+          (ok (search "defun extracted-helper" code))))
+      ;; Test ast_lint
+      (let* ((lint-msg (structural-editing-mcp.mcp::dict
+                        "jsonrpc" "2.0"
+                        "id" 18
+                        "method" "tools/call"
+                        "params" (structural-editing-mcp.mcp::dict
+                                  "name" "ast_lint"
+                                  "arguments" (structural-editing-mcp.mcp::dict))))
+             (*standard-output* (make-string-output-stream))
+             (raw-resp (progn
+                         (structural-editing-mcp.mcp:handle-message lint-msg)
+                         (get-output-stream-string *standard-output*)))
+             (parsed-resp (let ((yason:*parse-json-arrays-as-vectors* nil))
+                            (yason:parse raw-resp))))
+        (let* ((res (gethash "result" parsed-resp))
+               (content (first (gethash "content" res)))
+               (text (gethash "text" content)))
+          (ok (stringp text))
+          (ok (or (search "anti-pattern" text) (search "No anti-patterns" text)))))))

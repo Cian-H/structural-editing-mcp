@@ -6,6 +6,8 @@
         :structural-editing-mcp.tree
         :structural-editing-mcp.edit
         :structural-editing-mcp.parser
+        :structural-editing-mcp.analysis
+        :structural-editing-mcp.refactor
         :structural-editing-mcp.workspace
         :structural-editing-mcp.mcp)
   (:export)

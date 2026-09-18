@@ -1,92 +1,21 @@
 (defpackage :structural-editing-mcp.refactor
-    (:use
-        :cl
+  (:use :cl
         :structural-editing-mcp.tree
         :structural-editing-mcp.parser
         :structural-editing-mcp.edit
+        :structural-editing-mcp.analysis
         :alexandria)
-  (:export :replace-pattern :extract-variable :extract-function))
+  (:export :replace-pattern
+           :extract-variable
+           :extract-function
+           :match-pattern
+           :instantiate-pattern))
 
 (in-package :structural-editing-mcp.refactor)
 
 (declaim (optimize (speed 2) (safety 3)))
 
-;;; --- Pattern Matching ---
-
-
-(defun variable-node-p (node)
-  "Check if a leaf node is a variable (symbol starting with ?)."
-  (multiple-value-bind
-    (path tag val)
-    (parse-node node)
-    (declare (ignore path))
-    (and (eq tag :leaf)
-         (symbolp val)
-         (plusp (length (symbol-name val)))
-         (char= (char (symbol-name val) 0) #\?))))
-
-(defun match-pattern (pattern target bindings)
-  "Match TARGET node against PATTERN node. Return (values success new-bindings)."
-  (cond
-    ((variable-node-p pattern)
-     (let*
-        ((var-name (nth-value 2 (parse-node pattern)))
-         (existing (assoc var-name bindings)))
-        (if
-            existing
-            (if
-              (string= (sexp-to-string target) (sexp-to-string (cdr existing)))
-              (values t bindings)
-              (values nil bindings))
-            (values t (cons (cons var-name target) bindings)))))
-    ((and (eq (get-node-tag pattern) :leaf) (eq (get-node-tag target) :leaf))
-     (let
-        ((pval (nth-value 2 (parse-node pattern)))
-         (tval (nth-value 2 (parse-node target))))
-        (if (equal pval tval) (values t bindings) (values nil bindings))))
-    ((and
-           (member (get-node-tag pattern) ' (:paren :square :curly))
-           (eq (get-node-tag pattern) (get-node-tag target)))
-     (let
-        ((pchildren (get-node-children pattern)) (tchildren (get-node-children target)))
-        (if
-            (= (length pchildren) (length tchildren))
-            (loop
-                for
-                p
-                in
-                pchildren
-                for
-                t-child
-                in
-                tchildren
-                do
-                (multiple-value-bind
-              (success new-bindings)
-              (match-pattern p t-child bindings)
-              (if success (setf bindings new-bindings) (return (values nil bindings))))
-                finally
-                (return (values t bindings)))
-            (values nil bindings))))
-    (t (values nil bindings))))
-
-(defun instantiate-pattern (pattern bindings)
-  "Create a new AST node by substituting variables in PATTERN using BINDINGS."
-  (cond
-    ((variable-node-p pattern)
-     (let*
-        ((var-name (nth-value 2 (parse-node pattern)))
-         (bound (cdr (assoc var-name bindings))))
-        (if bound bound pattern)))
-    ((member (get-node-tag pattern) ' (:leaf :comment)) pattern)
-    (t
-       (let
-        ((children (get-node-children pattern)))
-        (list*
-               :path
-               (get-node-path pattern)
-               (get-node-tag pattern)
-               (mapcar (lambda (c) (instantiate-pattern c bindings)) children))))))
+;;; --- Pattern Replacement ---
 
 (defun replace-pattern (tree pattern-str replacement-str)
   "Recursively search TREE, replacing subtrees that match PATTERN-STR with REPLACEMENT-STR."

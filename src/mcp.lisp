@@ -1,12 +1,12 @@
 (defpackage :structural-editing-mcp.mcp
-    (:use
-        :cl
+  (:use :cl
         :alexandria
         :trivia
         :structural-editing-mcp.utils
         :structural-editing-mcp.tree
         :structural-editing-mcp.parser
         :structural-editing-mcp.edit
+        :structural-editing-mcp.analysis
         :structural-editing-mcp.workspace)
   (:export :start-server :handle-message))
 
@@ -351,28 +351,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 
 (defun perform-search (tree target-path query)
   "Search the AST under TARGET-PATH for leaf nodes matching QUERY."
-  (let
-    ((results ' ())
-     (lower-query (string-downcase query))
-     (start-node
-                  (if
-            target-path
-            (structural-editing-mcp.tree:get-node-at-path tree target-path)
-            tree)))
-    (labels
-      ((walk
-              (node)
-              (match
-            node
-            ((leaf path val)
-             (let*
-                ((str (structural-editing-mcp.parser::format-atom val))
-                 (lower-str (string-downcase str)))
-                (when (search lower-query lower-str) (push path results))))
-            ((node _ _ children) (dolist (child children) (walk child)))
-            (_ nil))))
-      (walk start-node)
-      (nreverse results))))
+  (structural-editing-mcp.analysis:search-ast tree query :path target-path))
 
 (defun perform-rename (tree target-path old-name new-name)
   "Recursively rename all leaf nodes matching OLD-NAME to NEW-NAME under TARGET-PATH."
@@ -714,6 +693,39 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
             (list "path" "function_name")))
         (dict
           "name"
+          "ast_lint"
+          "description"
+          "Run static analysis and structural linting to identify code smells, anti-patterns, and opportunities for refactoring. Returns a list of findings with AST paths, messages, severity, and suggested quick-fixes."
+          "inputSchema"
+          (dict
+            "type"
+            "object"
+            "properties"
+            (dict
+              "path"
+              (dict
+                "type"
+                "array"
+                "items"
+                (dict "type" "integer")
+                "description"
+                "Optional AST path to lint a specific node or file. If omitted, lints the entire workspace.")
+              "dialect"
+              (dict
+                "type"
+                "string"
+                "description"
+                "Optional Lisp dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel). Inferred if omitted.")
+              "rules"
+              (dict
+                "type"
+                "array"
+                "items"
+                (dict "type" "string")
+                "description"
+                "Optional list of rule IDs to filter by (e.g. ['if-progn-to-when', 'single-clause-cond'])."))))
+        (dict
+          "name"
           "commit_workspace"
           "description"
           "Persists all in-memory workspace modifications back to their respective files on disk."
@@ -953,6 +965,18 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                           "Successfully extracted node at ~A into function '~A'."
                           path
                           func-name)))
+              ((equal name "ast_lint")
+               (let* ((path (to-list (gethash "path" args)))
+                      (dialect-str (gethash "dialect" args))
+                      (dialect (when (and dialect-str (plusp (length dialect-str)))
+                                 (intern (string-upcase (string-left-trim ":" dialect-str)) :keyword)))
+                      (rules (to-list (gethash "rules" args)))
+                      (findings (structural-editing-mcp.analysis:lint-ast
+                                 structural-editing-mcp.workspace:*workspace-tree*
+                                 :path path
+                                 :dialect dialect
+                                 :rules rules)))
+                 (structural-editing-mcp.analysis:format-lint-findings findings)))
               ((equal name "commit_workspace")
                (structural-editing-mcp.workspace:write-workspace)
                (format
