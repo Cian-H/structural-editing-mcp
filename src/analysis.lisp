@@ -239,6 +239,20 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
                     (leaf-symbol-p (first children) "NOT"))))
     (second (get-node-children node))))
 
+(defun single-branch-if-p (node)
+  "Return T if NODE is a compound (if ...) form with no else branch or an explicit nil else branch."
+  (and (if-form-p node)
+       (let ((children (get-node-children node)))
+         (or (= (length children) 3)
+             (leaf-nil-p (fourth children))))))
+
+(defun two-branch-if-p (node)
+  "Return T if NODE is a compound (if ...) form with an explicit non-nil else branch."
+  (and (if-form-p node)
+       (let ((children (get-node-children node)))
+         (and (= (length children) 4)
+              (not (leaf-nil-p (fourth children)))))))
+
 (defun progn-form-body-nodes (node)
   "If NODE is a compound (progn <body...>) form, return (values T body-nodes); otherwise (values NIL NIL)."
   (if (and (compound-node-p node)
@@ -250,24 +264,22 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
 (defun check-if-progn-to-when (node path dialect)
   "Detect (if <cond> (progn <body...>)) or (if <cond> (progn <body...>) nil)."
   (declare (ignore dialect))
-  (let ((children (get-node-children node)))
-    (when (and (if-form-p node)
-               (or (= (length children) 3)
-                   (leaf-nil-p (fourth children))))
-      (let ((cond-node (second children))
-            (then-node (third children)))
-        (multiple-value-bind (is-progn body-nodes) (progn-form-body-nodes then-node)
-          (when is-progn
-            (let* ((body-str (if body-nodes
-                                 (format nil "~{~A~^ ~}" (mapcar #'sexp-to-string body-nodes))
-                                 "nil"))
-                   (replacement (format nil "(when ~A ~A)" (sexp-to-string cond-node) body-str)))
-              (make-lint-finding
-               :rule :if-progn-to-when
-               :path path
-               :message "Prefer '(when ...)' over '(if ... (progn ...))' when there is no else branch."
-               :severity :style
-               :suggested-fix replacement))))))))
+  (when (single-branch-if-p node)
+    (let* ((children (get-node-children node))
+           (cond-node (second children))
+           (then-node (third children)))
+      (multiple-value-bind (is-progn body-nodes) (progn-form-body-nodes then-node)
+        (when is-progn
+          (let* ((body-str (if body-nodes
+                               (format nil "~{~A~^ ~}" (mapcar #'sexp-to-string body-nodes))
+                               "nil"))
+                 (replacement (format nil "(when ~A ~A)" (sexp-to-string cond-node) body-str)))
+            (make-lint-finding
+             :rule :if-progn-to-when
+             :path path
+             :message "Prefer '(when ...)' over '(if ... (progn ...))' when there is no else branch."
+             :severity :style
+             :suggested-fix replacement)))))))
 
 (defun check-if-nil-to-when (node path dialect)
   "Detect (if <cond> <then> nil) where <then> is not progn, not boolean true, and <cond> is not (not ...)."
@@ -293,44 +305,40 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
 (defun check-if-not-to-unless (node path dialect)
   "Detect (if (not <cond>) <then> nil) or (if (not <cond>) <then>)."
   (declare (ignore dialect))
-  (let ((children (get-node-children node)))
-    (when (and (if-form-p node)
-               (or (= (length children) 3)
-                   (leaf-nil-p (fourth children))))
-      (let ((inner-cond (not-form-cond (second children)))
-            (then-node (third children)))
-        (when inner-cond
-          (let ((replacement (format nil "(unless ~A ~A)"
-                                     (sexp-to-string inner-cond)
-                                     (sexp-to-string then-node))))
-            (make-lint-finding
-             :rule :if-not-to-unless
-             :path path
-             :message "Prefer '(unless <cond> <then>)' over '(if (not <cond>) <then>)'."
-             :severity :style
-             :suggested-fix replacement)))))))
+  (when (single-branch-if-p node)
+    (let* ((children (get-node-children node))
+           (inner-cond (not-form-cond (second children)))
+           (then-node (third children)))
+      (when inner-cond
+        (let ((replacement (format nil "(unless ~A ~A)"
+                                   (sexp-to-string inner-cond)
+                                   (sexp-to-string then-node))))
+          (make-lint-finding
+           :rule :if-not-to-unless
+           :path path
+           :message "Prefer '(unless <cond> <then>)' over '(if (not <cond>) <then>)'."
+           :severity :style
+           :suggested-fix replacement))))))
 
 (defun check-invert-if-not (node path dialect)
   "Detect (if (not <cond>) <then> <else>) where <else> is not nil."
   (declare (ignore dialect))
-  (let ((children (get-node-children node)))
-    (when (and (if-form-p node)
-               (= (length children) 4)
-               (not (leaf-nil-p (fourth children))))
-      (let ((inner-cond (not-form-cond (second children)))
-            (then-node (third children))
-            (else-node (fourth children)))
-        (when inner-cond
-          (let ((replacement (format nil "(if ~A ~A ~A)"
-                                     (sexp-to-string inner-cond)
-                                     (sexp-to-string else-node)
-                                     (sexp-to-string then-node))))
-            (make-lint-finding
-             :rule :invert-if-not
-             :path path
-             :message "Invert negated condition: replace '(if (not <cond>) <then> <else>)' with '(if <cond> <else> <then>)'."
-             :severity :style
-             :suggested-fix replacement)))))))
+  (when (two-branch-if-p node)
+    (let* ((children (get-node-children node))
+           (inner-cond (not-form-cond (second children)))
+           (then-node (third children))
+           (else-node (fourth children)))
+      (when inner-cond
+        (let ((replacement (format nil "(if ~A ~A ~A)"
+                                   (sexp-to-string inner-cond)
+                                   (sexp-to-string else-node)
+                                   (sexp-to-string then-node))))
+          (make-lint-finding
+           :rule :invert-if-not
+           :path path
+           :message "Invert negated condition: replace '(if (not <cond>) <then> <else>)' with '(if <cond> <else> <then>)'."
+           :severity :style
+           :suggested-fix replacement))))))
 
 (defun check-single-clause-cond (node path dialect)
   "Detect (cond (<test> <body...>)) with a single clause."
@@ -581,26 +589,21 @@ return (values is-def-p name-str kind-keyword)."
         (multiple-value-bind (path tag val) (parse-node head)
           (declare (ignore path tag))
           (when (symbolp val)
-            (let ((head-name (string-upcase (symbol-name val))))
+            (let* ((head-name (string-upcase (symbol-name val)))
+                   (name-node (second children))
+                   (kind (cond
+                           ((member head-name '("DEFUN" "DEFN" "DEFN-") :test #'string=) :function)
+                           ((member head-name '("DEFMACRO" "DEFSYNTAX") :test #'string=) :macro)
+                           ((string= head-name "DEFMETHOD") :method)
+                           ((string= head-name "DEFGENERIC") :generic))))
               (cond
-                ((member head-name '("DEFUN" "DEFN" "DEFN-") :test #'string=)
-                 (let ((name-node (second children)))
-                   (values t (format-atom (nth-value 2 (parse-node name-node))) :function)))
-                ((member head-name '("DEFMACRO" "DEFSYNTAX") :test #'string=)
-                 (let ((name-node (second children)))
-                   (values t (format-atom (nth-value 2 (parse-node name-node))) :macro)))
-                ((member head-name '("DEFMETHOD") :test #'string=)
-                 (let ((name-node (second children)))
-                   (values t (format-atom (nth-value 2 (parse-node name-node))) :method)))
-                ((member head-name '("DEFGENERIC") :test #'string=)
-                 (let ((name-node (second children)))
-                   (values t (format-atom (nth-value 2 (parse-node name-node))) :generic)))
+                (kind
+                 (values t (format-atom (nth-value 2 (parse-node name-node))) kind))
                 ((string= head-name "DEFINE")
-                 (let ((name-child (second children)))
-                   (if (compound-node-p name-child)
-                       (let ((fn-head (first (get-node-children name-child))))
-                         (values t (format-atom (nth-value 2 (parse-node fn-head))) :function))
-                       (values t (format-atom (nth-value 2 (parse-node name-child))) :definition))))
+                 (if (compound-node-p name-node)
+                     (let ((fn-head (first (get-node-children name-node))))
+                       (values t (format-atom (nth-value 2 (parse-node fn-head))) :function))
+                     (values t (format-atom (nth-value 2 (parse-node name-node))) :definition)))
                 (t (values nil nil nil))))))))))
 
 (defun compute-branch-complexity (node &optional (dialect :common-lisp))
@@ -1525,6 +1528,11 @@ Returns a list of BINDING-FINDING instances."
          (t t)))
      findings)))
 
+(defun format-finding-recommendation (stream f)
+  "Format recommendation for binding finding F to STREAM if present."
+  (when (binding-finding-recommendation f)
+    (format stream "     Recommendation: ~A~%" (binding-finding-recommendation f))))
+
 (defun format-unused-bindings (stream unused)
   "Format list of unused variable findings to STREAM."
   (when unused
@@ -1536,8 +1544,7 @@ Returns a list of BINDING-FINDING instances."
                      i (binding-finding-variable-name f)
                      (binding-finding-scope-kind f)
                      (binding-finding-path f))
-             (when (binding-finding-recommendation f)
-               (format stream "     Recommendation: ~A~%" (binding-finding-recommendation f))))
+             (format-finding-recommendation stream f))
     (format stream "~%")))
 
 (defun format-shadowed-bindings (stream shadowed)
@@ -1552,8 +1559,7 @@ Returns a list of BINDING-FINDING instances."
                      (binding-finding-scope-kind f)
                      (binding-finding-path f)
                      (binding-finding-outer-path f))
-             (when (binding-finding-recommendation f)
-               (format stream "     Recommendation: ~A~%" (binding-finding-recommendation f))))
+             (format-finding-recommendation stream f))
     (format stream "~%")))
 
 (defun format-binding-report (findings)
