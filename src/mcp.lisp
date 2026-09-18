@@ -149,99 +149,76 @@
 ;;; AST Mutation Dispatchers
 
 
+(defun parse-delimiter-type (wrapper-str)
+  "Map WRAPPER-STR to :paren, :square, :curly, or NIL if it represents a custom wrapper form."
+  (let* ((clean-str (string-trim '(#\Space #\Tab #\Newline #\:) (or wrapper-str "")))
+         (lower (string-downcase clean-str)))
+    (cond
+      ((or (string= lower "paren") (string= lower "()") (string= lower "")) :paren)
+      ((or (string= lower "square") (string= lower "bracket") (string= lower "[]")) :square)
+      ((or (string= lower "curly") (string= lower "brace") (string= lower "{}")) :curly)
+      (t nil))))
+
 (defun perform-wrap (tree path wrapper-str &optional end-index index)
   "Wrap the node at PATH, or range of nodes from START-INDEX to END-INDEX under PARENT-PATH."
-  (if (null end-index)
-      ;; Single node wrap
-      (let* ((clean-str (string-trim '(#\Space #\Tab #\Newline #\:) (or wrapper-str "")))
-             (lower (string-downcase clean-str)))
-        (cond
-          ((or (string= lower "paren") (string= lower "()") (string= lower ""))
-           (structural-editing-mcp.edit:wrap-node tree path :paren))
-          ((or (string= lower "square") (string= lower "bracket") (string= lower "[]"))
-           (structural-editing-mcp.edit:wrap-node tree path :square))
-          ((or (string= lower "curly") (string= lower "brace") (string= lower "{}"))
-           (structural-editing-mcp.edit:wrap-node tree path :curly))
-          (t
-           (let* ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
-                  (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
-             (if (and expr (structural-editing-mcp.tree:get-node-children expr))
-                 (let ((target-node (structural-editing-mcp.tree:get-node-at-path tree path)))
-                   (structural-editing-mcp.tree:update-node-at-path
-                    tree
-                    path
-                    (lambda (node)
-                      (declare (ignore node))
-                      (match expr ((node p tag children) `(:path ,p ,tag ,@children ,target-node))))))
-                 (structural-editing-mcp.edit:wrap-node tree path :paren))))))
-      ;; Range wrap
-      (let* ((parent-path (if index path (if (null (cdr path)) path (butlast path))))
-             (start-idx (if index index (if (null (cdr path)) 0 (lastcar path))))
-             (clean-str (string-trim '(#\Space #\Tab #\Newline #\:) (or wrapper-str "")))
-             (lower (string-downcase clean-str)))
-        (cond
-          ((or (string= lower "paren") (string= lower "()") (string= lower ""))
-           (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :paren))
-          ((or (string= lower "square") (string= lower "bracket") (string= lower "[]"))
-           (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :square))
-          ((or (string= lower "curly") (string= lower "brace") (string= lower "{}"))
-           (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :curly))
-          (t
-           (let* ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
-                  (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
-             (if (and expr (structural-editing-mcp.tree:get-node-children expr))
-                 (structural-editing-mcp.tree:update-node-at-path
-                  tree
-                  parent-path
-                  (lambda (parent)
-                    (match parent
-                      ((node p ptag children)
-                       (let ((before (subseq children 0 start-idx))
-                             (slice (subseq children start-idx (1+ end-index)))
-                             (after (subseq children (1+ end-index))))
-                         (match expr
-                           ((node _ tag expr-children)
-                            `(:path ,p ,ptag ,@before (:path ,p ,tag ,@expr-children ,@slice) ,@after)))))
-                      (_ parent))))
-                 (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :paren))))))))
+  (let ((delim (parse-delimiter-type wrapper-str)))
+    (if (null end-index)
+        ;; Single node wrap
+        (if delim
+            (structural-editing-mcp.edit:wrap-node tree path delim)
+            (let* ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
+                   (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
+              (if (and expr (structural-editing-mcp.tree:get-node-children expr))
+                  (let ((target-node (structural-editing-mcp.tree:get-node-at-path tree path)))
+                    (structural-editing-mcp.tree:update-node-at-path
+                     tree
+                     path
+                     (lambda (node)
+                       (declare (ignore node))
+                       (match expr ((node p tag children) `(:path ,p ,tag ,@children ,target-node))))))
+                  (structural-editing-mcp.edit:wrap-node tree path :paren))))
+        ;; Range wrap
+        (let* ((parent-path (if index path (if (null (cdr path)) path (butlast path))))
+               (start-idx (if index index (if (null (cdr path)) 0 (lastcar path)))))
+          (if delim
+              (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index delim)
+              (let* ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
+                     (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
+                (if (and expr (structural-editing-mcp.tree:get-node-children expr))
+                    (structural-editing-mcp.tree:update-node-at-path
+                     tree
+                     parent-path
+                     (lambda (parent)
+                       (match parent
+                         ((node p ptag children)
+                          (let ((before (subseq children 0 start-idx))
+                                (slice (subseq children start-idx (1+ end-index)))
+                                (after (subseq children (1+ end-index))))
+                            (match expr
+                              ((node _ tag expr-children)
+                               `(:path ,p ,ptag ,@before (:path ,p ,tag ,@expr-children ,@slice) ,@after)))))
+                         (_ parent))))
+                    (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :paren))))))))
 
+(defun resolve-parent-and-index (tree target-path &optional index)
+  "Resolve target parent path and index for move or copy."
+  (if index
+      (values target-path index)
+      (if (null (cdr target-path))
+          (values target-path
+                  (length (structural-editing-mcp.tree:get-node-children
+                           (structural-editing-mcp.tree:get-node-at-path tree target-path))))
+          (values (butlast target-path) (lastcar target-path)))))
 
 (defun perform-insert (tree path new-node-str &optional index)
   "Insert NEW-NODE-STR into TREE. If INDEX is provided, PATH is the parent.
 Otherwise, PATH specifies the target location (parent is (butlast path), index is (lastcar path))."
-  (let*
-    ((has-explicit-index (not (null index)))
-     (parent-path
-                   (if has-explicit-index path (if (null (cdr path)) path (butlast path))))
-     (target-idx
-                  (if
-            has-explicit-index
-            index
-            (if
-              (null (cdr path))
-              (length
-                    (structural-editing-mcp.tree:get-node-children
-                (structural-editing-mcp.tree:get-node-at-path tree path)))
-              (lastcar path)))))
+  (multiple-value-bind (parent-path target-idx) (resolve-parent-and-index tree path index)
     (structural-editing-mcp.edit:insert-expression
       tree
       parent-path
       target-idx
       new-node-str)))
-
-(defun resolve-parent-and-index (tree target-path &optional index)
-  "Resolve target parent path and index for move or copy."
-  (if
-      index
-      (values target-path index)
-      (if
-        (null (cdr target-path))
-        (values
-              target-path
-              (length
-                (structural-editing-mcp.tree:get-node-children
-            (structural-editing-mcp.tree:get-node-at-path tree target-path))))
-        (values (butlast target-path) (lastcar target-path)))))
 
 (defun format-mutation-result (message target-path tree)
   (let*
