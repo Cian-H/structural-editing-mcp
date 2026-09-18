@@ -90,35 +90,47 @@
          (plusp (length (symbol-name val)))
          (char= (char (symbol-name val) 0) #\?))))
 
+(defun match-variable-pattern (pattern target bindings)
+  "Match TARGET against pattern variable PATTERN."
+  (let* ((var-name (nth-value 2 (parse-node pattern)))
+         (existing (assoc var-name bindings)))
+    (if existing
+        (if (string= (sexp-to-string target) (sexp-to-string (cdr existing)))
+            (values t bindings)
+            (values nil bindings))
+        (values t (cons (cons var-name target) bindings)))))
+
+(defun match-leaf-pattern (pattern target bindings)
+  "Match leaf TARGET against leaf PATTERN."
+  (let ((pval (nth-value 2 (parse-node pattern)))
+        (tval (nth-value 2 (parse-node target))))
+    (if (equal pval tval)
+        (values t bindings)
+        (values nil bindings))))
+
+(defun match-children-patterns (pchildren tchildren bindings)
+  "Match sequences of pattern children and target children."
+  (if (= (length pchildren) (length tchildren))
+      (loop for p in pchildren
+            for t-child in tchildren
+            do (multiple-value-bind (success new-bindings)
+                   (match-pattern p t-child bindings)
+                 (if success
+                     (setf bindings new-bindings)
+                     (return (values nil bindings))))
+            finally (return (values t bindings)))
+      (values nil bindings)))
+
 (defun match-pattern (pattern target bindings)
   "Match TARGET node against PATTERN node. Return (values success new-bindings)."
   (cond
     ((variable-node-p pattern)
-     (let* ((var-name (nth-value 2 (parse-node pattern)))
-            (existing (assoc var-name bindings)))
-       (if existing
-           (if (string= (sexp-to-string target) (sexp-to-string (cdr existing)))
-               (values t bindings)
-               (values nil bindings))
-           (values t (cons (cons var-name target) bindings)))))
+     (match-variable-pattern pattern target bindings))
     ((and (eq (get-node-tag pattern) :leaf) (eq (get-node-tag target) :leaf))
-     (let ((pval (nth-value 2 (parse-node pattern)))
-           (tval (nth-value 2 (parse-node target))))
-       (if (equal pval tval) (values t bindings) (values nil bindings))))
+     (match-leaf-pattern pattern target bindings))
     ((and (member (get-node-tag pattern) '(:paren :square :curly))
           (eq (get-node-tag pattern) (get-node-tag target)))
-     (let ((pchildren (get-node-children pattern))
-           (tchildren (get-node-children target)))
-       (if (= (length pchildren) (length tchildren))
-           (loop for p in pchildren
-                 for t-child in tchildren
-                 do (multiple-value-bind (success new-bindings)
-                        (match-pattern p t-child bindings)
-                      (if success
-                          (setf bindings new-bindings)
-                          (return (values nil bindings))))
-                 finally (return (values t bindings)))
-           (values nil bindings))))
+     (match-children-patterns (get-node-children pattern) (get-node-children target) bindings))
     (t (values nil bindings))))
 
 (defun instantiate-pattern (pattern bindings)
@@ -593,32 +605,41 @@ Returns a list of LINT-FINDING instances."
   form-count
   recommendations)
 
+(defun scheme-define-info (name-node)
+  "Extract (values name-str kind) for a Scheme/Lisp 'define' form given its NAME-NODE."
+  (if (compound-node-p name-node)
+      (let ((fn-head (first (get-node-children name-node))))
+        (values (format-atom (nth-value 2 (parse-node fn-head))) :function))
+      (values (format-atom (nth-value 2 (parse-node name-node))) :definition)))
+
+(defun standard-definition-kind (head-name)
+  "Map HEAD-NAME to :function, :macro, :method, or :generic."
+  (cond
+    ((member head-name '("DEFUN" "DEFN" "DEFN-") :test #'string=) :function)
+    ((member head-name '("DEFMACRO" "DEFSYNTAX") :test #'string=) :macro)
+    ((string= head-name "DEFMETHOD") :method)
+    ((string= head-name "DEFGENERIC") :generic)
+    (t nil)))
+
 (defun form-definition-info (node)
   "If NODE is a definition (defun, defmacro, defmethod, defgeneric, defn, define),
 return (values is-def-p name-str kind-keyword)."
   (let ((children (get-node-children node)))
     (when (and (compound-node-p node)
                (>= (length children) 2))
-      (let ((head (first children)))
-        (multiple-value-bind (path tag val) (parse-node head)
-          (declare (ignore path tag))
-          (when (symbolp val)
-            (let* ((head-name (string-upcase (symbol-name val)))
-                   (name-node (second children))
-                   (kind (cond
-                           ((member head-name '("DEFUN" "DEFN" "DEFN-") :test #'string=) :function)
-                           ((member head-name '("DEFMACRO" "DEFSYNTAX") :test #'string=) :macro)
-                           ((string= head-name "DEFMETHOD") :method)
-                           ((string= head-name "DEFGENERIC") :generic))))
-              (cond
-                (kind
-                 (values t (format-atom (nth-value 2 (parse-node name-node))) kind))
-                ((string= head-name "DEFINE")
-                 (if (compound-node-p name-node)
-                     (let ((fn-head (first (get-node-children name-node))))
-                       (values t (format-atom (nth-value 2 (parse-node fn-head))) :function))
-                     (values t (format-atom (nth-value 2 (parse-node name-node))) :definition)))
-                (t (values nil nil nil))))))))))
+      (multiple-value-bind (path tag val) (parse-node (first children))
+        (declare (ignore path tag))
+        (when (symbolp val)
+          (let* ((head-name (string-upcase (symbol-name val)))
+                 (name-node (second children))
+                 (kind (standard-definition-kind head-name)))
+            (cond
+              (kind
+               (values t (format-atom (nth-value 2 (parse-node name-node))) kind))
+              ((string= head-name "DEFINE")
+               (multiple-value-bind (name def-kind) (scheme-define-info name-node)
+                 (values t name def-kind)))
+              (t (values nil nil nil)))))))))
 
 (defun compute-branch-complexity (node &optional (dialect :common-lisp))
   "Compute McCabe cyclomatic complexity of NODE.
