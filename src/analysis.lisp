@@ -749,9 +749,8 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
   (let* ((start-node (if (and path (not (null path)))
                          (get-node-at-path tree path)
                          tree))
-         (forms-with-paths (if start-node
-                               (collect-top-level-forms start-node path)
-                               nil))
+         (forms-with-paths (when start-node
+                               (collect-top-level-forms start-node path)))
          (results '()))
     (dolist (pair forms-with-paths)
       (let* ((form-node (car pair))
