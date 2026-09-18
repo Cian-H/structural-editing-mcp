@@ -641,56 +641,61 @@ return (values is-def-p name-str kind-keyword)."
                  (values t name def-kind)))
               (t (values nil nil nil)))))))))
 
+(defun count-cond-branch-clauses (clauses dialect)
+  "Count non-default test clauses in COND form."
+  (loop for clause in clauses
+        for c-children = (get-node-children clause)
+        when (and (compound-node-p clause) c-children)
+          count (not (default-cond-clause-p (first c-children) dialect))))
+
+(defun count-case-branch-clauses (clauses dialect)
+  "Count non-default selector clauses in CASE forms."
+  (loop for clause in clauses
+        for c-children = (get-node-children clause)
+        when (and (compound-node-p clause) c-children)
+          count (not (or (leaf-true-p (first c-children) dialect)
+                         (leaf-symbol-p (first c-children) "OTHERWISE")))))
+
+(defun branch-form-complexity-increment (name children dialect)
+  "Calculate McCabe complexity increment contributed by form NAME."
+  (cond
+    ((member name '("IF" "WHEN" "UNLESS" "WHEN-NOT" "IF-NOT" "WHEN-LET" "IF-LET" "WHEN-FIRST")
+             :test #'string=)
+     1)
+    ((string= name "COND")
+     (count-cond-branch-clauses (rest children) dialect))
+    ((member name '("CASE" "CCASE" "ECASE" "TYPECASE" "CTYPECASE" "ETYPECASE" "CONDP")
+             :test #'string=)
+     (count-case-branch-clauses (nthcdr 2 children) dialect))
+    ((member name '("AND" "OR") :test #'string=)
+     (if (> (length children) 2) (- (length children) 2) 0))
+    ((member name '("LOOP" "DOLIST" "DOTIMES" "DO" "DO*" "DOSEQ" "RECUR")
+             :test #'string=)
+     1)
+    ((member name '("HANDLER-CASE" "RESTART-CASE") :test #'string=)
+     (count-if #'compound-node-p (nthcdr 2 children)))
+    (t 0)))
+
+(defun node-operator-symbol-name (node)
+  "If NODE is a compound form with a symbol head, return its uppercase symbol-name."
+  (when (compound-node-p node)
+    (let ((children (get-node-children node)))
+      (when children
+        (multiple-value-bind (p t-val val) (parse-node (first children))
+          (declare (ignore p t-val))
+          (when (symbolp val)
+            (string-upcase (symbol-name val))))))))
+
 (defun compute-branch-complexity (node &optional (dialect :common-lisp))
   "Compute McCabe cyclomatic complexity of NODE.
 Base complexity is 1, with +1 for each conditional branch, short-circuit point, loop, or handler."
   (let ((complexity 1))
     (labels ((walk (curr)
-               (let ((children (get-node-children curr)))
-                 (when (and (compound-node-p curr)
-                            children)
-                   (let ((head (first children)))
-                     (multiple-value-bind (p t-val val) (parse-node head)
-                       (declare (ignore p t-val))
-                       (when (symbolp val)
-                         (let ((name (string-upcase (symbol-name val))))
-                           (cond
-                             ((member name '("IF" "WHEN" "UNLESS" "WHEN-NOT" "IF-NOT"
-                                             "WHEN-LET" "IF-LET" "WHEN-FIRST")
-                                      :test #'string=)
-                              (incf complexity))
-                             ((string= name "COND")
-                              (dolist (clause (rest children))
-                                (let ((c-children (get-node-children clause)))
-                                  (when (and (compound-node-p clause)
-                                             c-children)
-                                    (let ((test (first c-children)))
-                                      (unless (or (leaf-true-p test dialect)
-                                                  (leaf-symbol-p test "OTHERWISE")
-                                                  (leaf-symbol-p test ":ELSE"))
-                                        (incf complexity)))))))
-                             ((member name '("CASE" "CCASE" "ECASE" "TYPECASE" "CTYPECASE"
-                                             "ETYPECASE" "CONDP")
-                                      :test #'string=)
-                              (dolist (clause (nthcdr 2 children))
-                                (let ((c-children (get-node-children clause)))
-                                  (when (and (compound-node-p clause)
-                                             c-children)
-                                    (let ((selector (first c-children)))
-                                      (unless (or (leaf-true-p selector dialect)
-                                                  (leaf-symbol-p selector "OTHERWISE"))
-                                        (incf complexity)))))))
-                             ((member name '("AND" "OR") :test #'string=)
-                              (when (> (length children) 2)
-                                (incf complexity (- (length children) 2))))
-                             ((member name '("LOOP" "DOLIST" "DOTIMES" "DO" "DO*" "DOSEQ" "RECUR")
-                                      :test #'string=)
-                              (incf complexity))
-                             ((member name '("HANDLER-CASE" "RESTART-CASE") :test #'string=)
-                              (dolist (clause (nthcdr 2 children))
-                                (when (compound-node-p clause)
-                                  (incf complexity))))))))))
-                 (dolist (c children)
+               (let ((op (node-operator-symbol-name curr)))
+                 (when op
+                   (incf complexity
+                         (branch-form-complexity-increment op (get-node-children curr) dialect)))
+                 (dolist (c (get-node-children curr))
                    (walk c)))))
       (walk node)
       complexity)))
