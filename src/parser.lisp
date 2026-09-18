@@ -12,7 +12,8 @@
            :format-atom
            :*current-dialect*
            :*supported-dialects*
-           :supported-dialect-p)
+           :supported-dialect-p
+           :peek-char-ahead)
   (:documentation "Lexer, parser, and pretty-printer serializer for s-expressions."))
 
 (in-package :structural-editing-mcp.parser)
@@ -30,7 +31,7 @@
 
 (declaim (optimize (speed 2) (safety 3)))
 
-(declaim (inline whitespace-p delimiter-p))
+(declaim (inline whitespace-p delimiter-p peek-char-ahead))
 
 (defun whitespace-p (char &optional (dialect *current-dialect*))
   "Return T if CHAR is whitespace (space, tab, newline, return, and comma in Clojure)."
@@ -53,6 +54,14 @@
     ((char= char (code-char 59)) t)
     ((char= char (code-char 34)) t)
     (t nil)))
+
+(defun peek-char-ahead (string index len &optional (offset 1))
+  "Return character at (+ index offset) in STRING if within bounds [0, len), otherwise NIL."
+  (declare (type string string)
+           (type fixnum index len offset))
+  (let ((target (+ index offset)))
+    (when (< target len)
+      (char string target))))
 
 (defun read-string-literal (string index len)
   "Read an escaped string literal starting after the opening quote."
@@ -94,7 +103,7 @@
          (when (and val (= (the fixnum parsed-end) end))
            val)))
       ;; Character literal (#\...)
-      ((and (>= len 2) (char= (char string start) (code-char 35)) (char= (char string (1+ start)) #\\))
+      ((and (char= (char string start) (code-char 35)) (eql (peek-char-ahead string start end) #\\))
        (let* ((*read-eval* nil)
               (tok (subseq string start end))
               (parsed (ignore-errors (read-from-string tok))))
@@ -138,20 +147,18 @@
                   (when (and (< index len) (char= (char string index) #\Newline))
                     (incf index))
                   (push (list :comment (subseq string start index)) tokens)))
-               ((and (char= ch (code-char 35)) (< (1+ index) len) (char= (char string (1+ index)) (code-char 124)))
+               ((and (char= ch (code-char 35)) (eql (peek-char-ahead string index len) (code-char 124)))
                 (let ((start index)
                       (depth 1))
                   (incf index 2)
                   (loop while (and (< index len) (> depth 0))
                         do (cond
                              ((and (char= (char string index) (code-char 35))
-                                   (< (1+ index) len)
-                                   (char= (char string (1+ index)) (code-char 124)))
+                                   (eql (peek-char-ahead string index len) (code-char 124)))
                               (incf depth)
                               (incf index 2))
                              ((and (char= (char string index) (code-char 124))
-                                   (< (1+ index) len)
-                                   (char= (char string (1+ index)) (code-char 35)))
+                                   (eql (peek-char-ahead string index len) (code-char 35)))
                               (decf depth)
                               (incf index 2))
                              (t
@@ -161,7 +168,7 @@
                            :token (subseq string start len)
                            :message "Unterminated multiline block comment #|...|#"))
                   (push (list :comment (subseq string start index)) tokens)))
-               ((and (char= ch (code-char 35)) (< (1+ index) len) (char= (char string (1+ index)) #\\))
+               ((and (char= ch (code-char 35)) (eql (peek-char-ahead string index len) #\\))
                 (let ((start index))
                   (incf index 2)
                   (if (< index len)
@@ -174,7 +181,7 @@
                                              (not (or (whitespace-p c dialect) (delimiter-p c)))))
                                  do (incf index))))
                   (push (parse-token string start index) tokens)))
-               ((and (char= ch (code-char 35)) (< (1+ index) len) (char= (char string (1+ index)) (code-char 123)))
+               ((and (char= ch (code-char 35)) (eql (peek-char-ahead string index len) (code-char 123)))
                 (push '(:delim . :set-open) tokens)
                 (incf index 2))
                ((char= ch (code-char 40)) (push '(:delim . :paren-open) tokens) (incf index))
