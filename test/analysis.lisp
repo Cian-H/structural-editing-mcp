@@ -332,5 +332,43 @@
       (ok (search "Unused Variables" report))
       (ok (search "Shadowed Variables" report)))))
 
+(deftest test-suggest-refactorings
+  (let* ((code "(defun complex-and-redundant (a b c)
+                  (let ((temp 10)
+                        (val (+ (* a 2) (* b 3)))
+                        (val2 (+ (* a 2) (* b 3))))
+                    (if (not a) (progn (do-a)) (do-b))))")
+         (ast (string-to-sexp code)))
+    (testing "aggregates multi-engine findings"
+      (let ((suggestions (suggest-refactorings ast :min-priority :low)))
+        (ok (> (length suggestions) 0))
+        (let ((categories (mapcar #'refactoring-suggestion-category suggestions)))
+          (ok (member :lint categories))
+          (ok (member :duplicate categories))
+          (ok (member :binding categories)))))
+
+    (testing "filtering by category"
+      (let ((lint-only (suggest-refactorings ast :categories '("lint")))
+            (dup-only (suggest-refactorings ast :categories '("duplicate"))))
+        (ok (> (length lint-only) 0))
+        (ok (every (lambda (s) (eq (refactoring-suggestion-category s) :lint)) lint-only))
+        (ok (> (length dup-only) 0))
+        (ok (every (lambda (s) (eq (refactoring-suggestion-category s) :duplicate)) dup-only))))
+
+    (testing "filtering by min-priority"
+      (let* ((all (suggest-refactorings ast :min-priority :low))
+             (high-only (suggest-refactorings ast :min-priority :high)))
+        (ok (>= (length all) (length high-only)))
+        (ok (every (lambda (s) (eq (refactoring-suggestion-priority s) :high)) high-only))))
+
+    (testing "format refactoring plan"
+      (let* ((suggestions (suggest-refactorings ast))
+             (report (format-refactoring-suggestions suggestions)))
+        (ok (search "Structural Refactoring Plan" report))
+        (ok (search "Summary by Priority" report))
+        (ok (search "Summary by Category" report))
+        (ok (search "Prioritized Action Items" report))))))
+
+
 
 

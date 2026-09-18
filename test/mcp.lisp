@@ -36,7 +36,7 @@
       (let* ((res (gethash "result" result-json))
              (tools (gethash "tools" res)))
         (ok (listp tools))
-        (ok (= (length tools) 14))
+        (ok (= (length tools) 15))
         (let ((names (mapcar (lambda (x) (gethash "name" x)) tools)))
           (ok (member "read_node" names :test #'equal))
           (ok (not (member "read_workspace" names :test #'equal)))
@@ -47,6 +47,7 @@
           (ok (member "ast_complexity_metrics" names :test #'equal))
           (ok (member "ast_find_duplicates" names :test #'equal))
           (ok (member "ast_analyze_bindings" names :test #'equal))
+          (ok (member "ast_suggest_refactorings" names :test #'equal))
           (ok (member "ast_extract_function" names :test #'equal))
           (ok (member "commit_workspace" names :test #'equal)))))))
 
@@ -315,4 +316,24 @@
                (text (gethash "text" content)))
           (ok (stringp text))
           (ok (or (search "Variable Scope & Binding Report" text)
-                  (search "No unused or shadowed" text)))))))
+                  (search "No unused or shadowed" text)))))
+      ;; Test ast_suggest_refactorings
+      (let* ((sug-msg (structural-editing-mcp.mcp::dict
+                       "jsonrpc" "2.0"
+                       "id" 22
+                       "method" "tools/call"
+                       "params" (structural-editing-mcp.mcp::dict
+                                 "name" "ast_suggest_refactorings"
+                                 "arguments" (structural-editing-mcp.mcp::dict))))
+             (*standard-output* (make-string-output-stream))
+             (raw-resp (progn
+                         (structural-editing-mcp.mcp:handle-message sug-msg)
+                         (get-output-stream-string *standard-output*)))
+             (parsed-resp (let ((yason:*parse-json-arrays-as-vectors* nil))
+                            (yason:parse raw-resp))))
+        (let* ((res (gethash "result" parsed-resp))
+               (content (first (gethash "content" res)))
+               (text (gethash "text" content)))
+          (ok (stringp text))
+          (ok (or (search "Structural Refactoring Plan" text)
+                  (search "No refactoring opportunities detected" text)))))))

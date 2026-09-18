@@ -837,6 +837,45 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                 "Optional dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel)."))))
         (dict
           "name"
+          "ast_suggest_refactorings"
+          "description"
+          "Multi-engine refactoring advisor. Aggregates and prioritizes findings from anti-pattern linting, structural complexity metrics, duplicate code clones, and variable binding analysis into an actionable refactoring plan."
+          "inputSchema"
+          (dict
+            "type"
+            "object"
+            "properties"
+            (dict
+              "path"
+              (dict
+                "type"
+                "array"
+                "items"
+                (dict "type" "integer")
+                "description"
+                "Optional AST path to evaluate a specific form, file, or subtree. If omitted, audits the entire workspace.")
+              "min_priority"
+              (dict
+                "type"
+                "string"
+                "description"
+                "Optional minimum priority filter ('high', 'medium', 'low', defaults to 'low').")
+              "categories"
+              (dict
+                "type"
+                "array"
+                "items"
+                (dict "type" "string")
+                "description"
+                "Optional list of categories to include ('lint', 'complexity', 'duplicate', 'binding').")
+              "dialect"
+              (dict
+                "type"
+                "string"
+                "description"
+                "Optional dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel)."))))
+        (dict
+          "name"
           "commit_workspace"
           "description"
           "Persists all in-memory workspace modifications back to their respective files on disk."
@@ -1131,6 +1170,20 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                                  :include-shadowed inc-shadowed
                                  :dialect (or dialect structural-editing-mcp.parser:*current-dialect*))))
                  (structural-editing-mcp.analysis:format-binding-report findings)))
+              ((equal name "ast_suggest_refactorings")
+               (let* ((path (to-list (gethash "path" args)))
+                      (min-p (or (gethash "min_priority" args) "low"))
+                      (cats (to-list (gethash "categories" args)))
+                      (dialect-str (gethash "dialect" args))
+                      (dialect (when (and dialect-str (plusp (length dialect-str)))
+                                 (intern (string-upcase (string-left-trim ":" dialect-str)) :keyword)))
+                      (suggestions (structural-editing-mcp.analysis:suggest-refactorings
+                                    structural-editing-mcp.workspace:*workspace-tree*
+                                    :path path
+                                    :min-priority min-p
+                                    :categories cats
+                                    :dialect (or dialect structural-editing-mcp.parser:*current-dialect*))))
+                 (structural-editing-mcp.analysis:format-refactoring-suggestions suggestions)))
               ((equal name "commit_workspace")
                (structural-editing-mcp.workspace:write-workspace)
                (format
