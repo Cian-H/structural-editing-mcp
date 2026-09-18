@@ -909,7 +909,8 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 (defun handle-tools-call (id params)
   (let* ((name (gethash "name" params))
          (args (gethash "arguments" params))
-         (path (to-list (gethash "path" args))))
+         (path (to-list (gethash "path" args)))
+         (dialect (parse-dialect-arg (gethash "dialect" args))))
     (handler-case
         (let ((content
                 (cond
@@ -1107,8 +1108,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                           path
                           func-name)))
               ((equal name "ast_lint")
-               (let* ((dialect (parse-dialect-arg (gethash "dialect" args)))
-                      (rules (to-list (gethash "rules" args)))
+               (let* ((rules (to-list (gethash "rules" args)))
                       (findings (structural-editing-mcp.analysis:lint-ast
                                  structural-editing-mcp.workspace:*workspace-tree*
                                  :path path
@@ -1118,7 +1118,6 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
               ((equal name "ast_complexity_metrics")
                (let* ((min-cc (or (gethash "min_complexity" args) 1))
                       (min-depth (or (gethash "min_depth" args) 1))
-                      (dialect (parse-dialect-arg (gethash "dialect" args)))
                       (results (structural-editing-mcp.analysis:analyze-complexity
                                 structural-editing-mcp.workspace:*workspace-tree*
                                 :path path
@@ -1143,7 +1142,6 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                                     (if (null val) t val)))
                       (inc-shadowed (let ((val (gethash "include_shadowed" args)))
                                       (if (null val) t val)))
-                      (dialect (parse-dialect-arg (gethash "dialect" args)))
                       (findings (structural-editing-mcp.analysis:analyze-bindings
                                  structural-editing-mcp.workspace:*workspace-tree*
                                  :path path
@@ -1154,7 +1152,6 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
               ((equal name "ast_suggest_refactorings")
                (let* ((min-p (or (gethash "min_priority" args) "low"))
                       (cats (to-list (gethash "categories" args)))
-                      (dialect (parse-dialect-arg (gethash "dialect" args)))
                       (suggestions (structural-editing-mcp.analysis:suggest-refactorings
                                     structural-editing-mcp.workspace:*workspace-tree*
                                     :path path
