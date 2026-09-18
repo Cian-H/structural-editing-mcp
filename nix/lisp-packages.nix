@@ -4,7 +4,7 @@
     owner = "digikar";
     repo = "styled-strings";
     rev = "main";
-    hash = "sha256-aORPqBPvtc3N24qMcpayhVHRz6dk2wYJuHsoCsfanjk=";
+    hash = "sha256-TIME9Z0eO7GFP8DFh/cvoYA/3O0SpEpsRqsiGJQZa0g=";
   };
   styled-strings = pkgs.sbcl.buildASDFSystem {
     pname = "styled-strings";
