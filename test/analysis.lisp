@@ -133,3 +133,82 @@
         (ok (search "Found 2 anti-patterns:" report))
         (ok (search "if-nil-to-when" report))
         (ok (search "redundant-progn" report))))))
+
+(deftest test-branch-complexity
+  (testing "simple function has base complexity 1"
+    (let* ((ast (first (get-node-children (string-to-sexp "(defun simple (x) (+ x 1))")))))
+      (ok (= (compute-branch-complexity ast) 1))))
+
+  (testing "branching constructs increase complexity"
+    (let* ((code "(defun complex-fn (x y)
+                     (if (> x 0)
+                         (when (< y 10)
+                           (loop for i from 0 to 5 do (foo i)))
+                         (cond ((= x 0) (bar))
+                               ((= x -1) (baz)))))")
+           (ast (first (get-node-children (string-to-sexp code)))))
+      ;; Base 1 + if(1) + when(1) + loop(1) + cond(2 clauses) = 6
+      (ok (= (compute-branch-complexity ast) 6))))
+
+  (testing "short-circuit operators increase complexity"
+    (let* ((code "(defun check-all (a b c d) (and a b c d))")
+           (ast (first (get-node-children (string-to-sexp code)))))
+      ;; Base 1 + (4 args - 2) decision points = 3 + 1 = 4
+      (ok (= (compute-branch-complexity ast) 4)))))
+
+(deftest test-nesting-depth
+  (testing "flat expression depth"
+    (let ((ast (first (get-node-children (string-to-sexp "(+ 1 2 3)")))))
+      (ok (= (compute-nesting-depth ast) 1))))
+
+  (testing "deeply nested expression depth"
+    (let ((ast (first (get-node-children (string-to-sexp "(a (b (c (d 1))))")))))
+      (ok (= (compute-nesting-depth ast) 4)))))
+
+(deftest test-form-definition-info
+  (let ((fn-ast (first (get-node-children (string-to-sexp "(defun calculate-total (x) x)"))))
+        (macro-ast (first (get-node-children (string-to-sexp "(defmacro with-lock ((l) &body body) body)"))))
+        (other-ast (first (get-node-children (string-to-sexp "(in-package :foo)")))))
+    (multiple-value-bind (is-def name kind) (form-definition-info fn-ast)
+      (ok is-def)
+      (ok (string-equal name "calculate-total"))
+      (ok (eq kind :function)))
+    (multiple-value-bind (is-def name kind) (form-definition-info macro-ast)
+      (ok is-def)
+      (ok (string-equal name "with-lock"))
+      (ok (eq kind :macro)))
+    (multiple-value-bind (is-def name kind) (form-definition-info other-ast)
+      (declare (ignore name kind))
+      (ok (not is-def)))))
+
+(deftest test-analyze-complexity-and-reporting
+  (let* ((code "(defun simple-fn (x) (+ x 1))
+                (defun complex-fn (x)
+                  (if (> x 0)
+                      (if (> x 10)
+                          (if (> x 20)
+                              (if (> x 30)
+                                  (if (> x 40)
+                                      (if (> x 50)
+                                          (if (> x 60)
+                                              (if (> x 70)
+                                                  (if (> x 80)
+                                                      (if (> x 90) 100 0)))))))))))")
+         (ast (string-to-sexp code))
+         (all-metrics (analyze-complexity ast))
+         (filtered (analyze-complexity ast :min-complexity 5)))
+    (testing "all forms analyzed"
+      (ok (= (length all-metrics) 2)))
+    (testing "filtering by min-complexity"
+      (ok (= (length filtered) 1))
+      (let ((m (first filtered)))
+        (ok (string-equal (complexity-metrics-name m) "complex-fn"))
+        (ok (>= (complexity-metrics-cyclomatic-complexity m) 10))
+        (ok (>= (complexity-metrics-max-nesting-depth m) 6))
+        (ok (> (length (complexity-metrics-recommendations m)) 0))))
+    (testing "format complexity report"
+      (let ((report (format-complexity-report filtered)))
+        (ok (search "complex-fn" report))
+        (ok (search "Cyclomatic Complexity" report))
+        (ok (search "Recommendations:" report))))))
+

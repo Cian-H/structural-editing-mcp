@@ -19,7 +19,23 @@
            :lint-finding-suggested-fix
            :lint-node
            :lint-ast
-           :format-lint-findings)
+           :format-lint-findings
+           :complexity-metrics
+           :make-complexity-metrics
+           :complexity-metrics-name
+           :complexity-metrics-kind
+           :complexity-metrics-path
+           :complexity-metrics-cyclomatic-complexity
+           :complexity-metrics-max-nesting-depth
+           :complexity-metrics-form-count
+           :complexity-metrics-recommendations
+           :form-definition-info
+           :compute-branch-complexity
+           :compute-nesting-depth
+           :count-ast-nodes
+           :analyze-form-complexity
+           :analyze-complexity
+           :format-complexity-report)
   (:documentation "Static analysis, pattern matching, structural search, and linting."))
 
 (in-package :structural-editing-mcp.analysis)
@@ -528,3 +544,249 @@ Returns a list of LINT-FINDING instances."
                   ((stringp fix)
                    (format s "   Suggested Fix: ~A~%" fix))))
               (format s "~%")))))
+
+;;; --- Complexity Metrics ---
+
+(defstruct (complexity-metrics (:constructor make-complexity-metrics))
+  name
+  kind ; :function, :macro, :method, :generic, :form
+  path
+  cyclomatic-complexity
+  max-nesting-depth
+  form-count
+  recommendations)
+
+(defun form-definition-info (node)
+  "If NODE is a definition (defun, defmacro, defmethod, defgeneric, defn, define),
+return (values is-def-p name-str kind-keyword)."
+  (let ((children (get-node-children node)))
+    (when (and (member (get-node-tag node) '(:paren :square))
+               (>= (length children) 2))
+      (let ((head (first children)))
+        (multiple-value-bind (path tag val) (parse-node head)
+          (declare (ignore path tag))
+          (when (symbolp val)
+            (let ((head-name (string-upcase (symbol-name val))))
+              (cond
+                ((member head-name '("DEFUN" "DEFN" "DEFN-") :test #'string=)
+                 (let ((name-node (second children)))
+                   (values t (format-atom (nth-value 2 (parse-node name-node))) :function)))
+                ((member head-name '("DEFMACRO" "DEFSYNTAX") :test #'string=)
+                 (let ((name-node (second children)))
+                   (values t (format-atom (nth-value 2 (parse-node name-node))) :macro)))
+                ((member head-name '("DEFMETHOD") :test #'string=)
+                 (let ((name-node (second children)))
+                   (values t (format-atom (nth-value 2 (parse-node name-node))) :method)))
+                ((member head-name '("DEFGENERIC") :test #'string=)
+                 (let ((name-node (second children)))
+                   (values t (format-atom (nth-value 2 (parse-node name-node))) :generic)))
+                ((string= head-name "DEFINE")
+                 (let ((name-child (second children)))
+                   (if (member (get-node-tag name-child) '(:paren :square))
+                       (let ((fn-head (first (get-node-children name-child))))
+                         (values t (format-atom (nth-value 2 (parse-node fn-head))) :function))
+                       (values t (format-atom (nth-value 2 (parse-node name-child))) :definition))))
+                (t (values nil nil nil))))))))))
+
+(defun compute-branch-complexity (node &optional (dialect :common-lisp))
+  "Compute McCabe cyclomatic complexity of NODE.
+Base complexity is 1, with +1 for each conditional branch, short-circuit point, loop, or handler."
+  (let ((complexity 1))
+    (labels ((walk (curr)
+               (let ((children (get-node-children curr)))
+                 (when (and (member (get-node-tag curr) '(:paren :square))
+                            children)
+                   (let ((head (first children)))
+                     (multiple-value-bind (p t-val val) (parse-node head)
+                       (declare (ignore p t-val))
+                       (when (symbolp val)
+                         (let ((name (string-upcase (symbol-name val))))
+                           (cond
+                             ;; Standard conditional constructs: +1
+                             ((member name '("IF" "WHEN" "UNLESS" "WHEN-NOT" "IF-NOT"
+                                             "WHEN-LET" "IF-LET" "WHEN-FIRST")
+                                      :test #'string=)
+                              (incf complexity))
+                             ;; COND: each non-default test clause adds +1
+                             ((string= name "COND")
+                              (dolist (clause (rest children))
+                                (let ((c-children (get-node-children clause)))
+                                  (when (and (member (get-node-tag clause) '(:paren :square))
+                                             c-children)
+                                    (let ((test (first c-children)))
+                                      (unless (or (leaf-true-p test dialect)
+                                                  (leaf-symbol-p test "OTHERWISE")
+                                                  (leaf-symbol-p test ":ELSE"))
+                                        (incf complexity)))))))
+                             ;; CASE/TYPECASE constructs: each clause adds +1
+                             ((member name '("CASE" "CCASE" "ECASE" "TYPECASE" "CTYPECASE"
+                                             "ETYPECASE" "CONDP")
+                                      :test #'string=)
+                              (dolist (clause (nthcdr 2 children))
+                                (let ((c-children (get-node-children clause)))
+                                  (when (and (member (get-node-tag clause) '(:paren :square))
+                                             c-children)
+                                    (let ((selector (first c-children)))
+                                      (unless (or (leaf-true-p selector dialect)
+                                                  (leaf-symbol-p selector "OTHERWISE"))
+                                        (incf complexity)))))))
+                             ;; Short-circuiting booleans: each extra operand adds +1
+                             ((member name '("AND" "OR") :test #'string=)
+                              (when (> (length children) 2)
+                                (incf complexity (- (length children) 2))))
+                             ;; Loops: +1
+                             ((member name '("LOOP" "DOLIST" "DOTIMES" "DO" "DO*" "DOSEQ" "RECUR")
+                                      :test #'string=)
+                              (incf complexity))
+                             ;; Error & condition handlers: each clause adds +1
+                             ((member name '("HANDLER-CASE" "RESTART-CASE") :test #'string=)
+                              (dolist (clause (nthcdr 2 children))
+                                (when (member (get-node-tag clause) '(:paren :square))
+                                  (incf complexity))))))))))
+                 ;; Recurse into children
+                 (dolist (c children)
+                   (walk c)))))
+      (walk node)
+      complexity)))
+
+(defun compute-nesting-depth (node &optional (current-depth 0))
+  "Compute the maximum parenthetical nesting depth of sub-expressions within NODE."
+  (let ((children (get-node-children node)))
+    (if (and (member (get-node-tag node) '(:paren :square :curly))
+             children)
+        (let ((next-depth (1+ current-depth))
+              (max-child-depth (1+ current-depth)))
+          (dolist (c children)
+            (let ((d (compute-nesting-depth c next-depth)))
+              (when (> d max-child-depth)
+                (setf max-child-depth d))))
+          max-child-depth)
+        current-depth)))
+
+(defun count-ast-nodes (node)
+  "Count total number of nodes (forms and leaves) in NODE."
+  (let ((count 1))
+    (dolist (c (get-node-children node))
+      (incf count (count-ast-nodes c)))
+    count))
+
+(defun generate-complexity-recommendations (complexity depth count path)
+  "Produce actionable refactoring recommendations when metrics exceed thresholds."
+  (declare (ignore path))
+  (let ((recs '()))
+    (when (>= complexity 10)
+      (push (format nil "High cyclomatic complexity (~A) — consider decomposing conditional logic into helper functions using 'ast_extract_function'."
+                    complexity)
+            recs))
+    (when (>= depth 6)
+      (push (format nil "Deep nesting depth (~A) — consider flattening expressions or extracting intermediate values using 'ast_extract_variable'."
+                    depth)
+            recs))
+    (when (>= count 60)
+      (push (format nil "Large form size (~A nodes) — consider breaking this definition into smaller, single-purpose functions."
+                    count)
+            recs))
+    (nreverse recs)))
+
+(defun analyze-form-complexity (node &key path dialect)
+  "Analyze structural complexity of a single top-level form or function definition NODE."
+  (multiple-value-bind (is-def name kind) (form-definition-info node)
+    (let* ((effective-name (if is-def name (let ((tag (get-node-tag node))) (format nil ":~A" tag))))
+           (effective-kind (if is-def kind :form))
+           (complexity (compute-branch-complexity node dialect))
+           (depth (compute-nesting-depth node 0))
+           (node-count (count-ast-nodes node))
+           (recs (generate-complexity-recommendations complexity depth node-count path)))
+      (make-complexity-metrics
+       :name effective-name
+       :kind effective-kind
+       :path path
+       :cyclomatic-complexity complexity
+       :max-nesting-depth depth
+       :form-count node-count
+       :recommendations recs))))
+
+(defun collect-top-level-forms (node base-path)
+  "Collect all (form-node . path) pairs from NODE (workspace, dialect, file, or single form)."
+  (let ((tag (get-node-tag node))
+        (results '()))
+    (cond
+      ((eq tag :workspace)
+       (loop for dialect-child in (get-node-children node)
+             for d-idx from 0
+             for d-path = (or (get-node-path dialect-child) (append base-path (list d-idx)))
+             do (loop for file-child in (get-node-children dialect-child)
+                      for f-idx from 0
+                      for f-path = (or (get-node-path file-child) (append d-path (list f-idx)))
+                      do (loop for form in (get-node-children file-child)
+                               for form-idx from 0
+                               for form-path = (or (get-node-path form) (append f-path (list form-idx)))
+                               do (push (cons form form-path) results)))))
+      ((member tag '(:common-lisp :clojure :scheme :emacs-lisp :fennel))
+       (loop for file-child in (get-node-children node)
+             for f-idx from 0
+             for f-path = (or (get-node-path file-child) (append base-path (list f-idx)))
+             do (loop for form in (get-node-children file-child)
+                      for form-idx from 0
+                      for form-path = (or (get-node-path form) (append f-path (list form-idx)))
+                      do (push (cons form form-path) results))))
+      ((eq tag :file)
+       (loop for form in (get-node-children node)
+             for form-idx from 0
+             for form-path = (or (get-node-path form) (append base-path (list form-idx)))
+             do (push (cons form form-path) results)))
+      (t
+       (push (cons node (or (get-node-path node) base-path)) results)))
+    (nreverse results)))
+
+(defun analyze-complexity (tree &key path dialect (min-complexity 1) (min-depth 1))
+  "Analyze structural complexity for forms in TREE (or under PATH).
+Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
+  (let* ((start-node (if (and path (not (null path)))
+                         (get-node-at-path tree path)
+                         tree))
+         (forms-with-paths (if start-node
+                               (collect-top-level-forms start-node path)
+                               nil))
+         (results '()))
+    (dolist (pair forms-with-paths)
+      (let* ((form-node (car pair))
+             (form-path (cdr pair))
+             (metrics (analyze-form-complexity form-node :path form-path :dialect dialect)))
+        (when (and (>= (complexity-metrics-cyclomatic-complexity metrics) (or min-complexity 1))
+                   (>= (complexity-metrics-max-nesting-depth metrics) (or min-depth 1)))
+          (push metrics results))))
+    ;; Sort by cyclomatic complexity descending, then max-nesting-depth descending
+    (sort results
+          (lambda (a b)
+            (let ((ca (complexity-metrics-cyclomatic-complexity a))
+                  (cb (complexity-metrics-cyclomatic-complexity b)))
+              (if (= ca cb)
+                  (> (complexity-metrics-max-nesting-depth a)
+                     (complexity-metrics-max-nesting-depth b))
+                  (> ca cb)))))))
+
+(defun format-complexity-report (results)
+  "Format a list of COMPLEXITY-METRICS instances into a readable diagnostic report."
+  (if (null results)
+      "No forms found matching the specified complexity thresholds."
+      (with-output-to-string (s)
+        (format s "Structural Complexity Report (~A form~:P analyzed):~%~%" (length results))
+        (loop for m in results
+              for i from 1
+              for name = (complexity-metrics-name m)
+              for kind = (complexity-metrics-kind m)
+              for path = (complexity-metrics-path m)
+              for cc = (complexity-metrics-cyclomatic-complexity m)
+              for depth = (complexity-metrics-max-nesting-depth m)
+              for count = (complexity-metrics-form-count m)
+              for recs = (complexity-metrics-recommendations m)
+              do
+              (format s "~A. ~A ~A [~{~A~^, ~}]~%   Cyclomatic Complexity: ~A | Max Nesting Depth: ~A | AST Nodes: ~A~%"
+                      i kind name (or path "()") cc depth count)
+              (when recs
+                (format s "   Recommendations:~%")
+                (dolist (r recs)
+                  (format s "     - ~A~%" r)))
+              (format s "~%")))))
+

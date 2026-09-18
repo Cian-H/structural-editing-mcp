@@ -726,6 +726,43 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                 "Optional list of rule IDs to filter by (e.g. ['if-progn-to-when', 'single-clause-cond'])."))))
         (dict
           "name"
+          "ast_complexity_metrics"
+          "description"
+          "Calculate structural and cyclomatic complexity metrics for functions and top-level forms. Reports branch complexity, maximum nesting depth, AST node counts, and automated recommendations for code extraction."
+          "inputSchema"
+          (dict
+            "type"
+            "object"
+            "properties"
+            (dict
+              "path"
+              (dict
+                "type"
+                "array"
+                "items"
+                (dict "type" "integer")
+                "description"
+                "Optional AST path to evaluate a specific form, file, or subtree. If omitted, analyzes all forms across the workspace.")
+              "min_complexity"
+              (dict
+                "type"
+                "integer"
+                "description"
+                "Optional minimum cyclomatic complexity threshold to filter results (default: 1).")
+              "min_depth"
+              (dict
+                "type"
+                "integer"
+                "description"
+                "Optional minimum parenthetical nesting depth threshold to filter results (default: 1).")
+              "dialect"
+              (dict
+                "type"
+                "string"
+                "description"
+                "Optional dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel)."))))
+        (dict
+          "name"
           "commit_workspace"
           "description"
           "Persists all in-memory workspace modifications back to their respective files on disk."
@@ -977,6 +1014,20 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                                  :dialect dialect
                                  :rules rules)))
                  (structural-editing-mcp.analysis:format-lint-findings findings)))
+              ((equal name "ast_complexity_metrics")
+               (let* ((path (to-list (gethash "path" args)))
+                      (min-cc (or (gethash "min_complexity" args) 1))
+                      (min-depth (or (gethash "min_depth" args) 1))
+                      (dialect-str (gethash "dialect" args))
+                      (dialect (when (and dialect-str (plusp (length dialect-str)))
+                                 (intern (string-upcase (string-left-trim ":" dialect-str)) :keyword)))
+                      (results (structural-editing-mcp.analysis:analyze-complexity
+                                structural-editing-mcp.workspace:*workspace-tree*
+                                :path path
+                                :dialect dialect
+                                :min-complexity min-cc
+                                :min-depth min-depth)))
+                 (structural-editing-mcp.analysis:format-complexity-report results)))
               ((equal name "commit_workspace")
                (structural-editing-mcp.workspace:write-workspace)
                (format

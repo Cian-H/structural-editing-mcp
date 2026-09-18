@@ -36,7 +36,7 @@
       (let* ((res (gethash "result" result-json))
              (tools (gethash "tools" res)))
         (ok (listp tools))
-        (ok (= (length tools) 11))
+        (ok (= (length tools) 12))
         (let ((names (mapcar (lambda (x) (gethash "name" x)) tools)))
           (ok (member "read_node" names :test #'equal))
           (ok (not (member "read_workspace" names :test #'equal)))
@@ -44,6 +44,7 @@
           (ok (member "ast_remove" names :test #'equal))
           (ok (member "ast_relocate" names :test #'equal))
           (ok (member "ast_lint" names :test #'equal))
+          (ok (member "ast_complexity_metrics" names :test #'equal))
           (ok (member "ast_extract_function" names :test #'equal))
           (ok (member "commit_workspace" names :test #'equal)))))))
 
@@ -250,4 +251,24 @@
                (content (first (gethash "content" res)))
                (text (gethash "text" content)))
           (ok (stringp text))
-          (ok (or (search "anti-pattern" text) (search "No anti-patterns" text)))))))
+          (ok (or (search "anti-pattern" text) (search "No anti-patterns" text)))))
+      ;; Test ast_complexity_metrics
+      (let* ((comp-msg (structural-editing-mcp.mcp::dict
+                         "jsonrpc" "2.0"
+                         "id" 19
+                         "method" "tools/call"
+                         "params" (structural-editing-mcp.mcp::dict
+                                   "name" "ast_complexity_metrics"
+                                   "arguments" (structural-editing-mcp.mcp::dict
+                                                "min_complexity" 1))))
+             (*standard-output* (make-string-output-stream))
+             (raw-resp (progn
+                         (structural-editing-mcp.mcp:handle-message comp-msg)
+                         (get-output-stream-string *standard-output*)))
+             (parsed-resp (let ((yason:*parse-json-arrays-as-vectors* nil))
+                            (yason:parse raw-resp))))
+        (let* ((res (gethash "result" parsed-resp))
+               (content (first (gethash "content" res)))
+               (text (gethash "text" content)))
+          (ok (stringp text))
+          (ok (search "Structural Complexity Report" text))))))
