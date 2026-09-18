@@ -829,274 +829,222 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   (when (and dialect-str (plusp (length dialect-str)))
     (intern (string-upcase (string-left-trim ":" dialect-str)) :keyword)))
 
+(defun handle-tool-read-node (path args)
+  "Handle the read_node tool execution."
+  (let ((files-to-load (to-list (gethash "load_files" args))))
+    (when files-to-load
+      (structural-editing-mcp.workspace:load-into-workspace files-to-load)))
+  (unless structural-editing-mcp.workspace:*workspace-tree*
+    (structural-editing-mcp.workspace:init-workspace))
+  (let* ((depth (or (gethash "depth" args) 2))
+         (node (structural-editing-mcp.tree:resolve-tree-scope
+                structural-editing-mcp.workspace:*workspace-tree*
+                path)))
+    (format-node-preview node :depth depth)))
+
+(defun handle-tool-ast-modify (path args)
+  "Handle the ast_modify tool execution."
+  (let* ((action (gethash "action" args))
+         (new-node-str (gethash "new_node" args))
+         (index (gethash "index" args))
+         (end-index (gethash "end_index" args))
+         (tree structural-editing-mcp.workspace:*workspace-tree*))
+    (setf structural-editing-mcp.workspace:*workspace-tree*
+          (cond
+            ((equal action "insert")
+             (perform-insert tree path new-node-str index))
+            ((equal action "overwrite")
+             (structural-editing-mcp.edit:overwrite-expression tree path new-node-str))
+            ((equal action "wrap")
+             (perform-wrap tree path new-node-str end-index index))
+            (t (error "Unknown action: ~A" action))))
+    (format-mutation-result
+     (format nil "Successfully executed ~A at ~A" action path)
+     path
+     structural-editing-mcp.workspace:*workspace-tree*)))
+
+(defun handle-tool-ast-remove (path args)
+  "Handle the ast_remove tool execution."
+  (let* ((action (gethash "action" args))
+         (tree structural-editing-mcp.workspace:*workspace-tree*))
+    (setf structural-editing-mcp.workspace:*workspace-tree*
+          (cond
+            ((equal action "delete")
+             (structural-editing-mcp.edit:delete-node tree path))
+            ((equal action "unwrap")
+             (structural-editing-mcp.edit:unwrap-node tree path))
+            ((equal action "promote")
+             (structural-editing-mcp.edit:promote-node tree path))
+            (t (error "Unknown action: ~A" action))))
+    (format-mutation-result
+     (format nil "Successfully executed ~A at ~A" action path)
+     path
+     structural-editing-mcp.workspace:*workspace-tree*)))
+
+(defun resolve-split-index (tgt index)
+  "Resolve split index from INDEX argument or last element of TGT."
+  (or index (if (null (cdr tgt)) 0 (lastcar tgt))))
+
+(defun perform-relocate-action (action src tgt index tree)
+  "Dispatch relocation mutation and return the updated tree."
+  (cond
+    ((or (equal action "move") (equal action "copy"))
+     (multiple-value-bind (tgt-parent tgt-idx)
+         (resolve-parent-and-index tree tgt index)
+       (if (equal action "move")
+           (structural-editing-mcp.edit:move-node tree src tgt-parent tgt-idx)
+           (structural-editing-mcp.edit:copy-node tree src tgt-parent tgt-idx))))
+    ((equal action "swap")
+     (structural-editing-mcp.edit:swap-nodes tree src tgt))
+    ((equal action "merge")
+     (structural-editing-mcp.edit:merge-nodes tree src tgt))
+    ((equal action "split")
+     (structural-editing-mcp.edit:split-node tree tgt (resolve-split-index tgt index)))
+    (t (error "Unknown action: ~A" action))))
+
+(defun handle-tool-ast-relocate (args)
+  "Handle the ast_relocate tool execution."
+  (let* ((src (to-list (gethash "source_path" args)))
+         (tgt (to-list (gethash "target_path" args)))
+         (action (gethash "action" args))
+         (index (gethash "index" args)))
+    (setf structural-editing-mcp.workspace:*workspace-tree*
+          (perform-relocate-action action src tgt index structural-editing-mcp.workspace:*workspace-tree*))
+    (format-mutation-result
+     (format nil "Successfully executed ~A from ~A to ~A" action src tgt)
+     tgt
+     structural-editing-mcp.workspace:*workspace-tree*)))
+
+(defun handle-tool-ast-refactor (name path args)
+  "Handle ast_search, ast_rename, ast_replace_pattern, ast_extract_variable, ast_extract_function."
+  (let ((tree structural-editing-mcp.workspace:*workspace-tree*))
+    (cond
+      ((equal name "ast_search")
+       (let* ((query (gethash "query" args))
+              (results (perform-search tree path query)))
+         (if results
+             (format nil "Found ~A matches. Paths:~%~{~A~^~%~}" (length results) results)
+             (format nil "No matches found for '~A' at path ~A" query path))))
+      ((equal name "ast_rename")
+       (let ((old (gethash "old_name" args))
+             (new (gethash "new_name" args)))
+         (setf structural-editing-mcp.workspace:*workspace-tree*
+               (perform-rename tree path old new))
+         (format nil "Successfully renamed all occurrences of '~A' to '~A'." old new)))
+      ((equal name "ast_replace_pattern")
+       (let ((pat (gethash "pattern" args))
+             (rep (gethash "replacement" args)))
+         (setf structural-editing-mcp.workspace:*workspace-tree*
+               (structural-editing-mcp.refactor:replace-pattern tree pat rep))
+         (format nil "Successfully executed pattern replacement across workspace.")))
+      ((equal name "ast_extract_variable")
+       (let ((var-name (gethash "variable_name" args)))
+         (setf structural-editing-mcp.workspace:*workspace-tree*
+               (structural-editing-mcp.refactor:extract-variable tree path var-name))
+         (format nil "Successfully extracted node at ~A into variable '~A'." path var-name)))
+      ((equal name "ast_extract_function")
+       (let ((func-name (gethash "function_name" args))
+             (fn-params (to-list (gethash "params" args))))
+         (setf structural-editing-mcp.workspace:*workspace-tree*
+               (structural-editing-mcp.refactor:extract-function tree path func-name :params fn-params))
+         (format nil "Successfully extracted node at ~A into function '~A'." path func-name))))))
+
+(defun run-tool-lint (tree path dialect args)
+  "Run AST linter and return formatted findings."
+  (let* ((rules (to-list (gethash "rules" args)))
+         (findings (structural-editing-mcp.analysis:lint-ast tree :path path :dialect dialect :rules rules)))
+    (structural-editing-mcp.analysis:format-lint-findings findings)))
+
+(defun run-tool-complexity (tree path dialect args)
+  "Run complexity analyzer and return formatted report."
+  (let* ((min-cc (or (gethash "min_complexity" args) 1))
+         (min-depth (or (gethash "min_depth" args) 1))
+         (results (structural-editing-mcp.analysis:analyze-complexity tree :path path :dialect dialect
+                                                                         :min-complexity min-cc
+                                                                         :min-depth min-depth)))
+    (structural-editing-mcp.analysis:format-complexity-report results)))
+
+(defun run-tool-duplicates (tree path args)
+  "Run duplicate subtree detector and return formatted report."
+  (let* ((min-nodes (or (gethash "min_nodes" args) 4))
+         (min-depth (or (gethash "min_depth" args) 2))
+         (exact (let ((val (gethash "exact" args))) (if (null val) t val)))
+         (results (structural-editing-mcp.analysis:find-duplicate-subtrees tree :path path
+                                                                               :min-nodes min-nodes
+                                                                               :min-depth min-depth
+                                                                               :exact exact)))
+    (structural-editing-mcp.analysis:format-duplicate-report results)))
+
+(defun run-tool-bindings (tree path dialect args)
+  "Run variable binding analysis and return formatted report."
+  (let* ((inc-unused (let ((val (gethash "include_unused" args))) (if (null val) t val)))
+         (inc-shadowed (let ((val (gethash "include_shadowed" args))) (if (null val) t val)))
+         (findings (structural-editing-mcp.analysis:analyze-bindings tree :path path
+                                                                         :include-unused inc-unused
+                                                                         :include-shadowed inc-shadowed
+                                                                         :dialect dialect)))
+    (structural-editing-mcp.analysis:format-binding-report findings)))
+
+(defun run-tool-suggestions (tree path dialect args)
+  "Run refactoring suggestion aggregator and return formatted suggestions."
+  (let* ((min-p (or (gethash "min_priority" args) "low"))
+         (cats (to-list (gethash "categories" args)))
+         (suggestions (structural-editing-mcp.analysis:suggest-refactorings tree :path path
+                                                                                :min-priority min-p
+                                                                                :categories cats
+                                                                                :dialect dialect)))
+    (structural-editing-mcp.analysis:format-refactoring-suggestions suggestions)))
+
+(defun handle-tool-ast-analysis (name path args dialect)
+  "Handle static analysis and refactoring suggestion tools."
+  (let ((tree structural-editing-mcp.workspace:*workspace-tree*)
+        (eff-dialect (or dialect structural-editing-mcp.parser:*current-dialect*)))
+    (cond
+      ((equal name "ast_lint")
+       (run-tool-lint tree path dialect args))
+      ((equal name "ast_complexity_metrics")
+       (run-tool-complexity tree path dialect args))
+      ((equal name "ast_find_duplicates")
+       (run-tool-duplicates tree path args))
+      ((equal name "ast_analyze_bindings")
+       (run-tool-bindings tree path eff-dialect args))
+      ((equal name "ast_suggest_refactorings")
+       (run-tool-suggestions tree path eff-dialect args)))))
+
+(defun dispatch-tool-call (name path args dialect)
+  "Dispatch tool invocation by tool NAME to appropriate handler."
+  (cond
+    ((equal name "read_node")
+     (handle-tool-read-node path args))
+    ((equal name "ast_modify")
+     (handle-tool-ast-modify path args))
+    ((equal name "ast_remove")
+     (handle-tool-ast-remove path args))
+    ((equal name "ast_relocate")
+     (handle-tool-ast-relocate args))
+    ((member name '("ast_search" "ast_rename" "ast_replace_pattern"
+                    "ast_extract_variable" "ast_extract_function") :test #'string=)
+     (handle-tool-ast-refactor name path args))
+    ((member name '("ast_lint" "ast_complexity_metrics" "ast_find_duplicates"
+                    "ast_analyze_bindings" "ast_suggest_refactorings") :test #'string=)
+     (handle-tool-ast-analysis name path args dialect))
+    ((equal name "commit_workspace")
+     (structural-editing-mcp.workspace:write-workspace)
+     (format nil "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))
+    (t
+     (error "Tool not found: ~A" name))))
+
 (defun handle-tools-call (id params)
   (let* ((name (gethash "name" params))
          (args (gethash "arguments" params))
          (path (to-list (gethash "path" args)))
          (dialect (parse-dialect-arg (gethash "dialect" args))))
     (handler-case
-        (let ((content
-                (cond
-                  ((equal name "read_node")
-                   (let ((files-to-load (to-list (gethash "load_files" args))))
-                     (when files-to-load
-                       (structural-editing-mcp.workspace:load-into-workspace files-to-load)))
-                   (unless structural-editing-mcp.workspace:*workspace-tree*
-                     (structural-editing-mcp.workspace:init-workspace))
-                   (let* ((depth (or (gethash "depth" args) 2))
-                          (node (structural-editing-mcp.tree:resolve-tree-scope
-                                 structural-editing-mcp.workspace:*workspace-tree*
-                                 path)))
-                     (format-node-preview node :depth depth)))
-                  ((equal name "ast_modify")
-                   (let* ((action (gethash "action" args))
-                          (new-node-str (gethash "new_node" args))
-                          (index (gethash "index" args))
-                          (end-index (gethash "end_index" args)))
-                  (cond
-                    ((equal action "insert")
-                     (setf
-                            structural-editing-mcp.workspace:*workspace-tree*
-                            (perform-insert
-                                        structural-editing-mcp.workspace:*workspace-tree*
-                                        path
-                                        new-node-str
-                                        index)))
-                    ((equal action "overwrite")
-                     (setf
-                            structural-editing-mcp.workspace:*workspace-tree*
-                            (structural-editing-mcp.edit:overwrite-expression
-                          structural-editing-mcp.workspace:*workspace-tree*
-                          path
-                          new-node-str)))
-                    ((equal action "wrap")
-                     (setf
-                            structural-editing-mcp.workspace:*workspace-tree*
-                            (perform-wrap
-                                      structural-editing-mcp.workspace:*workspace-tree*
-                                      path
-                                      new-node-str
-                                      end-index
-                                      index)))
-                    (t (error "Unknown action: ~A" action)))
-                  (format-mutation-result
-                    (format nil "Successfully executed ~A at ~A" action path)
-                    path
-                    structural-editing-mcp.workspace:*workspace-tree*)))
-              ((equal name "ast_remove")
-               (let ((action (gethash "action" args)))
-                 (cond
-                   ((equal action "delete")
-                    (setf
-                     structural-editing-mcp.workspace:*workspace-tree*
-                     (structural-editing-mcp.edit:delete-node
-                      structural-editing-mcp.workspace:*workspace-tree*
-                      path)))
-                   ((equal action "unwrap")
-                    (setf
-                     structural-editing-mcp.workspace:*workspace-tree*
-                     (structural-editing-mcp.edit:unwrap-node
-                      structural-editing-mcp.workspace:*workspace-tree*
-                      path)))
-                   ((equal action "promote")
-                    (setf
-                     structural-editing-mcp.workspace:*workspace-tree*
-                     (structural-editing-mcp.edit:promote-node
-                      structural-editing-mcp.workspace:*workspace-tree*
-                      path)))
-                   (t (error "Unknown action: ~A" action)))
-                 (format-mutation-result
-                  (format nil "Successfully executed ~A at ~A" action path)
-                  path
-                  structural-editing-mcp.workspace:*workspace-tree*)))
-              ((equal name "ast_relocate")
-               (let*
-                  ((src (to-list (gethash "source_path" args)))
-                   (tgt (to-list (gethash "target_path" args)))
-                   (action (gethash "action" args))
-                   (index (gethash "index" args)))
-                  (cond
-                    ((equal action "move")
-                     (multiple-value-bind
-                        (tgt-parent tgt-idx)
-                        (resolve-parent-and-index
-                          structural-editing-mcp.workspace:*workspace-tree*
-                          tgt
-                          index)
-                        (setf
-                               structural-editing-mcp.workspace:*workspace-tree*
-                               (structural-editing-mcp.edit:move-node
-                             structural-editing-mcp.workspace:*workspace-tree*
-                             src
-                             tgt-parent
-                             tgt-idx))))
-                    ((equal action "copy")
-                     (multiple-value-bind
-                        (tgt-parent tgt-idx)
-                        (resolve-parent-and-index
-                          structural-editing-mcp.workspace:*workspace-tree*
-                          tgt
-                          index)
-                        (setf
-                               structural-editing-mcp.workspace:*workspace-tree*
-                               (structural-editing-mcp.edit:copy-node
-                             structural-editing-mcp.workspace:*workspace-tree*
-                             src
-                             tgt-parent
-                             tgt-idx))))
-                    ((equal action "swap")
-                     (setf
-                            structural-editing-mcp.workspace:*workspace-tree*
-                            (structural-editing-mcp.edit:swap-nodes
-                          structural-editing-mcp.workspace:*workspace-tree*
-                          src
-                          tgt)))
-                    ((equal action "merge")
-                     (setf
-                            structural-editing-mcp.workspace:*workspace-tree*
-                            (structural-editing-mcp.edit:merge-nodes
-                          structural-editing-mcp.workspace:*workspace-tree*
-                          src
-                          tgt)))
-                    ((equal action "split")
-                     (let ((split-idx (or index (if (null (cdr tgt)) 0 (lastcar tgt)))))
-                       (setf
-                              structural-editing-mcp.workspace:*workspace-tree*
-                              (structural-editing-mcp.edit:split-node
-                            structural-editing-mcp.workspace:*workspace-tree*
-                            tgt
-                            split-idx))))
-                    (t (error "Unknown action: ~A" action)))
-                  (format-mutation-result
-                    (format nil "Successfully executed ~A from ~A to ~A" action src tgt)
-                    tgt
-                    structural-editing-mcp.workspace:*workspace-tree*)))
-              ((equal name "ast_search")
-               (let*
-                  ((query (gethash "query" args))
-                   (results
-                              (perform-search structural-editing-mcp.workspace:*workspace-tree* path query)))
-                  (if
-                      results
-                      (format nil "Found ~A matches. Paths:~%~{~A~^~%~}" (length results) results)
-                      (format nil "No matches found for '~A' at path ~A" query path))))
-              ((equal name "ast_rename")
-               (let*
-                  ((old (gethash "old_name" args))
-                   (new (gethash "new_name" args)))
-                  (setf
-                        structural-editing-mcp.workspace:*workspace-tree*
-                        (perform-rename structural-editing-mcp.workspace:*workspace-tree* path old new))
-                  (format nil "Successfully renamed all occurrences of '~A' to '~A'." old new)))
-              ((equal name "ast_replace_pattern")
-               (let
-                  ((pat (gethash "pattern" args)) (rep (gethash "replacement" args)))
-                  (setf
-                        structural-editing-mcp.workspace:*workspace-tree*
-                        (structural-editing-mcp.refactor:replace-pattern
-                      structural-editing-mcp.workspace:*workspace-tree*
-                      pat
-                      rep))
-                  (format nil "Successfully executed pattern replacement across workspace.")))
-              ((equal name "ast_extract_variable")
-               (let
-                  ((var-name (gethash "variable_name" args)))
-                  (setf
-                        structural-editing-mcp.workspace:*workspace-tree*
-                        (structural-editing-mcp.refactor:extract-variable
-                      structural-editing-mcp.workspace:*workspace-tree*
-                      path
-                      var-name))
-                  (format
-                          nil
-                          "Successfully extracted node at ~A into variable '~A'."
-                          path
-                          var-name)))
-              ((equal name "ast_extract_function")
-               (let
-                  ((func-name (gethash "function_name" args))
-                   (fn-params (to-list (gethash "params" args))))
-                  (setf
-                        structural-editing-mcp.workspace:*workspace-tree*
-                        (structural-editing-mcp.refactor:extract-function
-                      structural-editing-mcp.workspace:*workspace-tree*
-                      path
-                      func-name
-                      :params fn-params))
-                  (format
-                          nil
-                          "Successfully extracted node at ~A into function '~A'."
-                          path
-                          func-name)))
-              ((equal name "ast_lint")
-               (let* ((rules (to-list (gethash "rules" args)))
-                      (findings (structural-editing-mcp.analysis:lint-ast
-                                 structural-editing-mcp.workspace:*workspace-tree*
-                                 :path path
-                                 :dialect dialect
-                                 :rules rules)))
-                 (structural-editing-mcp.analysis:format-lint-findings findings)))
-              ((equal name "ast_complexity_metrics")
-               (let* ((min-cc (or (gethash "min_complexity" args) 1))
-                      (min-depth (or (gethash "min_depth" args) 1))
-                      (results (structural-editing-mcp.analysis:analyze-complexity
-                                structural-editing-mcp.workspace:*workspace-tree*
-                                :path path
-                                :dialect dialect
-                                :min-complexity min-cc
-                                :min-depth min-depth)))
-                 (structural-editing-mcp.analysis:format-complexity-report results)))
-              ((equal name "ast_find_duplicates")
-               (let* ((min-nodes (or (gethash "min_nodes" args) 4))
-                      (min-depth (or (gethash "min_depth" args) 2))
-                      (exact (let ((val (gethash "exact" args)))
-                               (if (null val) t val)))
-                      (results (structural-editing-mcp.analysis:find-duplicate-subtrees
-                                structural-editing-mcp.workspace:*workspace-tree*
-                                :path path
-                                :min-nodes min-nodes
-                                :min-depth min-depth
-                                :exact exact)))
-                 (structural-editing-mcp.analysis:format-duplicate-report results)))
-              ((equal name "ast_analyze_bindings")
-               (let* ((inc-unused (let ((val (gethash "include_unused" args)))
-                                    (if (null val) t val)))
-                      (inc-shadowed (let ((val (gethash "include_shadowed" args)))
-                                      (if (null val) t val)))
-                      (findings (structural-editing-mcp.analysis:analyze-bindings
-                                 structural-editing-mcp.workspace:*workspace-tree*
-                                 :path path
-                                 :include-unused inc-unused
-                                 :include-shadowed inc-shadowed
-                                 :dialect (or dialect structural-editing-mcp.parser:*current-dialect*))))
-                 (structural-editing-mcp.analysis:format-binding-report findings)))
-              ((equal name "ast_suggest_refactorings")
-               (let* ((min-p (or (gethash "min_priority" args) "low"))
-                      (cats (to-list (gethash "categories" args)))
-                      (suggestions (structural-editing-mcp.analysis:suggest-refactorings
-                                    structural-editing-mcp.workspace:*workspace-tree*
-                                    :path path
-                                    :min-priority min-p
-                                    :categories cats
-                                    :dialect (or dialect structural-editing-mcp.parser:*current-dialect*))))
-                 (structural-editing-mcp.analysis:format-refactoring-suggestions suggestions)))
-              ((equal name "commit_workspace")
-               (structural-editing-mcp.workspace:write-workspace)
-               (format
-                        nil
-                        "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))
-              (t (error "Tool not found: ~A" name)))))
-
-        (send-result id (dict "content" (list (dict "type" "text" "text" content)))))
-                  (error
-             (e)
-             (send-result
-                     id
-                     (dict
-                "content"
-                (list (dict "type" "text" "text" (format nil "Error: ~A" e)))
-                "isError"
-                t))))))
+        (let ((content (dispatch-tool-call name path args dialect)))
+          (send-result id (dict "content" (list (dict "type" "text" "text" content)))))
+      (error (e)
+        (send-result id (dict "content" (list (dict "type" "text" "text" (format nil "Error: ~A" e)))
+                              "isError" t))))))
 
 (defun handle-message (msg)
   "Dispatch a parsed JSON-RPC message."
