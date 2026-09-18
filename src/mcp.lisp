@@ -25,7 +25,7 @@
 (defun dict (&rest keys-and-values)
   "Create a hash-table dictionary from key-value pairs."
   (let
-    ((ht (make-hash-table :test 'equal)))
+      ((ht (make-hash-table :test 'equal)))
     (loop for (k v) on keys-and-values by #'cddr do (setf (gethash k ht) v))
     ht))
 
@@ -37,7 +37,7 @@
 
 (defun send-error (id code message)
   (send-json
-             (dict "jsonrpc" "2.0" "id" id "error" (dict "code" code "message" message))))
+    (dict "jsonrpc" "2.0" "id" id "error" (dict "code" code "message" message))))
 
 (defun send-result (id result)
   (send-json (dict "jsonrpc" "2.0" "id" id "result" result)))
@@ -50,8 +50,8 @@
   (let* ((single-line (substitute #\space #\newline (string-trim '(#\space #\newline) (or raw-str ""))))
          (len (length single-line)))
     (if (> len max-length)
-        (format nil "~A..." (subseq single-line 0 (max 0 (- max-length 3))))
-        single-line)))
+      (format nil "~A..." (subseq single-line 0 (max 0 (- max-length 3))))
+      single-line)))
 
 (defun print-children-tree (s node current-depth max-depth base-path)
   (when (and (< current-depth max-depth)
@@ -64,11 +64,11 @@
                               (append base-path (list idx)))
               for ctag = (structural-editing-mcp.tree:get-node-tag child)
               for snippet = (truncate-preview-string
-                             (structural-editing-mcp.parser:sexp-to-string child))
+                              (structural-editing-mcp.parser:sexp-to-string child))
               for indent = (make-string (* (1+ current-depth) 2) :initial-element #\space)
               do
-                 (format s "~A[~{~A~^, ~}] ~A: ~A~%" indent cpath ctag snippet)
-                 (print-children-tree s child (1+ current-depth) max-depth cpath))))))
+              (format s "~A[~{~A~^, ~}] ~A: ~A~%" indent cpath ctag snippet)
+              (print-children-tree s child (1+ current-depth) max-depth cpath))))))
 
 (defun format-children-preview (s children path depth &optional (label-suffix ""))
   "Format child nodes with paths, tags, and preview snippets up to DEPTH."
@@ -80,11 +80,11 @@
                           (append path (list idx)))
           for ctag = (structural-editing-mcp.tree:get-node-tag child)
           for snippet = (truncate-preview-string
-                         (structural-editing-mcp.parser:sexp-to-string child))
+                          (structural-editing-mcp.parser:sexp-to-string child))
           do
-             (format s "  [~{~A~^, ~}] ~A: ~A~%" cpath ctag snippet)
-             (when (> depth 1)
-               (print-children-tree s child 1 depth cpath)))))
+          (format s "  [~{~A~^, ~}] ~A: ~A~%" cpath ctag snippet)
+          (when (> depth 1)
+            (print-children-tree s child 1 depth cpath)))))
 
 (defun format-dialect-node-preview (s dialect-node d-path)
   "Format preview for a single DIALECT-NODE under D-PATH to stream S."
@@ -105,55 +105,55 @@
 (defun format-workspace-preview (s children)
   "Format preview for workspace root to stream S."
   (if (null children)
-      (format s "Workspace is empty. Provide load_files in read_node to load files into the workspace.~%")
-      (progn
-        (format s "Active Dialects (~A):~%" (length children))
-        (loop for dialect-node in children
-              for d-idx from 0
-              for d-path = (or (structural-editing-mcp.tree:get-node-path dialect-node) (list d-idx))
-              do (format-dialect-node-preview s dialect-node d-path)))))
+    (format s "Workspace is empty. Provide load_files in read_node to load files into the workspace.~%")
+    (progn
+      (format s "Active Dialects (~A):~%" (length children))
+      (loop for dialect-node in children
+            for d-idx from 0
+            for d-path = (or (structural-editing-mcp.tree:get-node-path dialect-node) (list d-idx))
+            do (format-dialect-node-preview s dialect-node d-path)))))
 
 (defun format-dialect-preview (s children path tag)
   "Format preview for a dialect partition node to stream S."
   (format s "Dialect: ~A~%" tag)
   (if (null children)
-      (format s "No files loaded for this dialect.~%")
-      (progn
-        (format s "Files Loaded (~A):~%" (length children))
-        (loop for file-node in children
-              for idx from 0
-              for f-path = (or (structural-editing-mcp.tree:get-node-path file-node)
-                               (append path (list idx)))
-              for filepath = (structural-editing-mcp.workspace:get-filepath f-path)
-              for form-count = (length (structural-editing-mcp.tree:get-node-children file-node))
-              do
-              (format s "  [~{~A~^, ~}] :FILE (~A) — ~A top-level forms~%"
-                      f-path (or filepath "unknown") form-count)))))
+    (format s "No files loaded for this dialect.~%")
+    (progn
+      (format s "Files Loaded (~A):~%" (length children))
+      (loop for file-node in children
+            for idx from 0
+            for f-path = (or (structural-editing-mcp.tree:get-node-path file-node)
+                             (append path (list idx)))
+            for filepath = (structural-editing-mcp.workspace:get-filepath f-path)
+            for form-count = (length (structural-editing-mcp.tree:get-node-children file-node))
+            do
+            (format s "  [~{~A~^, ~}] :FILE (~A) — ~A top-level forms~%"
+                    f-path (or filepath "unknown") form-count)))))
 
 (defun format-node-preview (node &key (depth 2))
   "Format a node with its path, tag, rendered code, and summary of children up to DEPTH."
   (if (null node)
-      "Node not found at given path."
-      (let* ((path (structural-editing-mcp.tree:get-node-path node))
-             (tag (structural-editing-mcp.tree:get-node-tag node))
-             (children (structural-editing-mcp.tree:get-node-children node))
-             (code (structural-editing-mcp.parser:sexp-to-string node)))
-        (with-output-to-string (s)
-          (format s "Path: ~A~%" (or path "()"))
-          (format s "Tag: ~A~%" tag)
-          (cond
-            ((eq tag :workspace)
-             (format-workspace-preview s children))
-            ((member tag structural-editing-mcp.workspace:*known-dialects*)
-             (format-dialect-preview s children path tag))
-            ((eq tag :file)
-             (let ((filepath (structural-editing-mcp.workspace:get-filepath path)))
-               (when filepath (format s "File: ~A~%" filepath)))
-             (format s "Code:~%~A~%" code)
-             (format-children-preview s children path depth " top-level forms"))
-            (t
-             (format s "Code:~%~A~%" code)
-             (format-children-preview s children path depth)))))))
+    "Node not found at given path."
+    (let* ((path (structural-editing-mcp.tree:get-node-path node))
+           (tag (structural-editing-mcp.tree:get-node-tag node))
+           (children (structural-editing-mcp.tree:get-node-children node))
+           (code (structural-editing-mcp.parser:sexp-to-string node)))
+      (with-output-to-string (s)
+        (format s "Path: ~A~%" (or path "()"))
+        (format s "Tag: ~A~%" tag)
+        (cond
+          ((eq tag :workspace)
+            (format-workspace-preview s children))
+          ((member tag structural-editing-mcp.workspace:*known-dialects*)
+            (format-dialect-preview s children path tag))
+          ((eq tag :file)
+            (let ((filepath (structural-editing-mcp.workspace:get-filepath path)))
+              (when filepath (format s "File: ~A~%" filepath)))
+            (format s "Code:~%~A~%" code)
+            (format-children-preview s children path depth " top-level forms"))
+          (t
+            (format s "Code:~%~A~%" code)
+            (format-children-preview s children path depth)))))))
 
 ;;; AST Mutation Dispatchers
 
@@ -173,46 +173,46 @@
   (let* ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
          (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
     (if (and expr (structural-editing-mcp.tree:get-node-children expr))
-        (let ((target-node (structural-editing-mcp.tree:get-node-at-path tree path)))
-          (structural-editing-mcp.tree:update-node-at-path
-           tree
-           path
-           (lambda (node)
-             (declare (ignore node))
-             (match expr ((node p tag children) `(:path ,p ,tag ,@children ,target-node))))))
-        (structural-editing-mcp.edit:wrap-node tree path :paren))))
+      (let ((target-node (structural-editing-mcp.tree:get-node-at-path tree path)))
+        (structural-editing-mcp.tree:update-node-at-path
+          tree
+          path
+          (lambda (node)
+            (declare (ignore node))
+            (match expr ((node p tag children) `(:path ,p ,tag ,@children ,target-node))))))
+      (structural-editing-mcp.edit:wrap-node tree path :paren))))
 
 (defun wrap-range-with-custom-form (tree parent-path start-idx end-index wrapper-str)
   "Wrap range of nodes under PARENT-PATH using custom form expression in WRAPPER-STR."
   (let* ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
          (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
     (if (and expr (structural-editing-mcp.tree:get-node-children expr))
-        (structural-editing-mcp.tree:update-node-at-path
-         tree
-         parent-path
-         (lambda (parent)
-           (match parent
-             ((node p ptag children)
-              (let ((before (subseq children 0 start-idx))
-                    (slice (subseq children start-idx (1+ end-index)))
-                    (after (subseq children (1+ end-index))))
-                (match expr
-                  ((node _ tag expr-children)
-                   `(:path ,p ,ptag ,@before (:path ,p ,tag ,@expr-children ,@slice) ,@after)))))
-             (_ parent))))
-        (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :paren))))
+      (structural-editing-mcp.tree:update-node-at-path
+        tree
+        parent-path
+        (lambda (parent)
+          (match parent
+                 ((node p ptag children)
+                  (let ((before (subseq children 0 start-idx))
+                        (slice (subseq children start-idx (1+ end-index)))
+                        (after (subseq children (1+ end-index))))
+                    (match expr
+                           ((node _ tag expr-children)
+                            `(:path ,p ,ptag ,@before (:path ,p ,tag ,@expr-children ,@slice) ,@after)))))
+                 (_ parent))))
+      (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :paren))))
 
 (defun perform-wrap-single (tree path wrapper-str delim)
   "Wrap a single node at PATH with DELIM or custom WRAPPER-STR."
   (if delim
-      (structural-editing-mcp.edit:wrap-node tree path delim)
-      (wrap-node-with-custom-form tree path wrapper-str)))
+    (structural-editing-mcp.edit:wrap-node tree path delim)
+    (wrap-node-with-custom-form tree path wrapper-str)))
 
 (defun perform-wrap-range (tree parent-path start-idx end-index wrapper-str delim)
   "Wrap a range of nodes from START-IDX to END-INDEX under PARENT-PATH."
   (if delim
-      (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index delim)
-      (wrap-range-with-custom-form tree parent-path start-idx end-index wrapper-str)))
+    (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index delim)
+    (wrap-range-with-custom-form tree parent-path start-idx end-index wrapper-str)))
 
 (defun resolve-wrap-parent-and-start (path index)
   "Resolve parent path and starting index for a range wrap."
@@ -228,19 +228,19 @@
   "Wrap the node at PATH, or range of nodes from START-INDEX to END-INDEX under PARENT-PATH."
   (let ((delim (parse-delimiter-type wrapper-str)))
     (if (null end-index)
-        (perform-wrap-single tree path wrapper-str delim)
-        (multiple-value-bind (parent-path start-idx) (resolve-wrap-parent-and-start path index)
-          (perform-wrap-range tree parent-path start-idx end-index wrapper-str delim)))))
+      (perform-wrap-single tree path wrapper-str delim)
+      (multiple-value-bind (parent-path start-idx) (resolve-wrap-parent-and-start path index)
+        (perform-wrap-range tree parent-path start-idx end-index wrapper-str delim)))))
 
 (defun resolve-parent-and-index (tree target-path &optional index)
   "Resolve target parent path and index for move or copy."
   (if index
-      (values target-path index)
-      (if (null (cdr target-path))
-          (values target-path
-                  (length (structural-editing-mcp.tree:get-node-children
-                           (structural-editing-mcp.tree:get-node-at-path tree target-path))))
-          (values (butlast target-path) (lastcar target-path)))))
+    (values target-path index)
+    (if (null (cdr target-path))
+      (values target-path
+              (length (structural-editing-mcp.tree:get-node-children
+                        (structural-editing-mcp.tree:get-node-at-path tree target-path))))
+      (values (butlast target-path) (lastcar target-path)))))
 
 (defun perform-insert (tree path new-node-str &optional index)
   "Insert NEW-NODE-STR into TREE. If INDEX is provided, PATH is the parent.
@@ -254,24 +254,24 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 
 (defun format-mutation-result (message target-path tree)
   (let*
-    ((preview-path
-                    (cond
-          ((null target-path) nil)
-          ((null (cdr target-path)) target-path)
-          (t (butlast target-path))))
-     (preview-node
-                    (and
-             preview-path
-             (structural-editing-mcp.tree:get-node-at-path tree preview-path))))
+      ((preview-path
+         (cond
+           ((null target-path) nil)
+           ((null (cdr target-path)) target-path)
+           (t (butlast target-path))))
+       (preview-node
+         (and
+           preview-path
+           (structural-editing-mcp.tree:get-node-at-path tree preview-path))))
     (if
         preview-node
-        (format
-              nil
-              "~A~%~%Updated preview at ~A:~%~A"
-              message
-              preview-path
-              (format-node-preview preview-node :depth 2))
-        message)))
+      (format
+        nil
+        "~A~%~%Updated preview at ~A:~%~A"
+        message
+        preview-path
+        (format-node-preview preview-node :depth 2))
+      message)))
 
 (defun perform-search (tree target-path query)
   "Search the AST under TARGET-PATH for leaf nodes matching QUERY."
@@ -280,531 +280,531 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 (defun perform-rename (tree target-path old-name new-name)
   "Recursively rename all leaf nodes matching OLD-NAME to NEW-NAME under TARGET-PATH."
   (let
-    ((lower-old (string-downcase old-name))
-     (parsed-new
-                  (first
-               (structural-editing-mcp.tree:get-node-children
-            (structural-editing-mcp.parser:string-to-sexp new-name)))))
+      ((lower-old (string-downcase old-name))
+       (parsed-new
+         (first
+           (structural-editing-mcp.tree:get-node-children
+             (structural-editing-mcp.parser:string-to-sexp new-name)))))
     (labels
-      ((walk
-              (node)
-              (match
-            node
-            ((leaf path val)
-             (let*
-                ((str (structural-editing-mcp.parser::format-atom val))
-                 (lower-str (string-downcase str)))
+        ((walk
+             (node)
+           (match
+             node
+             ((leaf path val)
+              (let*
+                  ((str (structural-editing-mcp.parser::format-atom val))
+                   (lower-str (string-downcase str)))
                 (if
                     (string= lower-old lower-str)
-                    ;; Replace with the new parsed leaf/node
+                  ;; Replace with the new parsed leaf/node
 
-                    (match
+                  (match
                     parsed-new
                     ((node _ tag children) ` (:path ,path ,tag ,@children))
                     ((leaf _ new-val) ` (:path ,path :leaf ,new-val))
                     (_ node))
-                    node)))
-            ((node path tag children) (list* :path path tag (mapcar #'walk children)))
-            (_ node))))
+                  node)))
+             ((node path tag children) (list* :path path tag (mapcar #'walk children)))
+             (_ node))))
       (if
           target-path
-          (structural-editing-mcp.tree:update-node-at-path tree target-path #'walk)
-          (walk tree)))))
+        (structural-editing-mcp.tree:update-node-at-path tree target-path #'walk)
+        (walk tree)))))
 
 ;;; Tool Definitions
 
 
 (defun get-tools-list ()
   (list
+    (dict
+      "name"
+      "read_node"
+      "description"
+      "Inspect any node in the AST or workspace. Returns rendered code and a nested tree of child paths up to 'depth' levels. BEST PRACTICE: Always read parent forms (e.g. [0, 10]) to see the entire expression and its child paths at once—do NOT probe child indices one-by-one. Use 'ast_search' to find symbols/calls across the workspace."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
         (dict
-          "name"
-          "read_node"
-          "description"
-          "Inspect any node in the AST or workspace. Returns rendered code and a nested tree of child paths up to 'depth' levels. BEST PRACTICE: Always read parent forms (e.g. [0, 10]) to see the entire expression and its child paths at once—do NOT probe child indices one-by-one. Use 'ast_search' to find symbols/calls across the workspace."
-          "inputSchema"
+          "path"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "0-indexed array of integers specifying the AST path. Omit or pass [] for the workspace root, [0] for dialect 0 (e.g. :common-lisp), [0, 0] for file 0 in dialect 0, [0, 0, 2] for top-level form 2 in file 0, [0, 0, 3, 1] for child 1 of form 3.")
-              "depth"
-              (dict
-                "type"
-                "integer"
-                "description"
-                "Recursion depth for displaying nested children and their paths (default: 2). Use depth 1 for only immediate children, 2 or 3 to inspect deeper sub-expressions.")
-              "load_files"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "string")
-                "description"
-                "Optional list of file or directory paths to load into the workspace (e.g. ['/path/to/project'] or ['/path/to/file.lisp']). Directories are recursively scanned for Lisp source files."))))
-        (dict
-          "name"
-          "ast_modify"
-          "description"
-          "Mutate AST nodes. Actions: 'insert' (adds new_node before path, or at child index if index is given), 'overwrite' (replaces node at path with new_node), 'wrap' (wraps node at path with parens, brackets, or an enclosing form). NOTE: Automatically returns an updated preview of the enclosing parent node; separate verification reads are unnecessary."
-          "inputSchema"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "0-indexed array of integers specifying the AST path. Omit or pass [] for the workspace root, [0] for dialect 0 (e.g. :common-lisp), [0, 0] for file 0 in dialect 0, [0, 0, 2] for top-level form 2 in file 0, [0, 0, 3, 1] for child 1 of form 3.")
+          "depth"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "Target AST path (e.g. [0, 2] to target form 2 in file 0).")
-              "action"
-              (dict
-                "type"
-                "string"
-                "enum"
-                (list "insert" "overwrite" "wrap")
-                "description"
-                "The modification action to perform.")
-              "new_node"
-              (dict
-                "type"
-                "string"
-                "description"
-                "For insert/overwrite: the S-expression code string (e.g. '(defun foo () 42)'). For wrap: delimiter keyword (':paren', ':square', ':curly') or enclosing form string (e.g. '(when condition)').")
-              "index"
-              (dict
-                "type"
-                "integer"
-                "description"
-                "Optional child index for insert. If omitted when inserting, uses the last element of path.")
-              "end_index"
-              (dict
-                "type"
-                "integer"
-                "description"
-                "Optional ending child index for range wrapping with action 'wrap'."))
-            "required"
-            (list "path" "action" "new_node")))
-        (dict
-          "name"
-          "ast_remove"
-          "description"
-          "Remove or unwrap AST nodes. Actions: 'delete' (deletes the node at path), 'unwrap' (removes enclosing collection, spilling children into parent), 'promote' (replaces parent node with the node at path). NOTE: Automatically returns an updated preview."
-          "inputSchema"
+            "integer"
+            "description"
+            "Recursion depth for displaying nested children and their paths (default: 2). Use depth 1 for only immediate children, 2 or 3 to inspect deeper sub-expressions.")
+          "load_files"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "The AST path of the node to remove/unwrap/promote.")
-              "action"
-              (dict
-                "type"
-                "string"
-                "enum"
-                (list "delete" "unwrap" "promote")
-                "description"
-                "Removal action to perform."))
-            "required"
-            (list "path" "action")))
+            "array"
+            "items"
+            (dict "type" "string")
+            "description"
+            "Optional list of file or directory paths to load into the workspace (e.g. ['/path/to/project'] or ['/path/to/file.lisp']). Directories are recursively scanned for Lisp source files."))))
+    (dict
+      "name"
+      "ast_modify"
+      "description"
+      "Mutate AST nodes. Actions: 'insert' (adds new_node before path, or at child index if index is given), 'overwrite' (replaces node at path with new_node), 'wrap' (wraps node at path with parens, brackets, or an enclosing form). NOTE: Automatically returns an updated preview of the enclosing parent node; separate verification reads are unnecessary."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
         (dict
-          "name"
-          "ast_relocate"
-          "description"
-          "Move, copy, swap, merge, or split AST nodes. Actions: 'move' (moves source_path to target_path), 'copy' (duplicates source_path to target_path), 'swap' (swaps nodes at source_path and target_path), 'merge' (merges sibling collection nodes), 'split' (splits target collection node at index). NOTE: Automatically returns an updated preview."
-          "inputSchema"
+          "path"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "source_path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "Path to source node (optional for split).")
-              "target_path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "Target path for move/copy/swap/merge/split (e.g. [0, 2] places before index 2 in file 0).")
-              "action"
-              (dict
-                "type"
-                "string"
-                "enum"
-                (list "move" "copy" "swap" "merge" "split")
-                "description"
-                "Relocation action to perform.")
-              "index"
-              (dict
-                "type"
-                "integer"
-                "description"
-                "Optional target child index for move/copy/split."))
-            "required"
-            (list "target_path" "action")))
-        (dict
-          "name"
-          "ast_search"
-          "description"
-          "FAST SEARCH: Find all occurrences of a symbol, function name, or keyword across the entire workspace or under a specific path. Returns exact AST paths to each match without needing to walk the tree manually."
-          "inputSchema"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "Target AST path (e.g. [0, 2] to target form 2 in file 0).")
+          "action"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "query"
-              (dict
-                "type"
-                "string"
-                "description"
-                "The symbol or text to search for (e.g. 'make-api-call').")
-              "path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "Optional AST path to constrain the search to a specific node/file. If omitted, searches the entire workspace."))
-            "required"
-            (list "query")))
-        (dict
-          "name"
-          "ast_rename"
-          "description"
-          "Bulk rename/replace a specific leaf node symbol anywhere in the workspace or under a specific AST path."
-          "inputSchema"
+            "string"
+            "enum"
+            (list "insert" "overwrite" "wrap")
+            "description"
+            "The modification action to perform.")
+          "new_node"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "old_name"
-              (dict
-                "type"
-                "string"
-                "description"
-                "The exact symbol/string to replace (e.g. 'make-api-call').")
-              "new_name"
-              (dict
-                "type"
-                "string"
-                "description"
-                "The new symbol/string to replace it with (e.g. 'execute-api-call').")
-              "path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "Optional AST path to constrain the bulk rename to a specific subtree. If omitted, renames globally across the workspace."))
-            "required"
-            (list "old_name" "new_name")))
-        (dict
-          "name"
-          "ast_replace_pattern"
-          "description"
-          "Search the workspace for a structural Lisp pattern and replace it with a new pattern, preserving matched variables (e.g. pattern='(foo ?x ?y)', replacement='(bar ?y ?x)')."
-          "inputSchema"
+            "string"
+            "description"
+            "For insert/overwrite: the S-expression code string (e.g. '(defun foo () 42)'). For wrap: delimiter keyword (':paren', ':square', ':curly') or enclosing form string (e.g. '(when condition)').")
+          "index"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "pattern"
-              (dict
-                "type"
-                "string"
-                "description"
-                "The pattern to match. Variables start with '?' (e.g. '(make-api-call ?method ?url ?headers ?body)').")
-              "replacement"
-              (dict
-                "type"
-                "string"
-                "description"
-                "The replacement template (e.g. '(make-api-call ?url ?method :headers ?headers :body ?body)')."))
-            "required"
-            (list "pattern" "replacement")))
-        (dict
-          "name"
-          "ast_extract_variable"
-          "description"
-          "Extracts an AST node into a local `let` binding wrapped around its immediate parent."
-          "inputSchema"
+            "integer"
+            "description"
+            "Optional child index for insert. If omitted when inserting, uses the last element of path.")
+          "end_index"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "AST path of the node to extract.")
-              "variable_name"
-              (dict
-                "type"
-                "string"
-                "description"
-                "The name of the new variable to bind it to."))
-            "required"
-            (list "path" "variable_name")))
+            "integer"
+            "description"
+            "Optional ending child index for range wrapping with action 'wrap'."))
+        "required"
+        (list "path" "action" "new_node")))
+    (dict
+      "name"
+      "ast_remove"
+      "description"
+      "Remove or unwrap AST nodes. Actions: 'delete' (deletes the node at path), 'unwrap' (removes enclosing collection, spilling children into parent), 'promote' (replaces parent node with the node at path). NOTE: Automatically returns an updated preview."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
         (dict
-          "name"
-          "ast_extract_function"
-          "description"
-          "Extracts an AST node into a new top-level function definition and replaces the original node with a call to the new function."
-          "inputSchema"
+          "path"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "AST path of the node to extract into a function.")
-              "function_name"
-              (dict
-                "type"
-                "string"
-                "description"
-                "The name of the new function.")
-              "params"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "string")
-                "description"
-                "Optional list of parameter names for the new function."))
-            "required"
-            (list "path" "function_name")))
-        (dict
-          "name"
-          "ast_lint"
-          "description"
-          "Run static analysis and structural linting to identify code smells, anti-patterns, and opportunities for refactoring. Returns a list of findings with AST paths, messages, severity, and suggested quick-fixes."
-          "inputSchema"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "The AST path of the node to remove/unwrap/promote.")
+          "action"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "Optional AST path to lint a specific node or file. If omitted, lints the entire workspace.")
-              "dialect"
-              (dict
-                "type"
-                "string"
-                "description"
-                "Optional Lisp dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel). Inferred if omitted.")
-              "rules"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "string")
-                "description"
-                "Optional list of rule IDs to filter by (e.g. ['if-progn-to-when', 'single-clause-cond'])."))))
+            "string"
+            "enum"
+            (list "delete" "unwrap" "promote")
+            "description"
+            "Removal action to perform."))
+        "required"
+        (list "path" "action")))
+    (dict
+      "name"
+      "ast_relocate"
+      "description"
+      "Move, copy, swap, merge, or split AST nodes. Actions: 'move' (moves source_path to target_path), 'copy' (duplicates source_path to target_path), 'swap' (swaps nodes at source_path and target_path), 'merge' (merges sibling collection nodes), 'split' (splits target collection node at index). NOTE: Automatically returns an updated preview."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
         (dict
-          "name"
-          "ast_complexity_metrics"
-          "description"
-          "Calculate structural and cyclomatic complexity metrics for functions and top-level forms. Reports branch complexity, maximum nesting depth, AST node counts, and automated recommendations for code extraction."
-          "inputSchema"
+          "source_path"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "Optional AST path to evaluate a specific form, file, or subtree. If omitted, analyzes all forms across the workspace.")
-              "min_complexity"
-              (dict
-                "type"
-                "integer"
-                "description"
-                "Optional minimum cyclomatic complexity threshold to filter results (default: 1).")
-              "min_depth"
-              (dict
-                "type"
-                "integer"
-                "description"
-                "Optional minimum parenthetical nesting depth threshold to filter results (default: 1).")
-              "dialect"
-              (dict
-                "type"
-                "string"
-                "description"
-                "Optional dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel)."))))
-        (dict
-          "name"
-          "ast_find_duplicates"
-          "description"
-          "Find repeated expressions and structural code clones across the workspace or within a file. Groups duplicate subtrees, filters redundant child occurrences, and recommends extraction into helper functions or local variables."
-          "inputSchema"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "Path to source node (optional for split).")
+          "target_path"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "Optional AST path to constrain the duplicate search to a specific file or subtree. If omitted, searches the entire workspace.")
-              "min_nodes"
-              (dict
-                "type"
-                "integer"
-                "description"
-                "Optional minimum AST node count threshold for subtrees (default: 4).")
-              "min_depth"
-              (dict
-                "type"
-                "integer"
-                "description"
-                "Optional minimum parenthetical nesting depth threshold for subtrees (default: 2).")
-              "exact"
-              (dict
-                "type"
-                "boolean"
-                "description"
-                "If true (default), matches exact identical code. If false, matches structural clones where variables/literals can vary."))))
-        (dict
-          "name"
-          "ast_analyze_bindings"
-          "description"
-          "Analyze lexical scope and variable bindings to detect unused variables and shadowed bindings across dialects. Recommends removals via ast_remove or renamings via ast_rename."
-          "inputSchema"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "Target path for move/copy/swap/merge/split (e.g. [0, 2] places before index 2 in file 0).")
+          "action"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "Optional AST path to constrain analysis to a specific file or subtree. If omitted, analyzes all files in the workspace.")
-              "include_unused"
-              (dict
-                "type"
-                "boolean"
-                "description"
-                "If true (default), reports variables defined but never used in their lexical scope.")
-              "include_shadowed"
-              (dict
-                "type"
-                "boolean"
-                "description"
-                "If true (default), reports local variables that shadow outer bindings with the same name.")
-              "dialect"
-              (dict
-                "type"
-                "string"
-                "description"
-                "Optional dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel)."))))
-        (dict
-          "name"
-          "ast_suggest_refactorings"
-          "description"
-          "Multi-engine refactoring advisor. Aggregates and prioritizes findings from anti-pattern linting, structural complexity metrics, duplicate code clones, and variable binding analysis into an actionable refactoring plan."
-          "inputSchema"
+            "string"
+            "enum"
+            (list "move" "copy" "swap" "merge" "split")
+            "description"
+            "Relocation action to perform.")
+          "index"
           (dict
             "type"
-            "object"
-            "properties"
-            (dict
-              "path"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "integer")
-                "description"
-                "Optional AST path to evaluate a specific form, file, or subtree. If omitted, audits the entire workspace.")
-              "min_priority"
-              (dict
-                "type"
-                "string"
-                "description"
-                "Optional minimum priority filter ('high', 'medium', 'low', defaults to 'low').")
-              "categories"
-              (dict
-                "type"
-                "array"
-                "items"
-                (dict "type" "string")
-                "description"
-                "Optional list of categories to include ('lint', 'complexity', 'duplicate', 'binding').")
-              "dialect"
-              (dict
-                "type"
-                "string"
-                "description"
-                "Optional dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel)."))))
+            "integer"
+            "description"
+            "Optional target child index for move/copy/split."))
+        "required"
+        (list "target_path" "action")))
+    (dict
+      "name"
+      "ast_search"
+      "description"
+      "FAST SEARCH: Find all occurrences of a symbol, function name, or keyword across the entire workspace or under a specific path. Returns exact AST paths to each match without needing to walk the tree manually."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
         (dict
-          "name"
-          "commit_workspace"
-          "description"
-          "Persists all in-memory workspace modifications back to their respective files on disk."
-          "inputSchema"
-          (dict "type" "object" "properties" (make-hash-table)))))
+          "query"
+          (dict
+            "type"
+            "string"
+            "description"
+            "The symbol or text to search for (e.g. 'make-api-call').")
+          "path"
+          (dict
+            "type"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "Optional AST path to constrain the search to a specific node/file. If omitted, searches the entire workspace."))
+        "required"
+        (list "query")))
+    (dict
+      "name"
+      "ast_rename"
+      "description"
+      "Bulk rename/replace a specific leaf node symbol anywhere in the workspace or under a specific AST path."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
+        (dict
+          "old_name"
+          (dict
+            "type"
+            "string"
+            "description"
+            "The exact symbol/string to replace (e.g. 'make-api-call').")
+          "new_name"
+          (dict
+            "type"
+            "string"
+            "description"
+            "The new symbol/string to replace it with (e.g. 'execute-api-call').")
+          "path"
+          (dict
+            "type"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "Optional AST path to constrain the bulk rename to a specific subtree. If omitted, renames globally across the workspace."))
+        "required"
+        (list "old_name" "new_name")))
+    (dict
+      "name"
+      "ast_replace_pattern"
+      "description"
+      "Search the workspace for a structural Lisp pattern and replace it with a new pattern, preserving matched variables (e.g. pattern='(foo ?x ?y)', replacement='(bar ?y ?x)')."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
+        (dict
+          "pattern"
+          (dict
+            "type"
+            "string"
+            "description"
+            "The pattern to match. Variables start with '?' (e.g. '(make-api-call ?method ?url ?headers ?body)').")
+          "replacement"
+          (dict
+            "type"
+            "string"
+            "description"
+            "The replacement template (e.g. '(make-api-call ?url ?method :headers ?headers :body ?body)')."))
+        "required"
+        (list "pattern" "replacement")))
+    (dict
+      "name"
+      "ast_extract_variable"
+      "description"
+      "Extracts an AST node into a local `let` binding wrapped around its immediate parent."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
+        (dict
+          "path"
+          (dict
+            "type"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "AST path of the node to extract.")
+          "variable_name"
+          (dict
+            "type"
+            "string"
+            "description"
+            "The name of the new variable to bind it to."))
+        "required"
+        (list "path" "variable_name")))
+    (dict
+      "name"
+      "ast_extract_function"
+      "description"
+      "Extracts an AST node into a new top-level function definition and replaces the original node with a call to the new function."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
+        (dict
+          "path"
+          (dict
+            "type"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "AST path of the node to extract into a function.")
+          "function_name"
+          (dict
+            "type"
+            "string"
+            "description"
+            "The name of the new function.")
+          "params"
+          (dict
+            "type"
+            "array"
+            "items"
+            (dict "type" "string")
+            "description"
+            "Optional list of parameter names for the new function."))
+        "required"
+        (list "path" "function_name")))
+    (dict
+      "name"
+      "ast_lint"
+      "description"
+      "Run static analysis and structural linting to identify code smells, anti-patterns, and opportunities for refactoring. Returns a list of findings with AST paths, messages, severity, and suggested quick-fixes."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
+        (dict
+          "path"
+          (dict
+            "type"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "Optional AST path to lint a specific node or file. If omitted, lints the entire workspace.")
+          "dialect"
+          (dict
+            "type"
+            "string"
+            "description"
+            "Optional Lisp dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel). Inferred if omitted.")
+          "rules"
+          (dict
+            "type"
+            "array"
+            "items"
+            (dict "type" "string")
+            "description"
+            "Optional list of rule IDs to filter by (e.g. ['if-progn-to-when', 'single-clause-cond'])."))))
+    (dict
+      "name"
+      "ast_complexity_metrics"
+      "description"
+      "Calculate structural and cyclomatic complexity metrics for functions and top-level forms. Reports branch complexity, maximum nesting depth, AST node counts, and automated recommendations for code extraction."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
+        (dict
+          "path"
+          (dict
+            "type"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "Optional AST path to evaluate a specific form, file, or subtree. If omitted, analyzes all forms across the workspace.")
+          "min_complexity"
+          (dict
+            "type"
+            "integer"
+            "description"
+            "Optional minimum cyclomatic complexity threshold to filter results (default: 1).")
+          "min_depth"
+          (dict
+            "type"
+            "integer"
+            "description"
+            "Optional minimum parenthetical nesting depth threshold to filter results (default: 1).")
+          "dialect"
+          (dict
+            "type"
+            "string"
+            "description"
+            "Optional dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel)."))))
+    (dict
+      "name"
+      "ast_find_duplicates"
+      "description"
+      "Find repeated expressions and structural code clones across the workspace or within a file. Groups duplicate subtrees, filters redundant child occurrences, and recommends extraction into helper functions or local variables."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
+        (dict
+          "path"
+          (dict
+            "type"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "Optional AST path to constrain the duplicate search to a specific file or subtree. If omitted, searches the entire workspace.")
+          "min_nodes"
+          (dict
+            "type"
+            "integer"
+            "description"
+            "Optional minimum AST node count threshold for subtrees (default: 4).")
+          "min_depth"
+          (dict
+            "type"
+            "integer"
+            "description"
+            "Optional minimum parenthetical nesting depth threshold for subtrees (default: 2).")
+          "exact"
+          (dict
+            "type"
+            "boolean"
+            "description"
+            "If true (default), matches exact identical code. If false, matches structural clones where variables/literals can vary."))))
+    (dict
+      "name"
+      "ast_analyze_bindings"
+      "description"
+      "Analyze lexical scope and variable bindings to detect unused variables and shadowed bindings across dialects. Recommends removals via ast_remove or renamings via ast_rename."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
+        (dict
+          "path"
+          (dict
+            "type"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "Optional AST path to constrain analysis to a specific file or subtree. If omitted, analyzes all files in the workspace.")
+          "include_unused"
+          (dict
+            "type"
+            "boolean"
+            "description"
+            "If true (default), reports variables defined but never used in their lexical scope.")
+          "include_shadowed"
+          (dict
+            "type"
+            "boolean"
+            "description"
+            "If true (default), reports local variables that shadow outer bindings with the same name.")
+          "dialect"
+          (dict
+            "type"
+            "string"
+            "description"
+            "Optional dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel)."))))
+    (dict
+      "name"
+      "ast_suggest_refactorings"
+      "description"
+      "Multi-engine refactoring advisor. Aggregates and prioritizes findings from anti-pattern linting, structural complexity metrics, duplicate code clones, and variable binding analysis into an actionable refactoring plan."
+      "inputSchema"
+      (dict
+        "type"
+        "object"
+        "properties"
+        (dict
+          "path"
+          (dict
+            "type"
+            "array"
+            "items"
+            (dict "type" "integer")
+            "description"
+            "Optional AST path to evaluate a specific form, file, or subtree. If omitted, audits the entire workspace.")
+          "min_priority"
+          (dict
+            "type"
+            "string"
+            "description"
+            "Optional minimum priority filter ('high', 'medium', 'low', defaults to 'low').")
+          "categories"
+          (dict
+            "type"
+            "array"
+            "items"
+            (dict "type" "string")
+            "description"
+            "Optional list of categories to include ('lint', 'complexity', 'duplicate', 'binding').")
+          "dialect"
+          (dict
+            "type"
+            "string"
+            "description"
+            "Optional dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel)."))))
+    (dict
+      "name"
+      "commit_workspace"
+      "description"
+      "Persists all in-memory workspace modifications back to their respective files on disk."
+      "inputSchema"
+      (dict "type" "object" "properties" (make-hash-table)))))
 
 ;;; Handlers
 
@@ -812,14 +812,14 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 (defun handle-initialize (id params)
   (declare (ignore params))
   (send-result
-   id
-   (dict
-    "protocolVersion"
-    "2024-11-05"
-    "capabilities"
-    (dict "tools" (make-hash-table))
-    "serverInfo"
-    (dict "name" "structural-editing-mcp" "version" +version+))))
+    id
+    (dict
+      "protocolVersion"
+      "2024-11-05"
+      "capabilities"
+      (dict "tools" (make-hash-table))
+      "serverInfo"
+      (dict "name" "structural-editing-mcp" "version" +version+))))
 
 (defun handle-tools-list (id params)
   (declare (ignore params))
@@ -839,8 +839,8 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
     (structural-editing-mcp.workspace:init-workspace))
   (let* ((depth (or (gethash "depth" args) 2))
          (node (structural-editing-mcp.tree:resolve-tree-scope
-                structural-editing-mcp.workspace:*workspace-tree*
-                path)))
+                 structural-editing-mcp.workspace:*workspace-tree*
+                 path)))
     (format-node-preview node :depth depth)))
 
 (defun handle-tool-ast-modify (path args)
@@ -853,16 +853,16 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
     (setf structural-editing-mcp.workspace:*workspace-tree*
           (cond
             ((equal action "insert")
-             (perform-insert tree path new-node-str index))
+              (perform-insert tree path new-node-str index))
             ((equal action "overwrite")
-             (structural-editing-mcp.edit:overwrite-expression tree path new-node-str))
+              (structural-editing-mcp.edit:overwrite-expression tree path new-node-str))
             ((equal action "wrap")
-             (perform-wrap tree path new-node-str end-index index))
+              (perform-wrap tree path new-node-str end-index index))
             (t (error "Unknown action: ~A" action))))
     (format-mutation-result
-     (format nil "Successfully executed ~A at ~A" action path)
-     path
-     structural-editing-mcp.workspace:*workspace-tree*)))
+      (format nil "Successfully executed ~A at ~A" action path)
+      path
+      structural-editing-mcp.workspace:*workspace-tree*)))
 
 (defun handle-tool-ast-remove (path args)
   "Handle the ast_remove tool execution."
@@ -871,16 +871,16 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
     (setf structural-editing-mcp.workspace:*workspace-tree*
           (cond
             ((equal action "delete")
-             (structural-editing-mcp.edit:delete-node tree path))
+              (structural-editing-mcp.edit:delete-node tree path))
             ((equal action "unwrap")
-             (structural-editing-mcp.edit:unwrap-node tree path))
+              (structural-editing-mcp.edit:unwrap-node tree path))
             ((equal action "promote")
-             (structural-editing-mcp.edit:promote-node tree path))
+              (structural-editing-mcp.edit:promote-node tree path))
             (t (error "Unknown action: ~A" action))))
     (format-mutation-result
-     (format nil "Successfully executed ~A at ~A" action path)
-     path
-     structural-editing-mcp.workspace:*workspace-tree*)))
+      (format nil "Successfully executed ~A at ~A" action path)
+      path
+      structural-editing-mcp.workspace:*workspace-tree*)))
 
 (defun resolve-split-index (tgt index)
   "Resolve split index from INDEX argument or last element of TGT."
@@ -890,17 +890,17 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   "Dispatch relocation mutation and return the updated tree."
   (cond
     ((or (equal action "move") (equal action "copy"))
-     (multiple-value-bind (tgt-parent tgt-idx)
-         (resolve-parent-and-index tree tgt index)
-       (if (equal action "move")
-           (structural-editing-mcp.edit:move-node tree src tgt-parent tgt-idx)
-           (structural-editing-mcp.edit:copy-node tree src tgt-parent tgt-idx))))
+      (multiple-value-bind (tgt-parent tgt-idx)
+                           (resolve-parent-and-index tree tgt index)
+        (if (equal action "move")
+          (structural-editing-mcp.edit:move-node tree src tgt-parent tgt-idx)
+          (structural-editing-mcp.edit:copy-node tree src tgt-parent tgt-idx))))
     ((equal action "swap")
-     (structural-editing-mcp.edit:swap-nodes tree src tgt))
+      (structural-editing-mcp.edit:swap-nodes tree src tgt))
     ((equal action "merge")
-     (structural-editing-mcp.edit:merge-nodes tree src tgt))
+      (structural-editing-mcp.edit:merge-nodes tree src tgt))
     ((equal action "split")
-     (structural-editing-mcp.edit:split-node tree tgt (resolve-split-index tgt index)))
+      (structural-editing-mcp.edit:split-node tree tgt (resolve-split-index tgt index)))
     (t (error "Unknown action: ~A" action))))
 
 (defun handle-tool-ast-relocate (args)
@@ -912,43 +912,43 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
     (setf structural-editing-mcp.workspace:*workspace-tree*
           (perform-relocate-action action src tgt index structural-editing-mcp.workspace:*workspace-tree*))
     (format-mutation-result
-     (format nil "Successfully executed ~A from ~A to ~A" action src tgt)
-     tgt
-     structural-editing-mcp.workspace:*workspace-tree*)))
+      (format nil "Successfully executed ~A from ~A to ~A" action src tgt)
+      tgt
+      structural-editing-mcp.workspace:*workspace-tree*)))
 
 (defun handle-tool-ast-refactor (name path args)
   "Handle ast_search, ast_rename, ast_replace_pattern, ast_extract_variable, ast_extract_function."
   (let ((tree structural-editing-mcp.workspace:*workspace-tree*))
     (cond
       ((equal name "ast_search")
-       (let* ((query (gethash "query" args))
-              (results (perform-search tree path query)))
-         (if results
-             (format nil "Found ~A matches. Paths:~%~{~A~^~%~}" (length results) results)
-             (format nil "No matches found for '~A' at path ~A" query path))))
+        (let* ((query (gethash "query" args))
+               (results (perform-search tree path query)))
+          (if results
+            (format nil "Found ~A matches. Paths:~%~{~A~^~%~}" (length results) results)
+            (format nil "No matches found for '~A' at path ~A" query path))))
       ((equal name "ast_rename")
-       (let ((old (gethash "old_name" args))
-             (new (gethash "new_name" args)))
-         (setf structural-editing-mcp.workspace:*workspace-tree*
-               (perform-rename tree path old new))
-         (format nil "Successfully renamed all occurrences of '~A' to '~A'." old new)))
+        (let ((old (gethash "old_name" args))
+              (new (gethash "new_name" args)))
+          (setf structural-editing-mcp.workspace:*workspace-tree*
+                (perform-rename tree path old new))
+          (format nil "Successfully renamed all occurrences of '~A' to '~A'." old new)))
       ((equal name "ast_replace_pattern")
-       (let ((pat (gethash "pattern" args))
-             (rep (gethash "replacement" args)))
-         (setf structural-editing-mcp.workspace:*workspace-tree*
-               (structural-editing-mcp.refactor:replace-pattern tree pat rep))
-         (format nil "Successfully executed pattern replacement across workspace.")))
+        (let ((pat (gethash "pattern" args))
+              (rep (gethash "replacement" args)))
+          (setf structural-editing-mcp.workspace:*workspace-tree*
+                (structural-editing-mcp.refactor:replace-pattern tree pat rep))
+          (format nil "Successfully executed pattern replacement across workspace.")))
       ((equal name "ast_extract_variable")
-       (let ((var-name (gethash "variable_name" args)))
-         (setf structural-editing-mcp.workspace:*workspace-tree*
-               (structural-editing-mcp.refactor:extract-variable tree path var-name))
-         (format nil "Successfully extracted node at ~A into variable '~A'." path var-name)))
+        (let ((var-name (gethash "variable_name" args)))
+          (setf structural-editing-mcp.workspace:*workspace-tree*
+                (structural-editing-mcp.refactor:extract-variable tree path var-name))
+          (format nil "Successfully extracted node at ~A into variable '~A'." path var-name)))
       ((equal name "ast_extract_function")
-       (let ((func-name (gethash "function_name" args))
-             (fn-params (to-list (gethash "params" args))))
-         (setf structural-editing-mcp.workspace:*workspace-tree*
-               (structural-editing-mcp.refactor:extract-function tree path func-name :params fn-params))
-         (format nil "Successfully extracted node at ~A into function '~A'." path func-name))))))
+        (let ((func-name (gethash "function_name" args))
+              (fn-params (to-list (gethash "params" args))))
+          (setf structural-editing-mcp.workspace:*workspace-tree*
+                (structural-editing-mcp.refactor:extract-function tree path func-name :params fn-params))
+          (format nil "Successfully extracted node at ~A into function '~A'." path func-name))))))
 
 (defun run-tool-lint (tree path dialect args)
   "Run AST linter and return formatted findings."
@@ -961,8 +961,8 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   (let* ((min-cc (or (gethash "min_complexity" args) 1))
          (min-depth (or (gethash "min_depth" args) 1))
          (results (structural-editing-mcp.analysis:analyze-complexity tree :path path :dialect dialect
-                                                                         :min-complexity min-cc
-                                                                         :min-depth min-depth)))
+                                                                      :min-complexity min-cc
+                                                                      :min-depth min-depth)))
     (structural-editing-mcp.analysis:format-complexity-report results)))
 
 (defun run-tool-duplicates (tree path args)
@@ -971,9 +971,9 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
          (min-depth (or (gethash "min_depth" args) 2))
          (exact (let ((val (gethash "exact" args))) (if (null val) t val)))
          (results (structural-editing-mcp.analysis:find-duplicate-subtrees tree :path path
-                                                                               :min-nodes min-nodes
-                                                                               :min-depth min-depth
-                                                                               :exact exact)))
+                                                                           :min-nodes min-nodes
+                                                                           :min-depth min-depth
+                                                                           :exact exact)))
     (structural-editing-mcp.analysis:format-duplicate-report results)))
 
 (defun run-tool-bindings (tree path dialect args)
@@ -981,9 +981,9 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   (let* ((inc-unused (let ((val (gethash "include_unused" args))) (if (null val) t val)))
          (inc-shadowed (let ((val (gethash "include_shadowed" args))) (if (null val) t val)))
          (findings (structural-editing-mcp.analysis:analyze-bindings tree :path path
-                                                                         :include-unused inc-unused
-                                                                         :include-shadowed inc-shadowed
-                                                                         :dialect dialect)))
+                                                                     :include-unused inc-unused
+                                                                     :include-shadowed inc-shadowed
+                                                                     :dialect dialect)))
     (structural-editing-mcp.analysis:format-binding-report findings)))
 
 (defun run-tool-suggestions (tree path dialect args)
@@ -991,9 +991,9 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   (let* ((min-p (or (gethash "min_priority" args) "low"))
          (cats (to-list (gethash "categories" args)))
          (suggestions (structural-editing-mcp.analysis:suggest-refactorings tree :path path
-                                                                                :min-priority min-p
-                                                                                :categories cats
-                                                                                :dialect dialect)))
+                                                                            :min-priority min-p
+                                                                            :categories cats
+                                                                            :dialect dialect)))
     (structural-editing-mcp.analysis:format-refactoring-suggestions suggestions)))
 
 (defun handle-tool-ast-analysis (name path args dialect)
@@ -1002,38 +1002,38 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
         (eff-dialect (or dialect structural-editing-mcp.parser:*current-dialect*)))
     (cond
       ((equal name "ast_lint")
-       (run-tool-lint tree path dialect args))
+        (run-tool-lint tree path dialect args))
       ((equal name "ast_complexity_metrics")
-       (run-tool-complexity tree path dialect args))
+        (run-tool-complexity tree path dialect args))
       ((equal name "ast_find_duplicates")
-       (run-tool-duplicates tree path args))
+        (run-tool-duplicates tree path args))
       ((equal name "ast_analyze_bindings")
-       (run-tool-bindings tree path eff-dialect args))
+        (run-tool-bindings tree path eff-dialect args))
       ((equal name "ast_suggest_refactorings")
-       (run-tool-suggestions tree path eff-dialect args)))))
+        (run-tool-suggestions tree path eff-dialect args)))))
 
 (defun dispatch-tool-call (name path args dialect)
   "Dispatch tool invocation by tool NAME to appropriate handler."
   (cond
     ((equal name "read_node")
-     (handle-tool-read-node path args))
+      (handle-tool-read-node path args))
     ((equal name "ast_modify")
-     (handle-tool-ast-modify path args))
+      (handle-tool-ast-modify path args))
     ((equal name "ast_remove")
-     (handle-tool-ast-remove path args))
+      (handle-tool-ast-remove path args))
     ((equal name "ast_relocate")
-     (handle-tool-ast-relocate args))
+      (handle-tool-ast-relocate args))
     ((member name '("ast_search" "ast_rename" "ast_replace_pattern"
                     "ast_extract_variable" "ast_extract_function") :test #'string=)
-     (handle-tool-ast-refactor name path args))
+      (handle-tool-ast-refactor name path args))
     ((member name '("ast_lint" "ast_complexity_metrics" "ast_find_duplicates"
                     "ast_analyze_bindings" "ast_suggest_refactorings") :test #'string=)
-     (handle-tool-ast-analysis name path args dialect))
+      (handle-tool-ast-analysis name path args dialect))
     ((equal name "commit_workspace")
-     (structural-editing-mcp.workspace:write-workspace)
-     (format nil "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))
+      (structural-editing-mcp.workspace:write-workspace)
+      (format nil "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))
     (t
-     (error "Tool not found: ~A" name))))
+      (error "Tool not found: ~A" name))))
 
 (defun handle-tools-call (id params)
   (let* ((name (gethash "name" params))
@@ -1050,17 +1050,17 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 (defun handle-message (msg)
   "Dispatch a parsed JSON-RPC message."
   (let
-    ((jsonrpc (gethash "jsonrpc" msg))
-     (id (gethash "id" msg))
-     (method (gethash "method" msg))
-     (params (gethash "params" msg)))
+      ((jsonrpc (gethash "jsonrpc" msg))
+       (id (gethash "id" msg))
+       (method (gethash "method" msg))
+       (params (gethash "params" msg)))
     (unless (equal jsonrpc "2.0") (return-from handle-message nil))
     (cond
       ((equal method "initialize") (handle-initialize id params))
       ((equal method "notifications/initialized")
-       ;; No response needed
+        ;; No response needed
 
-       nil)
+        nil)
       ((equal method "tools/list") (handle-tools-list id params))
       ((equal method "tools/call") (handle-tools-call id params))
       (id (send-error id -32601 (format nil "Method not found: ~A" method))))))
@@ -1069,16 +1069,16 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   "Start the MCP server loop over stdin/stdout."
   (structural-editing-mcp.workspace:init-workspace)
   (let
-    ((yason:*parse-json-arrays-as-vectors* nil))
+      ((yason:*parse-json-arrays-as-vectors* nil))
     (loop
-          (let
-        ((line (read-line *standard-input* nil :eof)))
+      (let
+          ((line (read-line *standard-input* nil :eof)))
         (when (eq line :eof) (return))
         (when
-              (plusp (length line))
-              (handler-case
-                        (let ((msg (yason:parse line))) (handle-message msg))
-                        (error
-                   (e)
-                   (format *error-output* "Parse error: ~A~%" e)
-                   (force-output *error-output*))))))))
+            (plusp (length line))
+          (handler-case
+              (let ((msg (yason:parse line))) (handle-message msg))
+            (error
+                (e)
+              (format *error-output* "Parse error: ~A~%" e)
+              (force-output *error-output*))))))))

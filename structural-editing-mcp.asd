@@ -2,7 +2,7 @@
   :version (:read-file-line "version.txt")
   :author "Cian Hughes"
   :license "LGPLv3"
-  :depends-on (:trivia :alexandria :serapeum :yason)
+  :depends-on (:trivia :alexandria :serapeum :yason :cl-indentify)
   :pathname "src"
   :components ((:file "conditions")
                (:file "version")
@@ -19,7 +19,7 @@
 
 (defsystem "structural-editing-mcp/tests"
   :depends-on (:structural-editing-mcp
-               :rove)
+                :rove)
   :pathname "test"
   :components ((:file "package")
                (:file "version")

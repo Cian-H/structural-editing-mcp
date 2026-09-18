@@ -1,17 +1,17 @@
 (uiop:define-package :structural-editing-mcp.version
-  (:use :cl)
-  (:export :+version+
-           :get-version)
-  (:documentation "Version information for structural-editing-mcp."))
+                     (:use :cl)
+                     (:export :+version+
+                              :get-version)
+                     (:documentation "Version information for structural-editing-mcp."))
 
 (in-package :structural-editing-mcp.version)
 
 (defparameter +version+
   #.(or (let* ((this-file (or *compile-file-truename* *load-truename* *load-pathname*))
                (dir (if this-file
-                        (uiop:pathname-parent-directory-pathname
-                         (uiop:pathname-directory-pathname this-file))
-                        (uiop:getcwd)))
+                      (uiop:pathname-parent-directory-pathname
+                        (uiop:pathname-directory-pathname this-file))
+                      (uiop:getcwd)))
                (file (merge-pathnames "version.txt" dir)))
           (when (probe-file file)
             (string-trim '(#\Space #\Tab #\Newline #\Return)

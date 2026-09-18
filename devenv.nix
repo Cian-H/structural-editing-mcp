@@ -2,10 +2,11 @@
   packages = [
     (pkgs.sbcl.withPackages (ps:
       with ps; [
-        trivia
         alexandria
-        serapeum
+        cl-indentify
         rove
+        serapeum
+        trivia
         yason
       ]))
   ];

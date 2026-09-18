@@ -47,19 +47,19 @@
   "List of supported Lisp dialect keywords.")
 
 (defvar *workspace-tree* nil
-  "The global AST representing the entire loaded workspace.")
+                         "The global AST representing the entire loaded workspace.")
 
 (defvar *file-registry* (make-hash-table :test 'equal)
-  "Maps numerical file IDs and tree paths to canonical file paths.")
+                        "Maps numerical file IDs and tree paths to canonical file paths.")
 
 (defvar *file-clean-state* (make-hash-table :test 'equal)
-  "Maps canonical filepaths to the clean (unmodified) parsed AST.")
+                           "Maps canonical filepaths to the clean (unmodified) parsed AST.")
 
 (defvar *file-clean-sources* (make-hash-table :test 'equal)
-  "Maps canonical filepaths to a vector of raw top-level source slices.")
+                             "Maps canonical filepaths to a vector of raw top-level source slices.")
 
 (defvar *next-file-id* 0
-  "Monotonically increasing counter for numerical file IDs.")
+                       "Monotonically increasing counter for numerical file IDs.")
 
 (defun init-workspace ()
   "Initialize an empty workspace."
@@ -117,9 +117,9 @@ Non-Lisp files, ignored directories, and non-existent paths return NIL."
     (cond
       ((null p) nil)
       ((uiop:directory-pathname-p p)
-       (scan-directory-lisp-files p))
+        (scan-directory-lisp-files p))
       ((lisp-file-p p)
-       (list (namestring (truename p))))
+        (list (namestring (truename p))))
       (t nil))))
 
 (defun file-loaded-p (filepath)
@@ -148,8 +148,8 @@ Returns the newly assigned numerical file ID."
          (dialect-pos (position dialect workspace-children :key #'get-node-tag))
          (d-idx (or dialect-pos (length workspace-children)))
          (dialect-node (if dialect-pos
-                           (nth dialect-pos workspace-children)
-                           `(:path () ,dialect)))
+                         (nth dialect-pos workspace-children)
+                         `(:path () ,dialect)))
          (dialect-files (get-node-children dialect-node))
          (f-idx (length dialect-files))
          (updated-dialect-node `(:path () ,dialect ,@dialect-files ,parsed-file-node)))
@@ -157,10 +157,10 @@ Returns the newly assigned numerical file ID."
     (setf (gethash new-id *file-registry*) canonical-path)
     (setf (gethash (list d-idx f-idx) *file-registry*) canonical-path)
     (if dialect-pos
-        (let ((new-children (copy-list workspace-children)))
-          (setf (nth dialect-pos new-children) updated-dialect-node)
-          (setf *workspace-tree* `(:path () :workspace ,@new-children)))
-        (setf *workspace-tree* `(:path () :workspace ,@workspace-children ,updated-dialect-node)))
+      (let ((new-children (copy-list workspace-children)))
+        (setf (nth dialect-pos new-children) updated-dialect-node)
+        (setf *workspace-tree* `(:path () :workspace ,@new-children)))
+      (setf *workspace-tree* `(:path () :workspace ,@workspace-children ,updated-dialect-node)))
     (setf *workspace-tree* (reindex-paths *workspace-tree*))
     new-id))
 
@@ -176,7 +176,7 @@ If the file is already loaded, returns its existing ID. Gracefully returns NIL o
     (handler-case
         (let ((text (uiop:read-file-string canonical-path)))
           (multiple-value-bind (parsed-file-node toplevel-sources)
-              (string-to-sexp text :dialect dialect)
+                               (string-to-sexp text :dialect dialect)
             (setf (gethash canonical-path *file-clean-sources*) toplevel-sources)
             (let ((id (insert-file-into-workspace parsed-file-node canonical-path dialect)))
               (let* ((coords (loop for k being the hash-keys of *file-registry*
@@ -189,7 +189,7 @@ If the file is already loaded, returns its existing ID. Gracefully returns NIL o
               id)))
       (error (c)
         (format *error-output* "~&[Workspace] Warning: failed to load ~A: ~A~%" filepath c)
-        nil))))
+       nil))))
 
 (defun load-into-workspace (paths)
   "Given a list of file/directory paths (or a single path), expand directories,
@@ -220,12 +220,12 @@ Returns a list of loaded numerical file IDs."
       (let ((clean-node (gethash filepath *file-clean-state*))
             (clean-sources (gethash filepath *file-clean-sources*)))
         (uiop:with-output-file (out filepath :if-exists :supersede :if-does-not-exist :create)
-          (if (and clean-node clean-sources)
-              (structural-editing-mcp.parser:print-file-with-clean-sources file-node clean-node clean-sources out dialect)
-              (print-sexp file-node out 0 :dialect dialect)))
+                               (if (and clean-node clean-sources)
+                                 (structural-editing-mcp.parser:print-file-with-clean-sources file-node clean-node clean-sources out dialect)
+                                 (print-sexp file-node out 0 :dialect dialect)))
         (let ((written-text (uiop:read-file-string filepath)))
           (multiple-value-bind (re-parsed new-sources)
-              (string-to-sexp written-text :dialect dialect)
+                               (string-to-sexp written-text :dialect dialect)
             (declare (ignore re-parsed))
             (setf (gethash filepath *file-clean-state*) (copy-tree file-node))
             (setf (gethash filepath *file-clean-sources*) new-sources)))))))
@@ -238,9 +238,9 @@ Returns a list of loaded numerical file IDs."
     (let ((child-tag (get-node-tag child)))
       (cond
         ((member child-tag *known-dialects*)
-         (dolist (file-node (get-node-children child))
-           (unless (file-clean-p file-node)
-             (write-file-node-to-disk file-node child-tag))))
+          (dolist (file-node (get-node-children child))
+            (unless (file-clean-p file-node)
+              (write-file-node-to-disk file-node child-tag))))
         ((eq child-tag :file)
-         (unless (file-clean-p child (first (get-node-path child)))
-           (write-file-node-to-disk child :common-lisp (first (get-node-path child)))))))))
+          (unless (file-clean-p child (first (get-node-path child)))
+            (write-file-node-to-disk child :common-lisp (first (get-node-path child)))))))))
