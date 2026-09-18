@@ -728,56 +728,59 @@ Base complexity is 1, with +1 for each conditional branch, short-circuit point, 
        :form-count node-count
        :recommendations recs))))
 
+(defun collect-file-forms (file-node f-path)
+  "Collect all (form-node . form-path) pairs under FILE-NODE."
+  (loop for form in (get-node-children file-node)
+        for form-idx from 0
+        for form-path = (or (get-node-path form) (append f-path (list form-idx)))
+        collect (cons form form-path)))
+
+(defun collect-dialect-forms (dialect-node d-path)
+  "Collect all (form-node . form-path) pairs under DIALECT-NODE."
+  (loop for file-child in (get-node-children dialect-node)
+        for f-idx from 0
+        for f-path = (or (get-node-path file-child) (append d-path (list f-idx)))
+        append (collect-file-forms file-child f-path)))
+
 (defun collect-top-level-forms (node base-path)
   "Collect all (form-node . path) pairs from NODE (workspace, dialect, file, or single form)."
-  (let ((tag (get-node-tag node))
-        (results '()))
-    (labels ((collect-file (file-node f-path)
-               (loop for form in (get-node-children file-node)
-                     for form-idx from 0
-                     for form-path = (or (get-node-path form) (append f-path (list form-idx)))
-                     do (push (cons form form-path) results)))
-             (collect-dialect (dialect-node d-path)
-               (loop for file-child in (get-node-children dialect-node)
-                     for f-idx from 0
-                     for f-path = (or (get-node-path file-child) (append d-path (list f-idx)))
-                     do (collect-file file-child f-path))))
-      (cond
-        ((eq tag :workspace)
-         (loop for dialect-child in (get-node-children node)
-               for d-idx from 0
-               for d-path = (or (get-node-path dialect-child) (append base-path (list d-idx)))
-               do (collect-dialect dialect-child d-path)))
-        ((supported-dialect-p tag)
-         (collect-dialect node base-path))
-        ((eq tag :file)
-         (collect-file node base-path))
-        (t
-         (push (cons node (or (get-node-path node) base-path)) results)))
-      (nreverse results))))
+  (let ((tag (get-node-tag node)))
+    (cond
+      ((eq tag :workspace)
+       (loop for dialect-child in (get-node-children node)
+             for d-idx from 0
+             for d-path = (or (get-node-path dialect-child) (append base-path (list d-idx)))
+             append (collect-dialect-forms dialect-child d-path)))
+      ((supported-dialect-p tag)
+       (collect-dialect-forms node base-path))
+      ((eq tag :file)
+       (collect-file-forms node base-path))
+      (t
+       (list (cons node (or (get-node-path node) base-path)))))))
+
+(defun compare-complexity-metrics (a b)
+  "Sort comparator ordering COMPLEXITY-METRICS by cyclomatic complexity then max nesting depth."
+  (let ((ca (complexity-metrics-cyclomatic-complexity a))
+        (cb (complexity-metrics-cyclomatic-complexity b)))
+    (if (= ca cb)
+        (> (complexity-metrics-max-nesting-depth a)
+           (complexity-metrics-max-nesting-depth b))
+        (> ca cb))))
 
 (defun analyze-complexity (tree &key path dialect (min-complexity 1) (min-depth 1))
   "Analyze structural complexity for forms in TREE (or under PATH).
 Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
   (let* ((start-node (resolve-tree-scope tree path))
-         (forms-with-paths (when start-node
-                               (collect-top-level-forms start-node path)))
+         (forms-with-paths (when start-node (collect-top-level-forms start-node path)))
+         (min-cc (or min-complexity 1))
+         (min-d (or min-depth 1))
          (results '()))
     (dolist (pair forms-with-paths)
-      (let* ((form-node (car pair))
-             (form-path (cdr pair))
-             (metrics (analyze-form-complexity form-node :path form-path :dialect dialect)))
-        (when (and (>= (complexity-metrics-cyclomatic-complexity metrics) (or min-complexity 1))
-                   (>= (complexity-metrics-max-nesting-depth metrics) (or min-depth 1)))
+      (let ((metrics (analyze-form-complexity (car pair) :path (cdr pair) :dialect dialect)))
+        (when (and (>= (complexity-metrics-cyclomatic-complexity metrics) min-cc)
+                   (>= (complexity-metrics-max-nesting-depth metrics) min-d))
           (push metrics results))))
-    (sort results
-          (lambda (a b)
-            (let ((ca (complexity-metrics-cyclomatic-complexity a))
-                  (cb (complexity-metrics-cyclomatic-complexity b)))
-              (if (= ca cb)
-                  (> (complexity-metrics-max-nesting-depth a)
-                     (complexity-metrics-max-nesting-depth b))
-                  (> ca cb)))))))
+    (sort results #'compare-complexity-metrics)))
 
 (defun format-complexity-report (results)
   "Format a list of COMPLEXITY-METRICS instances into a readable diagnostic report."
