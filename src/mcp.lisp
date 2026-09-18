@@ -901,6 +901,11 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   (declare (ignore params))
   (send-result id (dict "tools" (get-tools-list))))
 
+(defun parse-dialect-arg (dialect-str)
+  "Parse an optional dialect string (e.g. \":clojure\" or \"common-lisp\") into a keyword."
+  (when (and dialect-str (plusp (length dialect-str)))
+    (intern (string-upcase (string-left-trim ":" dialect-str)) :keyword)))
+
 (defun handle-tools-call (id params)
   (let
     ((name (gethash "name" params)) (args (gethash "arguments" params)))
@@ -1102,14 +1107,14 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                (let
                   ((path (to-list (gethash "path" args)))
                    (func-name (gethash "function_name" args))
-                   (params (to-list (gethash "params" args))))
+                   (fn-params (to-list (gethash "params" args))))
                   (setf
                         structural-editing-mcp.workspace:*workspace-tree*
                         (structural-editing-mcp.refactor:extract-function
                       structural-editing-mcp.workspace:*workspace-tree*
                       path
                       func-name
-                      :params params))
+                      :params fn-params))
                   (format
                           nil
                           "Successfully extracted node at ~A into function '~A'."
@@ -1117,9 +1122,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                           func-name)))
               ((equal name "ast_lint")
                (let* ((path (to-list (gethash "path" args)))
-                      (dialect-str (gethash "dialect" args))
-                      (dialect (when (and dialect-str (plusp (length dialect-str)))
-                                 (intern (string-upcase (string-left-trim ":" dialect-str)) :keyword)))
+                      (dialect (parse-dialect-arg (gethash "dialect" args)))
                       (rules (to-list (gethash "rules" args)))
                       (findings (structural-editing-mcp.analysis:lint-ast
                                  structural-editing-mcp.workspace:*workspace-tree*
@@ -1131,9 +1134,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                (let* ((path (to-list (gethash "path" args)))
                       (min-cc (or (gethash "min_complexity" args) 1))
                       (min-depth (or (gethash "min_depth" args) 1))
-                      (dialect-str (gethash "dialect" args))
-                      (dialect (when (and dialect-str (plusp (length dialect-str)))
-                                 (intern (string-upcase (string-left-trim ":" dialect-str)) :keyword)))
+                      (dialect (parse-dialect-arg (gethash "dialect" args)))
                       (results (structural-editing-mcp.analysis:analyze-complexity
                                 structural-editing-mcp.workspace:*workspace-tree*
                                 :path path
@@ -1160,9 +1161,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                                     (if (null val) t val)))
                       (inc-shadowed (let ((val (gethash "include_shadowed" args)))
                                       (if (null val) t val)))
-                      (dialect-str (gethash "dialect" args))
-                      (dialect (when (and dialect-str (plusp (length dialect-str)))
-                                 (intern (string-upcase (string-left-trim ":" dialect-str)) :keyword)))
+                      (dialect (parse-dialect-arg (gethash "dialect" args)))
                       (findings (structural-editing-mcp.analysis:analyze-bindings
                                  structural-editing-mcp.workspace:*workspace-tree*
                                  :path path
@@ -1174,9 +1173,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                (let* ((path (to-list (gethash "path" args)))
                       (min-p (or (gethash "min_priority" args) "low"))
                       (cats (to-list (gethash "categories" args)))
-                      (dialect-str (gethash "dialect" args))
-                      (dialect (when (and dialect-str (plusp (length dialect-str)))
-                                 (intern (string-upcase (string-left-trim ":" dialect-str)) :keyword)))
+                      (dialect (parse-dialect-arg (gethash "dialect" args)))
                       (suggestions (structural-editing-mcp.analysis:suggest-refactorings
                                     structural-editing-mcp.workspace:*workspace-tree*
                                     :path path
