@@ -52,17 +52,7 @@
 
 (defun delete-node (tree path)
   "Delete the node at PATH."
-  (if (null path)
-      nil
-      (let ((idx (lastcar path)))
-        (update-node-at-path
-          tree
-          (butlast path)
-          (lambda (parent)
-            (match parent
-              ((node p tag children)
-               `(:path ,p ,tag ,@(take idx children) ,@(drop (1+ idx) children)))
-              (_ parent)))))))
+  (nth-value 0 (pop-node tree path)))
 
 (defun overwrite-node (tree path node)
   "Replace the node at PATH with NODE."
