@@ -340,6 +340,12 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
            :severity :style
            :suggested-fix replacement))))))
 
+(defun default-cond-clause-p (test-node dialect)
+  "Return T if TEST-NODE is a default cond clause branch (e.g. t, :else, otherwise)."
+  (or (leaf-true-p test-node dialect)
+      (leaf-symbol-p test-node "OTHERWISE")
+      (leaf-symbol-p test-node ":ELSE")))
+
 (defun single-clause-cond-info (node dialect)
   "If NODE is (cond (<test> <body...>)) with a non-default test, return (values T test-node body-nodes)."
   (let ((children (get-node-children node)))
@@ -350,9 +356,7 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
              (clause-children (get-node-children clause)))
         (when (and (compound-node-p clause)
                    (>= (length clause-children) 2)
-                   (not (leaf-true-p (first clause-children) dialect))
-                   (not (leaf-symbol-p (first clause-children) "OTHERWISE"))
-                   (not (leaf-symbol-p (first clause-children) ":ELSE")))
+                   (not (default-cond-clause-p (first clause-children) dialect)))
           (values t (first clause-children) (rest clause-children)))))))
 
 (defun check-single-clause-cond (node path dialect)
@@ -404,23 +408,22 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
          :severity :style
          :suggested-fix (sexp-to-string single-node))))))
 
-(defun nested-let-info (node)
-  "If NODE is (let outer-bindings (let inner-bindings ...)), return (values T outer-bindings inner-bindings inner-body)."
+(defun let-form-parts (node)
+  "If NODE is a compound (let bindings body...), return (values bindings body); otherwise (values nil nil)."
   (let ((children (get-node-children node)))
     (when (and (compound-node-p node)
                (>= (length children) 3)
                (leaf-symbol-p (first children) "LET"))
-      (let* ((outer-bindings (second children))
-             (outer-body (nthcdr 2 children)))
-        (when (and (= (length outer-body) 1)
-                   (compound-node-p outer-bindings))
-          (let* ((inner-node (first outer-body))
-                 (inner-children (get-node-children inner-node)))
-            (when (and (compound-node-p inner-node)
-                       (>= (length inner-children) 3)
-                       (leaf-symbol-p (first inner-children) "LET")
-                       (compound-node-p (second inner-children)))
-              (values t outer-bindings (second inner-children) (nthcdr 2 inner-children)))))))))
+      (values (second children) (nthcdr 2 children)))))
+
+(defun nested-let-info (node)
+  "If NODE is (let outer-bindings (let inner-bindings ...)), return (values T outer-bindings inner-bindings inner-body)."
+  (multiple-value-bind (outer-bindings outer-body) (let-form-parts node)
+    (when (and (compound-node-p outer-bindings)
+               (= (length outer-body) 1))
+      (multiple-value-bind (inner-bindings inner-body) (let-form-parts (first outer-body))
+        (when (compound-node-p inner-bindings)
+          (values t outer-bindings inner-bindings inner-body))))))
 
 (defun check-nested-let (node path dialect)
   "Detect nested (let ((x ...)) (let ((y ...)) ...)) that could be combined into let*."
