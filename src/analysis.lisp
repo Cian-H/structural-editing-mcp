@@ -1186,50 +1186,73 @@ Returns (values ignored-names remaining-body-nodes)."
       (push usage-path (scope-binding-usage-paths binding))
       t)))
 
+(defun collect-cl-spec-param (children collect-fn)
+  "Collect parameter bindings from a Common Lisp optional or keyword spec."
+  (let ((first-child (first children)))
+    (if (and (eq (get-node-tag first-child) :paren)
+             (get-node-children first-child))
+        (let ((sub (get-node-children first-child)))
+          (when (>= (length sub) 2)
+            (funcall collect-fn (second sub))))
+        (funcall collect-fn first-child))
+    (when (>= (length children) 3)
+      (funcall collect-fn (third children)))))
+
+(defun cl-param-spec-p (tag first-child)
+  "Check if FIRST-CHILD under a collection of TAG represents a CL param spec."
+  (and (eq tag :paren)
+       (or (leaf-any-symbol-p first-child)
+           (and (eq (get-node-tag first-child) :paren)
+                (get-node-children first-child)))))
+
+(defun collect-sequence-params (tag children collect-fn)
+  "Collect parameter bindings from paren or square sequence CHILDREN."
+  (when children
+    (if (cl-param-spec-p tag (first children))
+        (collect-cl-spec-param children collect-fn)
+        (dolist (c children)
+          (funcall collect-fn c)))))
+
+(defun collect-map-destructuring-entry (k v collect-fn)
+  "Collect bindings from a single map destructuring pair (K V)."
+  (let ((k-name (leaf-symbol-name k)))
+    (cond
+      ((and (equal k-name ":keys") (member (get-node-tag v) '(:square :paren)))
+       (dolist (c (get-node-children v))
+         (funcall collect-fn c)))
+      ((and (equal k-name ":as") (leaf-any-symbol-p v))
+       (funcall collect-fn v))
+      ((leaf-any-symbol-p k)
+       (funcall collect-fn k)))))
+
+(defun collect-map-destructuring-params (children collect-fn)
+  "Collect bindings from curly map destructuring CHILDREN."
+  (loop for (k v) on children by #'cddr
+        while k
+        do (collect-map-destructuring-entry k v collect-fn)))
+
+(defun collect-single-param (node collect-fn on-symbol-fn)
+  "Dispatch parameter collection for a single parameter NODE."
+  (when node
+    (let ((tag (get-node-tag node)))
+      (cond
+        ((leaf-any-symbol-p node)
+         (let ((name (leaf-symbol-name node)))
+           (unless (member name *cl-lambda-keywords* :test #'string=)
+             (funcall on-symbol-fn name (get-node-path node)))))
+        ((member tag '(:paren :square))
+         (collect-sequence-params tag (get-node-children node) collect-fn))
+        ((eq tag :curly)
+         (collect-map-destructuring-params (get-node-children node) collect-fn))))))
+
 (defun extract-param-bindings (params-node)
   "Extract list of (name . path) pairs from PARAMS-NODE."
   (let ((results '()))
     (labels ((collect (node)
-               (when node
-                 (let ((tag (get-node-tag node)))
-                   (cond
-                     ((leaf-any-symbol-p node)
-                      (let ((name (leaf-symbol-name node)))
-                        (unless (member name *cl-lambda-keywords* :test #'string=)
-                          (push (cons name (get-node-path node)) results))))
-                     ((member tag '(:paren :square))
-                      (let ((children (get-node-children node)))
-                        (when children
-                          (let ((first-child (first children)))
-                            (cond
-                              ((and (eq tag :paren)
-                                    (or (leaf-any-symbol-p first-child)
-                                        (and (eq (get-node-tag first-child) :paren)
-                                             (get-node-children first-child))))
-                               (if (and (eq (get-node-tag first-child) :paren)
-                                        (get-node-children first-child))
-                                   (let ((sub (get-node-children first-child)))
-                                     (when (>= (length sub) 2)
-                                       (collect (second sub))))
-                                   (collect first-child))
-                               (when (>= (length children) 3)
-                                 (collect (third children))))
-                              (t
-                               (dolist (c children)
-                                 (collect c))))))))
-                     ((eq tag :curly)
-                      (let ((children (get-node-children node)))
-                        (loop for (k v) on children by #'cddr
-                              while k do
-                              (let ((k-name (leaf-symbol-name k)))
-                                (cond
-                                  ((and (equal k-name ":keys") (member (get-node-tag v) '(:square :paren)))
-                                   (dolist (c (get-node-children v))
-                                     (collect c)))
-                                  ((and (equal k-name ":as") (leaf-any-symbol-p v))
-                                   (collect v))
-                                  ((leaf-any-symbol-p k)
-                                   (collect k))))))))))))
+               (collect-single-param
+                node
+                #'collect
+                (lambda (name path) (push (cons name path) results)))))
       (if (compound-node-p params-node)
           (dolist (c (get-node-children params-node))
             (collect c))
