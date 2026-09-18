@@ -315,6 +315,138 @@ Always returns a (:path () :file ...) node representing the parsed file contents
     ((list :path _ sym) (when (symbolp sym) (symbol-name sym)))
     (_ nil)))
 
+(defun print-clause-collection (open close child-strings stream indent)
+  "Format collection where first child is a sub-collection (e.g. let bindings or cond clauses)."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (let ((clause-indent (make-string (+ indent (length open)) :initial-element #\Space)))
+    (dolist (c (rest child-strings))
+      (terpri stream)
+      (write-string clause-indent stream)
+      (write-string c stream)))
+  (write-string close stream))
+
+(defun print-def-body-lines (body-cs stream indent-body)
+  "Print remaining body forms BODY-CS indented with INDENT-BODY."
+  (dolist (c body-cs)
+    (terpri stream)
+    (write-string indent-body stream)
+    (write-string c stream)))
+
+(defun print-def-inline-args (rest-cs stream indent-body)
+  "Print name and signature on the same line as DEF keyword."
+  (write-char #\Space stream)
+  (write-string (first rest-cs) stream)
+  (write-char #\Space stream)
+  (write-string (second rest-cs) stream)
+  (print-def-body-lines (cddr rest-cs) stream indent-body))
+
+(defun print-def-split-args (rest-cs stream indent indent-body)
+  "Print name inline and signature indented on next line."
+  (write-char #\Space stream)
+  (write-string (first rest-cs) stream)
+  (let ((indent-arg (make-string (+ indent 4) :initial-element #\Space)))
+    (when (rest rest-cs)
+      (terpri stream)
+      (write-string indent-arg stream)
+      (write-string (second rest-cs) stream))
+    (print-def-body-lines (cddr rest-cs) stream indent-body)))
+
+(defun print-def-stacked-args (rest-cs stream indent indent-body)
+  "Print all arguments stacked on new lines."
+  (let ((indent-arg (make-string (+ indent 4) :initial-element #\Space)))
+    (loop for c in rest-cs
+          for i from 1
+          do (terpri stream)
+             (write-string (if (<= i 2) indent-arg indent-body) stream)
+             (write-string c stream))))
+
+(defun def-inline-args-fit-p (indent first-cs rest-cs first-arg second-arg)
+  "Return T if definition name and parameter signature fit on the first line."
+  (and (>= (length rest-cs) 2)
+       (not (find #\Newline first-arg))
+       (not (find #\Newline second-arg))
+       (<= (+ indent (length first-cs) (length first-arg) (length second-arg) 4) 80)))
+
+(defun def-split-args-fit-p (indent first-cs rest-cs first-arg)
+  "Return T if definition name fits on the first line."
+  (and (>= (length rest-cs) 1)
+       (not (find #\Newline first-arg))
+       (<= (+ indent (length first-cs) (length first-arg) 3) 80)))
+
+(defun print-definition-collection (open close child-strings stream indent)
+  "Format definition collection (defun, defmacro, defmethod, etc.)."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (let* ((first-cs (first child-strings))
+         (rest-cs (rest child-strings))
+         (indent-body (make-string (+ indent 2) :initial-element #\Space))
+         (first-arg (first rest-cs))
+         (second-arg (second rest-cs)))
+    (cond
+      ((def-inline-args-fit-p indent first-cs rest-cs first-arg second-arg)
+       (print-def-inline-args rest-cs stream indent-body))
+      ((def-split-args-fit-p indent first-cs rest-cs first-arg)
+       (print-def-split-args rest-cs stream indent indent-body))
+      (t
+       (print-def-stacked-args rest-cs stream indent indent-body))))
+  (write-string close stream))
+
+(defun special-binding-form-p (name)
+  "Check if NAME is a special binding or conditional form requiring custom indent."
+  (and name
+       (member name '("LET" "LET*" "FLET" "LABELS" "MACROLET" "COND" "MATCH")
+               :test #'string=)))
+
+(defun print-special-collection (open close first-name child-strings stream indent)
+  "Format let / let* / flet / labels / cond / match form."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (let ((indent-body (make-string (+ indent 2) :initial-element #\Space))
+        (indent-bind (make-string (+ indent 2) :initial-element #\Space)))
+    (loop for c in (rest child-strings)
+          for i from 1
+          do (terpri stream)
+             (write-string (if (and (not (string= first-name "COND"))
+                                    (not (string= first-name "MATCH"))
+                                    (= i 1))
+                               indent-bind
+                               indent-body)
+                           stream)
+             (write-string c stream)))
+  (write-string close stream))
+
+(defun print-general-collection (open close child-strings stream indent)
+  "Format general function application or expression collection."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (let* ((first-len (length (first child-strings)))
+         (natural-arg-indent (+ indent first-len 2))
+         (arg-indent (if (<= (+ (length open) first-len 1) 18)
+                         natural-arg-indent
+                         (+ indent 2)))
+         (indent-str (make-string arg-indent :initial-element #\Space)))
+    (loop for c in (rest child-strings)
+          do (terpri stream)
+             (write-string indent-str stream)
+             (write-string c stream)))
+  (write-string close stream))
+
+(defun print-multiline-collection (open close children child-strings stream indent)
+  "Format multiline collection dispatching on the shape or operator of FIRST-CHILD."
+  (let* ((first-child (first children))
+         (first-tag (get-node-tag first-child))
+         (first-name (get-node-symbol-name first-child)))
+    (cond
+      ((member first-tag '(:paren :square :curly))
+       (print-clause-collection open close child-strings stream indent))
+      ((and first-name (starts-with-subseq "DEF" first-name))
+       (print-definition-collection open close child-strings stream indent))
+      ((special-binding-form-p first-name)
+       (print-special-collection open close first-name child-strings stream indent))
+      (t
+       (print-general-collection open close child-strings stream indent)))))
+
 (defun print-collection (open close children stream indent)
   "Format and print a collection delimited by OPEN and CLOSE to STREAM."
   (if (null children)
@@ -325,102 +457,7 @@ Always returns a (:path () :file ...) node representing the parsed file contents
         (if (and (not (find #\Newline single-line))
                  (<= (length single-line) 80))
             (write-string single-line stream)
-            (let* ((first-child (first children))
-                   (first-tag (get-node-tag first-child))
-                   (first-name (get-node-symbol-name first-child)))
-              (cond
-                ;; Case 1: First child is a sub-collection (e.g. let bindings ((a 1) (b 2)) or cond clauses)
-                ((member first-tag '(:paren :square :curly))
-                 (write-string open stream)
-                 (write-string (first child-strings) stream)
-                 (let ((clause-indent (make-string (+ indent (length open)) :initial-element #\Space)))
-                   (dolist (c (rest child-strings))
-                     (terpri stream)
-                     (write-string clause-indent stream)
-                     (write-string c stream)))
-                 (write-string close stream))
-
-                ;; Case 2: Definition form (defun, defmacro, defmethod, etc.)
-                ((and first-name (starts-with-subseq "DEF" first-name))
-                 (write-string open stream)
-                 (write-string (first child-strings) stream)
-                 (let ((rest-cs (rest child-strings))
-                       (indent-body (make-string (+ indent 2) :initial-element #\Space)))
-                   (cond
-                     ((and (>= (length rest-cs) 2)
-                           (not (find #\Newline (first rest-cs)))
-                           (not (find #\Newline (second rest-cs)))
-                           (<= (+ indent (length (first child-strings)) (length (first rest-cs)) (length (second rest-cs)) 4) 80))
-                      (write-char #\Space stream)
-                      (write-string (first rest-cs) stream)
-                      (write-char #\Space stream)
-                      (write-string (second rest-cs) stream)
-                      (dolist (c (cddr rest-cs))
-                        (terpri stream)
-                        (write-string indent-body stream)
-                        (write-string c stream)))
-                     ((and (>= (length rest-cs) 1)
-                           (not (find #\Newline (first rest-cs)))
-                           (<= (+ indent (length (first child-strings)) (length (first rest-cs)) 3) 80))
-                      (write-char #\Space stream)
-                      (write-string (first rest-cs) stream)
-                      (let ((indent-arg (make-string (+ indent 4) :initial-element #\Space)))
-                        (when (rest rest-cs)
-                          (terpri stream)
-                          (write-string indent-arg stream)
-                          (write-string (second rest-cs) stream))
-                        (dolist (c (cddr rest-cs))
-                          (terpri stream)
-                          (write-string indent-body stream)
-                          (write-string c stream))))
-                     (t
-                      (let ((indent-arg (make-string (+ indent 4) :initial-element #\Space)))
-                        (loop for c in rest-cs
-                              for i from 1
-                              do (terpri stream)
-                                 (write-string (if (<= i 2) indent-arg indent-body) stream)
-                                 (write-string c stream))))))
-                 (write-string close stream))
-
-                ;; Case 3: let / let* / flet / labels / cond / match
-                ((and first-name (or (string= first-name "LET")
-                                     (string= first-name "LET*")
-                                     (string= first-name "FLET")
-                                     (string= first-name "LABELS")
-                                     (string= first-name "MACROLET")
-                                     (string= first-name "COND")
-                                     (string= first-name "MATCH")))
-                 (write-string open stream)
-                 (write-string (first child-strings) stream)
-                 (let ((indent-body (make-string (+ indent 2) :initial-element #\Space))
-                       (indent-bind (make-string (+ indent 2) :initial-element #\Space)))
-                   (loop for c in (rest child-strings)
-                         for i from 1
-                         do (terpri stream)
-                            (write-string (if (and (not (string= first-name "COND"))
-                                                   (not (string= first-name "MATCH"))
-                                                   (= i 1))
-                                              indent-bind
-                                              indent-body)
-                                          stream)
-                            (write-string c stream)))
-                 (write-string close stream))
-
-                ;; Case 4: General function application
-                (t
-                 (write-string open stream)
-                 (write-string (first child-strings) stream)
-                 (let* ((first-len (length (first child-strings)))
-                        (natural-arg-indent (+ indent first-len 2))
-                        (arg-indent (if (<= (+ (length open) first-len 1) 18)
-                                        natural-arg-indent
-                                        (+ indent 2)))
-                        (indent-str (make-string arg-indent :initial-element #\Space)))
-                   (loop for c in (rest child-strings)
-                         do (terpri stream)
-                            (write-string indent-str stream)
-                            (write-string c stream)))
-                 (write-string close stream))))))))
+            (print-multiline-collection open close children child-strings stream indent)))))
 
 (defun print-toplevel-sequence (children stream indent dialect)
   "Print sequence of top-level CHILDREN separated by blank lines."
