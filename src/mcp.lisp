@@ -201,18 +201,35 @@
              (_ parent))))
         (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :paren))))
 
+(defun perform-wrap-single (tree path wrapper-str delim)
+  "Wrap a single node at PATH with DELIM or custom WRAPPER-STR."
+  (if delim
+      (structural-editing-mcp.edit:wrap-node tree path delim)
+      (wrap-node-with-custom-form tree path wrapper-str)))
+
+(defun perform-wrap-range (tree parent-path start-idx end-index wrapper-str delim)
+  "Wrap a range of nodes from START-IDX to END-INDEX under PARENT-PATH."
+  (if delim
+      (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index delim)
+      (wrap-range-with-custom-form tree parent-path start-idx end-index wrapper-str)))
+
+(defun resolve-wrap-parent-and-start (path index)
+  "Resolve parent path and starting index for a range wrap."
+  (let ((parent-path (cond (index path)
+                           ((null (cdr path)) path)
+                           (t (butlast path))))
+        (start-idx (cond (index index)
+                         ((null (cdr path)) 0)
+                         (t (lastcar path)))))
+    (values parent-path start-idx)))
+
 (defun perform-wrap (tree path wrapper-str &optional end-index index)
   "Wrap the node at PATH, or range of nodes from START-INDEX to END-INDEX under PARENT-PATH."
   (let ((delim (parse-delimiter-type wrapper-str)))
     (if (null end-index)
-        (if delim
-            (structural-editing-mcp.edit:wrap-node tree path delim)
-            (wrap-node-with-custom-form tree path wrapper-str))
-        (let* ((parent-path (if index path (if (null (cdr path)) path (butlast path))))
-               (start-idx (if index index (if (null (cdr path)) 0 (lastcar path)))))
-          (if delim
-              (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index delim)
-              (wrap-range-with-custom-form tree parent-path start-idx end-index wrapper-str))))))
+        (perform-wrap-single tree path wrapper-str delim)
+        (multiple-value-bind (parent-path start-idx) (resolve-wrap-parent-and-start path index)
+          (perform-wrap-range tree parent-path start-idx end-index wrapper-str delim)))))
 
 (defun resolve-parent-and-index (tree target-path &optional index)
   "Resolve target parent path and index for move or copy."
