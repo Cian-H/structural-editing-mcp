@@ -921,11 +921,9 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                    (unless structural-editing-mcp.workspace:*workspace-tree*
                      (structural-editing-mcp.workspace:init-workspace))
                    (let* ((depth (or (gethash "depth" args) 2))
-                          (node (if (null path)
-                                    structural-editing-mcp.workspace:*workspace-tree*
-                                    (structural-editing-mcp.tree:get-node-at-path
-                                     structural-editing-mcp.workspace:*workspace-tree*
-                                     path))))
+                          (node (structural-editing-mcp.tree:resolve-tree-scope
+                                 structural-editing-mcp.workspace:*workspace-tree*
+                                 path)))
                      (format-node-preview node :depth depth)))
                   ((equal name "ast_modify")
                    (let* ((action (gethash "action" args))

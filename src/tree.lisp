@@ -8,6 +8,7 @@
            :get-node-tags
            :get-node-children
            :compound-node-p
+           :resolve-tree-scope
            :parse-node
            :node
            :leaf
@@ -77,6 +78,12 @@
         else
           return nil
         finally (return current)))
+
+(defun resolve-tree-scope (tree path)
+  "Resolve PATH against TREE. If PATH is nil or empty, returns TREE; otherwise returns the node at PATH."
+  (if (and path (not (null path)))
+      (get-node-at-path tree path)
+      tree))
 
 (defun reindex-paths (tree &optional (current-path '()))
   "Recompute and update all :path metadata in TREE starting at CURRENT-PATH."

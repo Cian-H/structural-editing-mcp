@@ -135,9 +135,7 @@
 If EXACT is T, requires exact match; otherwise searches case-insensitively for substrings."
   (let ((results '())
         (lower-query (string-downcase query))
-        (start-node (if (and path (not (null path)))
-                        (get-node-at-path tree path)
-                        tree)))
+        (start-node (resolve-tree-scope tree path)))
     (when start-node
       (labels ((walk (node)
                  (match node
@@ -161,9 +159,7 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
   (let* ((pattern-ast (if (stringp pattern-str-or-ast)
                           (first (get-node-children (string-to-sexp pattern-str-or-ast)))
                           pattern-str-or-ast))
-         (start-node (if (and path (not (null path)))
-                         (get-node-at-path tree path)
-                         tree))
+         (start-node (resolve-tree-scope tree path))
          (matches '()))
     (when (and pattern-ast start-node)
       (labels ((walk (node)
@@ -511,9 +507,7 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
 (defun lint-ast (tree &key path dialect rules)
   "Recursively lint TREE (or subtree at PATH) for structural code smells and anti-patterns.
 Returns a list of LINT-FINDING instances."
-  (let* ((start-node (if (and path (not (null path)))
-                         (get-node-at-path tree path)
-                         tree))
+  (let* ((start-node (resolve-tree-scope tree path))
          (findings '()))
     (when start-node
       (labels ((walk (node current-dialect)
@@ -748,9 +742,7 @@ Base complexity is 1, with +1 for each conditional branch, short-circuit point, 
 (defun analyze-complexity (tree &key path dialect (min-complexity 1) (min-depth 1))
   "Analyze structural complexity for forms in TREE (or under PATH).
 Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
-  (let* ((start-node (if (and path (not (null path)))
-                         (get-node-at-path tree path)
-                         tree))
+  (let* ((start-node (resolve-tree-scope tree path))
          (forms-with-paths (when start-node
                                (collect-top-level-forms start-node path)))
          (results '()))
@@ -842,9 +834,7 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
 (defun find-duplicate-subtrees (tree &key path (min-nodes 4) (min-depth 2) (exact t))
   "Find repeated AST subtrees in TREE (or under PATH).
 Groups matching subtrees, removes redundant subsumed sub-expressions, and generates refactoring recommendations."
-  (let* ((start-node (if (and path (not (null path)))
-                         (get-node-at-path tree path)
-                         tree))
+  (let* ((start-node (resolve-tree-scope tree path))
          (buckets (make-hash-table :test 'equal))
          (node-metadata (make-hash-table :test 'equal)))
     (when start-node
@@ -1487,9 +1477,7 @@ Returns (values ignored-names remaining-body-nodes)."
 (defun analyze-bindings (tree &key path (include-unused t) (include-shadowed t) (dialect *current-dialect*))
   "Analyze variable bindings in TREE (or under PATH) for unused and shadowed variables.
 Returns a list of BINDING-FINDING instances."
-  (let* ((start-node (if (and path (not (null path)))
-                         (get-node-at-path tree path)
-                         tree))
+  (let* ((start-node (resolve-tree-scope tree path))
          (findings (walk-binding-tree start-node nil dialect '())))
     (setf findings (nreverse findings))
     (remove-if-not
