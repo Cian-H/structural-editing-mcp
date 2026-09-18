@@ -839,14 +839,25 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
                  (equal first-parent parent)))
              (rest paths)))))
 
+(defparameter *compiler-directive-heads*
+  '("DECLARE" "DECLAIM" "PROCLAIM" "IN-PACKAGE" "DEFPACKAGE"
+    "OPTIMIZE" "SPEED" "SAFETY" "SPACE" "COMPILATION-SPEED"
+    "DEBUG" "INLINE" "NOTINLINE")
+  "List of compiler directive, package, and declaration symbol names to ignore in clone detection.")
+
+(defparameter *binding-form-heads*
+  '("LET" "LET*" "FLET" "LABELS" "MACROLET" "SYMBOL-MACROLET"
+    "WHEN-LET" "IF-LET" "WHEN-SOME" "IF-SOME" "DO" "DO*")
+  "List of head symbols whose child 1 is a list of lexical bindings.")
+
 (defun find-duplicate-subtrees (tree &key path (min-nodes 4) (min-depth 2) (exact t))
   "Find repeated AST subtrees in TREE (or under PATH).
 Groups matching subtrees, removes redundant subsumed sub-expressions, and generates refactoring recommendations."
   (let* ((start-node (resolve-tree-scope tree path))
-         (buckets (make-hash-table :test 'equal))
-         (node-metadata (make-hash-table :test 'equal)))
+          (buckets (make-hash-table :test 'equal))
+          (node-metadata (make-hash-table :test 'equal)))
     (when start-node
-      (labels ((harvest (curr curr-path)
+      (labels ((harvest (curr curr-path &optional context)
                  (let ((tag (get-node-tag curr))
                        (children (get-node-children curr)))
                    (when (and (member tag '(:paren :square :curly))
@@ -856,7 +867,8 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
                             (first-val (when (and first-child (eq (get-node-tag first-child) :leaf))
                                          (nth-value 2 (parse-node first-child))))
                             (head-str (when (symbolp first-val) (string-upcase (symbol-name first-val)))))
-                       (unless (member head-str '("DECLARE" "DECLAIM" "PROCLAIM" "IN-PACKAGE") :test #'string=)
+                       (unless (or (member context '(:binding-list :binding-clause))
+                                   (member head-str *compiler-directive-heads* :test #'string=))
                          (let ((node-cnt (count-ast-nodes curr))
                                (depth (compute-nesting-depth curr 0)))
                            (when (and (>= node-cnt (or min-nodes 4))
@@ -866,10 +878,45 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
                                (unless (gethash fingerprint node-metadata)
                                  (setf (gethash fingerprint node-metadata)
                                        (list :node-count node-cnt :depth depth :sample curr)))))))))
-                   (loop for child in children
-                         for idx from 0
-                         for child-path = (or (get-node-path child) (append curr-path (list idx)))
-                         do (harvest child child-path)))))
+                   (let* ((first-child (first children))
+                          (first-val (when (and first-child (eq (get-node-tag first-child) :leaf))
+                                       (nth-value 2 (parse-node first-child))))
+                          (head-str (when (symbolp first-val) (string-upcase (symbol-name first-val)))))
+                     (unless (member head-str '("DECLARE" "DECLAIM" "PROCLAIM" "IN-PACKAGE" "DEFPACKAGE") :test #'string=)
+                       (flet ((resolve-child-path (child idx)
+                                (or (get-node-path child) (append curr-path (list idx))))
+                              (recurse-children (child-list child-context)
+                                (loop for child in child-list
+                                      for idx from 0
+                                      for cp = (or (get-node-path child) (append curr-path (list idx)))
+                                      do (harvest child cp child-context))))
+                         (cond
+                           ;; Clojure-style vector binding list [k1 v1 k2 v2]
+                           ((and (eq context :binding-list) (eq tag :square))
+                            (loop for child in children
+                                  for idx from 0
+                                  for cp = (resolve-child-path child idx)
+                                  do (harvest child cp (if (evenp idx) :binding-clause nil))))
+                           ;; Lisp-style binding list ((var1 val1) (var2 val2))
+                           ((eq context :binding-list)
+                            (recurse-children children :binding-clause))
+                           ;; Individual binding clause (var val) or (fn (params) body)
+                           ((eq context :binding-clause)
+                            (loop for child in (rest children)
+                                  for idx from 1
+                                  for cp = (resolve-child-path child idx)
+                                  do (harvest child cp nil)))
+                           ;; Forms where child 1 is the bindings list
+                           ((or (member head-str *binding-form-heads* :test #'string=)
+                                (member head-str '("MULTIPLE-VALUE-BIND" "DESTRUCTURING-BIND") :test #'string=)
+                                (and (equal head-str "LOOP") children (second children) (eq (get-node-tag (second children)) :square)))
+                            (loop for child in children
+                                  for idx from 0
+                                  for cp = (resolve-child-path child idx)
+                                  do (harvest child cp (if (= idx 1) :binding-list nil))))
+                           ;; Default traversal
+                           (t
+                            (recurse-children children nil)))))))))
         (harvest start-node (or (get-node-path start-node) path '()))))
 
     (let ((raw-candidates '()))
