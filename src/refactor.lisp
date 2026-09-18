@@ -52,43 +52,25 @@
     (update-node-at-path
       tree
       parent-path
-      (lambda
-              (parent)
-              (multiple-value-bind
-          (p-path p-tag p-children)
-          (parse-node parent)
+      (lambda (parent)
+        (multiple-value-bind (p-path p-tag p-children)
+            (parse-node parent)
           (declare (ignore p-path))
-          (let
-            ((new-children
-                            (loop
-                      for
-                      child
-                      in
-                      p-children
-                      for
-                      i
-                      from
-                      0
-                      collect
-                      (if
-                      (= i child-idx)
-                      (list :path nil :leaf (intern (string-upcase var-name)))
-                      child))))
-            (let
-              ((new-parent ` (:path nil ,p-tag ,@new-children)))
-              (let
-                ((let-ast (string-to-sexp (format nil "(let ((~A )))" var-name))))
-                (let
-                  ((let-node (first (get-node-children let-ast))))
-                  (let*
-                    ((bindings-list (second (get-node-children let-node)))
-                     (first-binding (first (get-node-children bindings-list)))
-                     (completed-binding
-                        `
-                        (:path nil :paren ,@ (get-node-children first-binding) ,target-node))
-                     (completed-bindings-list ` (:path nil :paren ,completed-binding)))
-                    `
-                    (:path nil :paren (:path nil :leaf let) ,completed-bindings-list ,new-parent)))))))))))
+          (let* ((new-children
+                   (loop for child in p-children
+                         for i from 0
+                         collect (if (= i child-idx)
+                                     (list :path nil :leaf (intern (string-upcase var-name)))
+                                     child)))
+                 (new-parent `(:path nil ,p-tag ,@new-children))
+                 (let-ast (string-to-sexp (format nil "(let ((~A )))" var-name)))
+                 (let-node (first (get-node-children let-ast)))
+                 (bindings-list (second (get-node-children let-node)))
+                 (first-binding (first (get-node-children bindings-list)))
+                 (completed-binding
+                   `(:path nil :paren ,@(get-node-children first-binding) ,target-node))
+                 (completed-bindings-list `(:path nil :paren ,completed-binding)))
+            `(:path nil :paren (:path nil :leaf let) ,completed-bindings-list ,new-parent)))))))
 
 (defun find-file-path-and-top-index (tree target-path)
   "Find the file node path and top-level form index in that file for TARGET-PATH."
