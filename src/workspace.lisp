@@ -6,6 +6,9 @@
         :structural-editing-mcp.conditions)
   (:export :*workspace-tree*
            :*file-registry*
+           :*file-clean-state*
+           :*file-clean-sources*
+           :file-clean-p
            :*known-dialects*
            :*dialect-extensions*
            :init-workspace
@@ -49,12 +52,20 @@
 (defvar *file-registry* (make-hash-table :test 'equal)
   "Maps numerical file IDs and tree paths to canonical file paths.")
 
+(defvar *file-clean-state* (make-hash-table :test 'equal)
+  "Maps canonical filepaths to the clean (unmodified) parsed AST.")
+
+(defvar *file-clean-sources* (make-hash-table :test 'equal)
+  "Maps canonical filepaths to a vector of raw top-level source slices.")
+
 (defvar *next-file-id* 0
   "Monotonically increasing counter for numerical file IDs.")
 
 (defun init-workspace ()
   "Initialize an empty workspace."
   (setf *file-registry* (make-hash-table :test 'equal))
+  (setf *file-clean-state* (make-hash-table :test 'equal))
+  (setf *file-clean-sources* (make-hash-table :test 'equal))
   (setf *next-file-id* 0)
   (setf *workspace-tree* '(:path () :workspace)))
 
@@ -163,9 +174,19 @@ If the file is already loaded, returns its existing ID. Gracefully returns NIL o
       (let ((existing-id (find-loaded-file-id canonical-path)))
         (when existing-id (return-from read-workspace-file existing-id))))
     (handler-case
-        (let* ((text (uiop:read-file-string canonical-path))
-               (parsed-file-node (string-to-sexp text :dialect dialect)))
-          (insert-file-into-workspace parsed-file-node canonical-path dialect))
+        (let ((text (uiop:read-file-string canonical-path)))
+          (multiple-value-bind (parsed-file-node toplevel-sources)
+              (string-to-sexp text :dialect dialect)
+            (setf (gethash canonical-path *file-clean-sources*) toplevel-sources)
+            (let ((id (insert-file-into-workspace parsed-file-node canonical-path dialect)))
+              (let* ((coords (loop for k being the hash-keys of *file-registry*
+                                   using (hash-value v)
+                                   when (and (listp k) (equal v canonical-path))
+                                   return k))
+                     (reindexed (and coords (get-node-at-path *workspace-tree* coords))))
+                (setf (gethash canonical-path *file-clean-state*)
+                      (copy-tree (or reindexed parsed-file-node))))
+              id)))
       (error (c)
         (format *error-output* "~&[Workspace] Warning: failed to load ~A: ~A~%" filepath c)
         nil))))
@@ -183,16 +204,34 @@ Returns a list of loaded numerical file IDs."
             (when id (pushnew id loaded-ids))))))
     (nreverse loaded-ids)))
 
+(defun file-clean-p (file-node &optional fallback-path)
+  "Return T if FILE-NODE is structurally identical to its clean loaded state."
+  (let* ((path (get-node-path file-node))
+         (filepath (or (get-filepath path) (when fallback-path (get-filepath fallback-path)))))
+    (and filepath
+         (let ((clean-node (gethash filepath *file-clean-state*)))
+           (and clean-node (equal file-node clean-node))))))
+
 (defun write-file-node-to-disk (file-node dialect &optional fallback-path)
   "Write a single :file node to its registered filepath on disk."
   (let* ((path (get-node-path file-node))
          (filepath (or (get-filepath path) (when fallback-path (get-filepath fallback-path)))))
     (when filepath
-      (uiop:with-output-file (out filepath :if-exists :supersede :if-does-not-exist :create)
-        (print-sexp file-node out 0 :dialect dialect)))))
+      (let ((clean-node (gethash filepath *file-clean-state*))
+            (clean-sources (gethash filepath *file-clean-sources*)))
+        (uiop:with-output-file (out filepath :if-exists :supersede :if-does-not-exist :create)
+          (if (and clean-node clean-sources)
+              (structural-editing-mcp.parser:print-file-with-clean-sources file-node clean-node clean-sources out dialect)
+              (print-sexp file-node out 0 :dialect dialect)))
+        (let ((written-text (uiop:read-file-string filepath)))
+          (multiple-value-bind (re-parsed new-sources)
+              (string-to-sexp written-text :dialect dialect)
+            (declare (ignore re-parsed))
+            (setf (gethash filepath *file-clean-state*) (copy-tree file-node))
+            (setf (gethash filepath *file-clean-sources*) new-sources)))))))
 
 (defun write-workspace ()
-  "Write all :file nodes in the workspace back to their respective paths on disk."
+  "Write all modified :file nodes in the workspace back to disk. Clean files are skipped."
   (unless *workspace-tree*
     (error 'workspace-error :message "No workspace initialized."))
   (dolist (child (get-node-children *workspace-tree*))
@@ -200,6 +239,8 @@ Returns a list of loaded numerical file IDs."
       (cond
         ((member child-tag *known-dialects*)
          (dolist (file-node (get-node-children child))
-           (write-file-node-to-disk file-node child-tag)))
+           (unless (file-clean-p file-node)
+             (write-file-node-to-disk file-node child-tag))))
         ((eq child-tag :file)
-         (write-file-node-to-disk child :common-lisp (first (get-node-path child))))))))
+         (unless (file-clean-p child (first (get-node-path child)))
+           (write-file-node-to-disk child :common-lisp (first (get-node-path child)))))))))

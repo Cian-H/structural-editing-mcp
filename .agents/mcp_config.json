@@ -10,7 +10,7 @@
         "--noprint",
         "--disable-debugger",
         "--script",
-        "/home/cianh/Projects/structural-editing-mcp/scripts/run-server.lisp"
+        "./scripts/run-server.lisp"
       ]
     }
   }

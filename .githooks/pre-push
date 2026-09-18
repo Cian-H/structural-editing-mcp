@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -e
+
+# Pre-push hook for automatic CalVer synchronization and release tagging
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$REPO_ROOT"
+
+echo "Running CalVer pre-push verification..."
+
+# Ensure version.txt is updated with the current CalVer
+./scripts/calver.lisp --update
+
+# If version.txt was modified, commit it
+if ! git diff --quiet version.txt; then
+    NEW_VER=$(cat version.txt | tr -d '[:space:]')
+    echo "CalVer: Staging and committing updated version.txt (${NEW_VER})..."
+    git add version.txt
+    git commit -m "chore(release): bump CalVer to ${NEW_VER} [skip ci]"
+fi
+
+# Ensure git tag exists for this release
+./scripts/calver.lisp --tag
+
+echo "CalVer: Ready to push version $(cat version.txt)"

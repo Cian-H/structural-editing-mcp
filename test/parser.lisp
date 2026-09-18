@@ -105,4 +105,97 @@
            (ast (string-to-sexp code :dialect :scheme)))
       (ok (string= code (sexp-to-string ast :dialect :scheme))))))
 
+(deftest test-community-formatting-rules
+  (testing "defpackage formats clauses with 2-space indentation and aligned exports"
+    (let* ((code "(defpackage :my-pkg
+  (:use :cl)
+  (:export :symbol-one-with-a-longer-name-to-test
+           :symbol-two-with-a-longer-name-to-test))")
+           (ast (string-to-sexp code))
+           (printed (sexp-to-string ast)))
+      (ok (search "(:use :cl)" printed))
+      (ok (search "  (:export :symbol-one-with-a-longer-name-to-test" printed))
+      (ok (search "           :symbol-two-with-a-longer-name-to-test))" printed))))
+
+  (testing "define-condition formats name on line 1, slots and options indented 2 spaces"
+    (let* ((code "(define-condition my-error (error)
+  ((msg :initarg :msg :reader error-msg))
+  (:report (lambda (c s)
+             (format s \"~A\" c))))")
+           (ast (string-to-sexp code))
+           (printed (sexp-to-string ast)))
+      (ok (search "(define-condition my-error (error)" printed))
+      (ok (search "  ((msg :initarg :msg" printed))
+      (ok (search "  (:report" printed))
+      (ok (search "(lambda (c s)" printed))))
+
+  (testing "lambda keeps parameter list on line 1 and indents body 2 spaces"
+    (let* ((code "(lambda (condition stream)
+  (format stream \"Error: ~A\" condition))")
+           (ast (string-to-sexp code))
+           (printed (sexp-to-string ast)))
+      (ok (search "(lambda (condition stream)" printed))
+      (ok (search "  (format stream" printed))))
+
+  (testing "if indents branches 4 spaces"
+    (let* ((code "(if (valid-p x)
+    (process x)
+    (handle-error x))")
+           (ast (string-to-sexp code))
+           (printed (sexp-to-string ast)))
+      (ok (search "(if (valid-p x)" printed))
+      (ok (search "    (process x)" printed))
+      (ok (search "    (handle-error x))" printed))))
+
+  (testing "when indents body 2 spaces"
+    (let* ((code "(when (ready-p)
+  (step-one)
+  (step-two))")
+           (ast (string-to-sexp code))
+           (printed (sexp-to-string ast)))
+      (ok (search "(when (ready-p)" printed))
+      (ok (search "  (step-one)" printed))
+      (ok (search "  (step-two))" printed))))
+
+  (testing "multiple-value-bind indents value form 4 spaces and body 2 spaces"
+    (let* ((code "(multiple-value-bind (a b)
+    (compute-values)
+  (use a)
+  (use b))")
+           (ast (string-to-sexp code))
+           (printed (sexp-to-string ast)))
+      (ok (search "(multiple-value-bind (a b)" printed))
+      (ok (search "    (compute-values)" printed))
+      (ok (search "  (use a)" printed))))
+
+  (testing "general function call aligns subsequent arguments under first argument"
+    (let* ((code "(format stream \"Very long message template string exceeding eighty characters: ~A\" k v)")
+           (ast (string-to-sexp code))
+           (printed (sexp-to-string ast)))
+      (ok (search "(format stream" printed))
+      (ok (search "        \"Very long message" printed))
+      (ok (search "        k" printed))
+      (ok (search "        v)" printed)))))
+
+(deftest test-toplevel-source-preservation
+  (testing "string-to-sexp returns original source slices for each top-level form"
+    (let* ((code ";;; Header comment
+(defun foo (x)
+  \"My special docstring with    spaces.\"
+  (+ x 1))
+
+;; Middle comment
+(defun bar (y)
+  (* y 2))")
+           (ast nil)
+           (slices nil))
+      (multiple-value-setq (ast slices) (string-to-sexp code))
+      (ok (= 4 (length slices)))
+      (ok (string= ";;; Header comment" (string-trim '(#\Newline #\Space) (aref slices 0))))
+      (ok (search "\"My special docstring with    spaces.\"" (aref slices 1)))
+      (ok (search "(* y 2)" (aref slices 3)))
+      (let ((output (with-output-to-string (s)
+                      (structural-editing-mcp.parser:print-file-with-clean-sources ast ast slices s))))
+        (ok (string= code output))))))
+
 

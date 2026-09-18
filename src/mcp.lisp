@@ -2,6 +2,7 @@
   (:use :cl
         :alexandria
         :trivia
+        :structural-editing-mcp.version
         :structural-editing-mcp.utils
         :structural-editing-mcp.tree
         :structural-editing-mcp.parser
@@ -811,14 +812,14 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 (defun handle-initialize (id params)
   (declare (ignore params))
   (send-result
-               id
-               (dict
-          "protocolVersion"
-          "2024-11-05"
-          "capabilities"
-          (dict "tools" (make-hash-table))
-          "serverInfo"
-          (dict "name" "structural-editing-mcp" "version" "0.1.0"))))
+   id
+   (dict
+    "protocolVersion"
+    "2024-11-05"
+    "capabilities"
+    (dict "tools" (make-hash-table))
+    "serverInfo"
+    (dict "name" "structural-editing-mcp" "version" +version+))))
 
 (defun handle-tools-list (id params)
   (declare (ignore params))

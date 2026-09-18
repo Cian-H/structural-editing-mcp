@@ -1,10 +1,11 @@
 (defsystem "structural-editing-mcp"
-  :version "0.1.0"
+  :version (:read-file-line "version.txt")
   :author "Cian Hughes"
   :license "LGPLv3"
   :depends-on (:trivia :alexandria :serapeum :yason)
   :pathname "src"
   :components ((:file "conditions")
+               (:file "version")
                (:file "utils")
                (:file "tree")
                (:file "parser")
@@ -21,6 +22,7 @@
                :rove)
   :pathname "test"
   :components ((:file "package")
+               (:file "version")
                (:file "utils")
                (:file "conditions")
                (:file "tree")

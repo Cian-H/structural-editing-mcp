@@ -8,6 +8,8 @@
            :sexp-to-string
            :print-sexp
            :format-sexp
+           :print-file-with-clean-sources
+           :classify-form-operator
            :parse-atom-string
            :format-atom
            :*current-dialect*
@@ -236,22 +238,35 @@
        (multiple-value-bind (tok next) (read-default-atom-token string index len dialect)
          (values tok next t))))))
 
-(defun tokenize (string &key (dialect *current-dialect*))
-  "Tokenize a string into a flat list of delimiter keywords and atomic values."
+(defun tokenize-with-spans (string &key (dialect *current-dialect*))
+  "Tokenize a string and return (values tokens starts ends) where starts and ends are vectors of character offsets."
   (declare (type string string))
   (let ((*current-dialect* dialect)
         (index 0)
         (len (length string))
-        (tokens '()))
-    (declare (type fixnum index len)
-             (type list tokens))
+        (tokens '())
+        (starts '())
+        (ends '()))
+    (declare (type fixnum index len))
     (loop while (< index len)
-          do (multiple-value-bind (tok next has-tok)
-                 (tokenize-next-token string index len dialect)
-               (when has-tok
-                 (push tok tokens))
-               (setf index next)))
-    (nreverse tokens)))
+          do (let ((cur index))
+               (multiple-value-bind (tok next has-tok)
+                   (tokenize-next-token string index len dialect)
+                 (when has-tok
+                   (push tok tokens)
+                   (push cur starts)
+                   (push next ends))
+                 (setf index next))))
+    (values (nreverse tokens)
+            (coerce (nreverse starts) 'simple-vector)
+            (coerce (nreverse ends) 'simple-vector))))
+
+(defun tokenize (string &key (dialect *current-dialect*))
+  "Tokenize a string into a flat list of delimiter keywords and atomic values."
+  (multiple-value-bind (tokens starts ends)
+      (tokenize-with-spans string :dialect dialect)
+    (declare (ignore starts ends))
+    tokens))
 
 (defun parse-collection (close-token tokens current-path child-index)
   "Parse sibling forms until CLOSE-TOKEN, returning (values children remaining-tokens)."
@@ -300,21 +315,37 @@
 
 (defun string-to-sexp (string &key (dialect *current-dialect*))
   "Parse a raw string into an s-expression data structure.
-Always returns a (:path () :file ...) node representing the parsed file contents."
-  (let* ((*current-dialect* dialect)
-         (tokens (tokenize string :dialect dialect)))
-    (if (null tokens)
-        (list :path '() :file)
-        (let ((remaining tokens)
-              (forms '())
-              (idx 0))
-          (loop while remaining do
-            (multiple-value-bind (form rest) (parse-single-form remaining (list idx))
-              (when form
-                (push form forms))
-              (incf idx)
-              (setf remaining rest)))
-          (list* :path '() :file (nreverse forms))))))
+Always returns a (:path () :file ...) node representing the parsed file contents.
+Returns (values file-node toplevel-sources) where toplevel-sources is a vector of original source strings."
+  (let* ((*current-dialect* dialect))
+    (multiple-value-bind (tokens starts ends) (tokenize-with-spans string :dialect dialect)
+      (if (null tokens)
+          (values (list :path '() :file) #())
+          (let ((remaining tokens)
+                (forms '())
+                (tok-spans '())
+                (idx 0)
+                (tok-idx 0))
+            (loop while remaining do
+              (let ((start-tok tok-idx))
+                (multiple-value-bind (form rest) (parse-single-form remaining (list idx))
+                  (let* ((consumed (- (length remaining) (length rest)))
+                         (end-tok (+ start-tok (1- consumed))))
+                    (when form
+                      (push form forms)
+                      (push (cons (aref starts start-tok) (aref ends end-tok)) tok-spans))
+                    (incf idx)
+                    (incf tok-idx consumed)
+                    (setf remaining rest)))))
+            (setf forms (nreverse forms))
+            (setf tok-spans (nreverse tok-spans))
+            (let ((slices (loop for (span . rest-spans) on tok-spans
+                                for next-span = (car rest-spans)
+                                for s-start = (car span)
+                                for s-end = (if next-span (car next-span) (length string))
+                                collect (subseq string s-start s-end))))
+              (values (list* :path '() :file forms)
+                      (coerce slices 'simple-vector))))))))
 
 (defun write-atom (val stream)
   "Write the string representation of atomic VAL to STREAM."
@@ -427,60 +458,354 @@ Always returns a (:path () :file ...) node representing the parsed file contents
        (print-def-stacked-args rest-cs stream indent indent-body))))
   (write-string close stream))
 
-(defun special-binding-form-p (name)
-  "Check if NAME is a special binding or conditional form requiring custom indent."
-  (and name
-       (member name '("LET" "LET*" "FLET" "LABELS" "MACROLET" "COND" "MATCH")
-               :test #'string=)))
+(defun make-indent-string (n)
+  "Create an indent string of N spaces."
+  (make-string n :initial-element #\Space))
 
-(defun print-special-collection (open close first-name child-strings stream indent)
-  "Format let / let* / flet / labels / cond / match form."
+(defun indent-2-spaces (indent)
+  "Create an indent string of (+ INDENT 2) spaces."
+  (make-indent-string (+ indent 2)))
+
+(defun indent-4-spaces (indent)
+  "Create an indent string of (+ INDENT 4) spaces."
+  (make-indent-string (+ indent 4)))
+
+(defun write-inline-arg (arg stream)
+  "Write ARG prefixed with a space to STREAM if ARG is non-nil."
+  (when arg
+    (write-char #\Space stream)
+    (write-string arg stream)))
+
+(defun write-indented-lines (lines stream indent-str)
+  "Print each line in LINES to STREAM prefixed by a newline and INDENT-STR."
+  (dolist (c lines)
+    (terpri stream)
+    (write-string indent-str stream)
+    (write-string c stream)))
+
+(defun keyword-token-string-p (str)
+  "Return T if STR is formatted as a keyword token (starts with colon)."
+  (and (stringp str) (> (length str) 1) (char= (char str 0) #\:)))
+
+(defparameter *operator-category-table*
+  (let ((ht (make-hash-table :test 'equal)))
+    (dolist (entry '(("DEFPACKAGE" . :def-package)
+                     ("DEFCLASS" . :def-type)
+                     ("DEFINE-CONDITION" . :def-type)
+                     ("DEFSTRUCT" . :def-type)
+                     ("DEFTYPE" . :def-type)
+                     ("DEFVAR" . :def-var)
+                     ("DEFPARAMETER" . :def-var)
+                     ("DEFCONSTANT" . :def-var)
+                     ("DEFCUSTOM" . :def-var)
+                     ("DEFUN" . :def-fn)
+                     ("DEFMACRO" . :def-fn)
+                     ("DEFMETHOD" . :def-fn)
+                     ("DEFGENERIC" . :def-fn)
+                     ("DEFN" . :def-fn)
+                     ("DEFN-" . :def-fn)
+                     ("DEFMACRO*" . :def-fn)
+                     ("LET" . :binding)
+                     ("LET*" . :binding)
+                     ("FLET" . :binding)
+                     ("LABELS" . :binding)
+                     ("MACROLET" . :binding)
+                     ("SYMBOL-MACROLET" . :binding)
+                     ("WHEN-LET" . :binding)
+                     ("WHEN-LET*" . :binding)
+                     ("IF-LET" . :binding)
+                     ("IF-LET*" . :binding)
+                     ("WHEN-SOME" . :binding)
+                     ("IF-SOME" . :binding)
+                     ("BINDING" . :binding)
+                     ("IF" . :if)
+                     ("IF-NOT" . :if)
+                     ("WHEN" . :when)
+                     ("UNLESS" . :when)
+                     ("WHEN-NOT" . :when)
+                     ("COND" . :cond)
+                     ("CASE" . :case)
+                     ("CCASE" . :case)
+                     ("ECASE" . :case)
+                     ("TYPECASE" . :case)
+                     ("CTYPECASE" . :case)
+                     ("ETYPECASE" . :case)
+                     ("MATCH" . :case)
+                     ("MULTIPLE-VALUE-BIND" . :mvb)
+                     ("DESTRUCTURING-BIND" . :mvb)
+                     ("MULTIPLE-VALUE-SETQ" . :mvb)
+                     ("UNWIND-PROTECT" . :with)
+                     ("HANDLER-CASE" . :with)
+                     ("HANDLER-BIND" . :with)
+                     ("RESTART-CASE" . :with)
+                     ("DOLIST" . :iteration)
+                     ("DOTIMES" . :iteration)
+                     ("LOOP" . :iteration)
+                     ("DO" . :iteration)
+                     ("DO*" . :iteration)
+                     ("LAMBDA" . :lambda)
+                     ("FN" . :lambda)))
+      (setf (gethash (car entry) ht) (cdr entry)))
+    ht)
+  "Lookup table mapping operator names to category keywords.")
+
+(defun classify-form-operator (name)
+  "Classify operator symbol NAME into a formatting category."
+  (when name
+    (or (gethash name *operator-category-table*)
+        (cond
+          ((starts-with-subseq "WITH-" name) :with)
+          ((starts-with-subseq "DEF" name) :def-fn)
+          (t :general)))))
+
+(defun print-defpackage-collection (open close child-strings stream indent)
+  "Format defpackage with package name inline and clauses indented 2 spaces."
   (write-string open stream)
   (write-string (first child-strings) stream)
-  (let ((indent-body (make-string (+ indent 2) :initial-element #\Space))
-        (indent-bind (make-string (+ indent 2) :initial-element #\Space)))
-    (loop for c in (rest child-strings)
-          for i from 1
-          do (terpri stream)
-             (write-string (if (and (not (string= first-name "COND"))
-                                    (not (string= first-name "MATCH"))
-                                    (= i 1))
-                               indent-bind
-                               indent-body)
-                           stream)
-             (write-string c stream)))
+  (write-inline-arg (second child-strings) stream)
+  (write-indented-lines (cddr child-strings) stream (indent-2-spaces indent))
   (write-string close stream))
+
+(defun print-type-collection (open close child-strings stream indent)
+  "Format defclass / define-condition / defstruct / deftype."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (let* ((rest-cs (rest child-strings))
+         (first-arg (first rest-cs))
+         (second-arg (second rest-cs))
+         (body-indent (indent-2-spaces indent))
+         (inline-both-p (and first-arg second-arg
+                             (not (find #\Newline first-arg))
+                             (not (find #\Newline second-arg))
+                             (<= (+ indent (length (first child-strings)) (length first-arg) (length second-arg) 4) 80))))
+    (cond
+      (inline-both-p
+       (write-inline-arg first-arg stream)
+       (write-inline-arg second-arg stream)
+       (write-indented-lines (cddr rest-cs) stream body-indent))
+      (first-arg
+       (write-inline-arg first-arg stream)
+       (write-indented-lines (rest rest-cs) stream body-indent))
+      (t nil)))
+  (write-string close stream))
+
+(defun print-defvar-val-doc (val doc stream indent-body inline-p)
+  "Print DEFVAR initial value and docstring."
+  (when val
+    (if inline-p
+        (write-inline-arg val stream)
+        (progn
+          (terpri stream)
+          (write-string indent-body stream)
+          (write-string val stream))))
+  (when doc
+    (terpri stream)
+    (write-string indent-body stream)
+    (write-string doc stream)))
+
+(defun print-defvar-collection (open close child-strings stream indent)
+  "Format defvar / defparameter / defconstant."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (let* ((rest-cs (rest child-strings))
+         (name (first rest-cs))
+         (val (second rest-cs))
+         (doc (third rest-cs))
+         (indent-body (indent-2-spaces indent))
+         (inline-p (and val (not (find #\Newline val))
+                        (<= (+ indent (length (first child-strings)) (length (or name "")) (length val) 4) 80))))
+    (write-inline-arg name stream)
+    (print-defvar-val-doc val doc stream indent-body inline-p))
+  (write-string close stream))
+
+(defun print-lambda-collection (open close child-strings stream indent)
+  "Format lambda / fn with parameters inline on line 1 and body indented 2 spaces."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (let ((rest-cs (rest child-strings)))
+    (write-inline-arg (first rest-cs) stream)
+    (write-indented-lines (rest rest-cs) stream (indent-2-spaces indent)))
+  (write-string close stream))
+
+(defun print-if-collection (open close child-strings stream indent)
+  "Format if / if-not with then/else branches indented 4 spaces."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (let ((rest-cs (rest child-strings)))
+    (write-inline-arg (first rest-cs) stream)
+    (write-indented-lines (rest rest-cs) stream (indent-4-spaces indent)))
+  (write-string close stream))
+
+(defun print-when-collection (open close child-strings stream indent)
+  "Format when / unless / iteration with test/spec inline and body indented 2 spaces."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (let ((rest-cs (rest child-strings)))
+    (write-inline-arg (first rest-cs) stream)
+    (write-indented-lines (rest rest-cs) stream (indent-2-spaces indent)))
+  (write-string close stream))
+
+(defun print-cond-collection (open close child-strings stream indent)
+  "Format cond with each clause on its own line indented 2 spaces."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (write-indented-lines (rest child-strings) stream (indent-2-spaces indent))
+  (write-string close stream))
+
+(defun print-case-collection (open close child-strings stream indent)
+  "Format case with keyform inline and clauses indented 2 spaces."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (let ((rest-cs (rest child-strings)))
+    (write-inline-arg (first rest-cs) stream)
+    (write-indented-lines (rest rest-cs) stream (indent-2-spaces indent)))
+  (write-string close stream))
+
+(defun print-mvb-collection (open close child-strings stream indent)
+  "Format multiple-value-bind / destructuring-bind."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (let ((rest-cs (rest child-strings)))
+    (write-inline-arg (first rest-cs) stream)
+    (when (second rest-cs)
+      (terpri stream)
+      (write-string (indent-4-spaces indent) stream)
+      (write-string (second rest-cs) stream))
+    (write-indented-lines (cddr rest-cs) stream (indent-2-spaces indent)))
+  (write-string close stream))
+
+(defun print-with-collection (open close child-strings stream indent)
+  "Format with-* / unwind-protect / handler-case."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (let ((rest-cs (rest child-strings)))
+    (write-inline-arg (first rest-cs) stream)
+    (write-indented-lines (rest rest-cs) stream (indent-2-spaces indent)))
+  (write-string close stream))
+
+(defun print-binding-collection (open close child-strings stream indent)
+  "Format let / let* / flet / labels / when-let form."
+  (write-string open stream)
+  (write-string (first child-strings) stream)
+  (write-inline-arg (second child-strings) stream)
+  (write-indented-lines (cddr child-strings) stream (indent-2-spaces indent))
+  (write-string close stream))
+
+(defun write-arg-item (curr stream indent-str rem-cs align-col)
+  "Write CURR argument item or keyword-pair to STREAM, returning remaining list."
+  (terpri stream)
+  (write-string indent-str stream)
+  (if (and (keyword-token-string-p curr)
+           (second rem-cs)
+           (not (find #\Newline (second rem-cs)))
+           (<= (+ align-col (length curr) 1 (length (second rem-cs))) 80))
+      (progn
+        (write-string curr stream)
+        (write-char #\Space stream)
+        (write-string (second rem-cs) stream)
+        (cddr rem-cs))
+      (progn
+        (write-string curr stream)
+        (rest rem-cs))))
+
+(defun print-aligned-arguments (rem-cs stream align-col)
+  "Print remaining arguments aligned at ALIGN-COL."
+  (let ((indent-str (make-indent-string align-col)))
+    (loop while rem-cs do
+      (setf rem-cs (write-arg-item (first rem-cs) stream indent-str rem-cs align-col)))))
+
+(defun print-stacked-arguments (rem-cs stream indent)
+  "Print remaining arguments indented by 2 spaces."
+  (let ((indent-str (indent-2-spaces indent)))
+    (loop while rem-cs do
+      (setf rem-cs (write-arg-item (first rem-cs) stream indent-str rem-cs (+ indent 2))))))
+
+(defun keyword-arg-pair-p (first-arg second-arg indent open op-len)
+  "Return T if first argument is a keyword that can be paired with second argument."
+  (and (keyword-token-string-p first-arg)
+       second-arg
+       (not (find #\Newline first-arg))
+       (not (find #\Newline second-arg))
+       (<= (+ indent (length open) op-len 1 (length first-arg) 1 (length second-arg)) 80)))
+
+(defun can-inline-first-arg-p (first-arg op-len indent open first-pair-p)
+  "Return T if first argument can be placed on the first line."
+  (and first-arg
+       (<= op-len 18)
+       (or first-pair-p
+           (and (not (find #\Newline first-arg))
+                (<= (+ indent (length open) op-len 1 (length first-arg)) 80)))))
+
+(defun print-general-inlined (first-arg second-arg first-pair-p rest-cs stream indent open op-len)
+  "Print inlined first argument and aligned subsequent arguments."
+  (write-char #\Space stream)
+  (write-string first-arg stream)
+  (let ((rem-cs (rest rest-cs)))
+    (when first-pair-p
+      (write-char #\Space stream)
+      (write-string second-arg stream)
+      (setf rem-cs (cddr rest-cs)))
+    (print-aligned-arguments rem-cs stream (+ indent (length open) op-len 1))))
 
 (defun print-general-collection (open close child-strings stream indent)
-  "Format general function application or expression collection."
+  "Format general function application or expression collection with Riastradh argument alignment and keyword pairing."
   (write-string open stream)
   (write-string (first child-strings) stream)
-  (let* ((first-len (length (first child-strings)))
-         (natural-arg-indent (+ indent first-len 2))
-         (arg-indent (if (<= (+ (length open) first-len 1) 18)
-                         natural-arg-indent
-                         (+ indent 2)))
-         (indent-str (make-string arg-indent :initial-element #\Space)))
-    (loop for c in (rest child-strings)
-          do (terpri stream)
-             (write-string indent-str stream)
-             (write-string c stream)))
+  (let* ((op-len (length (first child-strings)))
+         (rest-cs (rest child-strings))
+         (first-arg (first rest-cs))
+         (second-arg (second rest-cs))
+         (first-pair-p (keyword-arg-pair-p first-arg second-arg indent open op-len))
+         (can-inline (can-inline-first-arg-p first-arg op-len indent open first-pair-p)))
+    (cond
+      ((null rest-cs) nil)
+      (can-inline
+       (print-general-inlined first-arg second-arg first-pair-p rest-cs stream indent open op-len))
+      (t
+       (print-stacked-arguments rest-cs stream indent))))
   (write-string close stream))
 
+(defun dispatch-multiline-collection (op-cat open close children child-strings stream indent)
+  "Dispatch multiline collection printing by OP-CAT."
+  (declare (ignore children))
+  (case op-cat
+    (:def-package (print-defpackage-collection open close child-strings stream indent))
+    (:def-type    (print-type-collection open close child-strings stream indent))
+    (:def-var     (print-defvar-collection open close child-strings stream indent))
+    (:def-fn      (print-definition-collection open close child-strings stream indent))
+    (:binding     (print-binding-collection open close child-strings stream indent))
+    (:if          (print-if-collection open close child-strings stream indent))
+    ((:when :iteration) (print-when-collection open close child-strings stream indent))
+    (:cond        (print-cond-collection open close child-strings stream indent))
+    (:case        (print-case-collection open close child-strings stream indent))
+    (:mvb         (print-mvb-collection open close child-strings stream indent))
+    (:with        (print-with-collection open close child-strings stream indent))
+    (:lambda      (print-lambda-collection open close child-strings stream indent))
+    (otherwise    (print-general-collection open close child-strings stream indent))))
+
 (defun print-multiline-collection (open close children child-strings stream indent)
-  "Format multiline collection dispatching on the shape or operator of FIRST-CHILD."
+  "Format multiline collection dispatching on operator classification."
   (let* ((first-child (first children))
-         (first-tag (get-node-tag first-child))
-         (first-name (get-node-symbol-name first-child)))
-    (cond
-      ((member first-tag '(:paren :square :curly))
-       (print-clause-collection open close child-strings stream indent))
-      ((and first-name (starts-with-subseq "DEF" first-name))
-       (print-definition-collection open close child-strings stream indent))
-      ((special-binding-form-p first-name)
-       (print-special-collection open close first-name child-strings stream indent))
-      (t
-       (print-general-collection open close child-strings stream indent)))))
+         (first-tag (get-node-tag first-child)))
+    (if (member first-tag '(:paren :square :curly))
+        (print-clause-collection open close child-strings stream indent)
+        (let* ((first-name (get-node-symbol-name first-child))
+               (op-cat (classify-form-operator first-name)))
+          (dispatch-multiline-collection op-cat open close children child-strings stream indent)))))
+
+(defun always-multiline-op-p (op-cat children)
+  "Return T if OP-CAT should never be formatted as a single line."
+  (case op-cat
+    ((:def-package :def-type :cond :mvb) t)
+    ((:lambda) (>= (length children) 3))
+    ((:if) (>= (length children) 4))
+    ((:case) (>= (length children) 3))
+    ((:when :iteration) (>= (length children) 4))
+    ((:binding) (or (>= (length children) 4)
+                    (let ((binds (second children)))
+                      (and (member (get-node-tag binds) '(:paren :square))
+                           (>= (length (get-node-children binds)) 2)))))
+    (otherwise nil)))
 
 (defun print-collection (open close children stream indent)
   "Format and print a collection delimited by OPEN and CLOSE to STREAM."
@@ -488,8 +813,12 @@ Always returns a (:path () :file ...) node representing the parsed file contents
       (format stream "~A~A" open close)
       (let* ((child-strings (mapcar (lambda (c) (sexp-to-string c :indent (+ indent 2)))
                                     children))
+             (first-child (first children))
+             (first-name (get-node-symbol-name first-child))
+             (op-cat (classify-form-operator first-name))
              (single-line (format nil "~A~{~A~^ ~}~A" open child-strings close)))
-        (if (and (not (find #\Newline single-line))
+        (if (and (not (always-multiline-op-p op-cat children))
+                 (not (find #\Newline single-line))
                  (<= (length single-line) 80))
             (write-string single-line stream)
             (print-multiline-collection open close children child-strings stream indent)))))
@@ -501,6 +830,20 @@ Always returns a (:path () :file ...) node representing the parsed file contents
     (when rest
       (terpri stream)
       (terpri stream))))
+
+(defun print-file-with-clean-sources (file-node clean-node clean-sources stream &optional (dialect *current-dialect*))
+  "Print FILE-NODE to STREAM, emitting original source text from CLEAN-SOURCES for unmodified forms."
+  (let* ((current-children (get-node-children file-node))
+         (clean-children (and clean-node (get-node-children clean-node))))
+    (loop for (c . rest) on current-children do
+      (let ((clean-pos (and clean-children (position c clean-children :test #'equal))))
+        (if (and clean-pos clean-sources (< clean-pos (length clean-sources)))
+            (write-string (aref clean-sources clean-pos) stream)
+            (progn
+              (print-sexp c stream 0 :dialect dialect)
+              (when rest
+                (terpri stream)
+                (terpri stream))))))))
 
 (defun print-sexp (expr stream &optional (indent 0) &key (dialect *current-dialect*))
   "Serialize EXPR directly to STREAM with proper formatting."

@@ -9,4 +9,7 @@
         yason
       ]))
   ];
+  enterShell = ''
+    git config core.hooksPath .githooks 2>/dev/null || true
+  '';
 }

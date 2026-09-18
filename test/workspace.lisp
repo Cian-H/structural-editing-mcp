@@ -109,3 +109,51 @@
               (write-workspace)
               (ok (search "clj-updated" (uiop:read-file-string p-clj))))))))))
 
+(deftest test-workspace-precision-persistence
+  (testing "unmodified files in multi-file workspace are untouched on disk"
+    (init-workspace)
+    (uiop:with-temporary-file (:pathname p-mod :stream s-mod :direction :output :type "lisp")
+      (write-string "(defpackage :mod-pkg (:use :cl))
+
+(defun fn-one (x)
+  \"Documentation with    spaces.\"
+  (+ x 1))
+
+(defun fn-two (y)
+  (* y 2))
+" s-mod)
+      :close-stream
+      (uiop:with-temporary-file (:pathname p-clean :stream s-clean :direction :output :type "lisp")
+        (write-string "(defpackage :clean-pkg (:use :cl))
+
+(defun clean-fn (z)
+  (- z 100))
+" s-clean)
+        :close-stream
+        (let ((id-mod (read-workspace-file p-mod))
+              (id-clean (read-workspace-file p-clean)))
+          (ok (= 0 id-mod))
+          (ok (= 1 id-clean))
+          (let ((file-mod-node (get-node-at-path *workspace-tree* '(0 0)))
+                (file-clean-node (get-node-at-path *workspace-tree* '(0 1))))
+            (ok (file-clean-p file-mod-node))
+            (ok (file-clean-p file-clean-node))
+            ;; Mutate only fn-two in p-mod: (0 0 2 1)
+            (setf *workspace-tree*
+                  (overwrite-node *workspace-tree* '(0 0 2 1) (list :path '(0 0 2 1) :leaf 'fn-two-renamed)))
+            (let ((file-mod-after (get-node-at-path *workspace-tree* '(0 0)))
+                  (file-clean-after (get-node-at-path *workspace-tree* '(0 1)))
+                  (clean-mtime-before (file-write-date p-clean)))
+              (ok (not (file-clean-p file-mod-after)))
+              (ok (file-clean-p file-clean-after))
+              ;; Write workspace: clean file must not be rewritten!
+              (write-workspace)
+              (let ((clean-mtime-after (file-write-date p-clean))
+                    (mod-content (uiop:read-file-string p-mod)))
+                (ok (= clean-mtime-before clean-mtime-after))
+                ;; Modified file has renamed fn-two
+                (ok (search "fn-two-renamed" mod-content))
+                ;; Unmodified fn-one retains exact byte-for-byte formatting and docstring
+                (ok (search "\"Documentation with    spaces.\"" mod-content))
+                (ok (search "(defpackage :mod-pkg (:use :cl))" mod-content))))))))))
+
