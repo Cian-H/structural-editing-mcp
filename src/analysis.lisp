@@ -1091,6 +1091,18 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
        (char= (char name 0) #\*)
        (char= (char name (1- (length name))) #\*)))
 
+(defun extract-spec-ignored-vars (spec)
+  "Extract ignored/ignorable variable names from a single declaration specifier form SPEC."
+  (let ((result '()))
+    (when (eq (get-node-tag spec) :paren)
+      (let* ((spec-children (get-node-children spec))
+             (spec-name (when spec-children (leaf-symbol-name (first spec-children)))))
+        (when (member spec-name '("ignore" "ignorable") :test #'string=)
+          (dolist (var-node (rest spec-children))
+            (when (leaf-any-symbol-p var-node)
+              (push (leaf-symbol-name var-node) result))))))
+    result))
+
 (defun extract-cl-declarations (body-nodes)
   "Extract ignored/ignorable variable names from leading (declare ...) forms in BODY-NODES.
 Returns (values ignored-names remaining-body-nodes)."
@@ -1105,13 +1117,8 @@ Returns (values ignored-names remaining-body-nodes)."
                      (equal (leaf-symbol-name (first children)) "declare"))
           do
           (dolist (spec (rest children))
-            (when (eq (get-node-tag spec) :paren)
-              (let* ((spec-children (get-node-children spec))
-                     (spec-name (when spec-children (leaf-symbol-name (first spec-children)))))
-                (when (member spec-name '("ignore" "ignorable") :test #'string=)
-                  (dolist (var-node (rest spec-children))
-                    (when (leaf-any-symbol-p var-node)
-                      (push (leaf-symbol-name var-node) ignored)))))))
+            (dolist (var (extract-spec-ignored-vars spec))
+              (push var ignored)))
           (setf remaining (rest remaining)))
     (values ignored remaining)))
 
@@ -1200,28 +1207,29 @@ Returns (values ignored-names remaining-body-nodes)."
           (collect params-node)))
     (nreverse results)))
 
+(defun extract-single-let-clause (clause)
+  "Parse a single CLAUSE into plist (:pattern node :init node)."
+  (cond
+    ((leaf-any-symbol-p clause)
+     (list :pattern clause :init nil))
+    ((compound-node-p clause)
+     (let ((c-children (get-node-children clause)))
+       (list :pattern (first c-children)
+             :init (second c-children))))
+    (t nil)))
+
 (defun extract-let-clauses (bindings-node dialect)
   "Extract list of plist (:pattern node :init node) from BINDINGS-NODE according to DIALECT."
-  (let ((results '()))
-    (when bindings-node
-      (let ((tag (get-node-tag bindings-node))
-            (children (get-node-children bindings-node)))
-        (cond
-          ((or (eq dialect :clojure) (eq dialect :fennel) (eq tag :square))
-           (loop for (pat-node init-node) on children by #'cddr
-                 while pat-node do
-                 (push (list :pattern pat-node :init init-node) results)))
-          (t
-           (dolist (clause children)
-             (cond
-               ((leaf-any-symbol-p clause)
-                (push (list :pattern clause :init nil) results))
-               ((compound-node-p clause)
-                (let ((c-children (get-node-children clause)))
-                  (push (list :pattern (first c-children)
-                              :init (second c-children))
-                        results)))))))))
-    (nreverse results)))
+  (unless bindings-node (return-from extract-let-clauses nil))
+  (let ((tag (get-node-tag bindings-node))
+        (children (get-node-children bindings-node)))
+    (if (or (eq dialect :clojure) (eq dialect :fennel) (eq tag :square))
+        (loop for (pat-node init-node) on children by #'cddr
+              while pat-node
+              collect (list :pattern pat-node :init init-node))
+        (loop for clause in children
+              for parsed = (extract-single-let-clause clause)
+              when parsed collect parsed))))
 
 (defun check-and-register-binding (scope name path ignored-names findings)
   (let ((outer (find-in-lexical-scope (lexical-scope-parent scope) name))
