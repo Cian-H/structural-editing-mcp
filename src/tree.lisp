@@ -7,6 +7,7 @@
            :get-node-tag
            :get-node-tags
            :get-node-children
+           :compound-node-p
            :parse-node
            :node
            :leaf
@@ -24,7 +25,7 @@
 (defpattern comment (path text)
   `(list :path ,path :comment ,text))
 
-(declaim (inline get-node-path get-node-tag get-node-tags get-node-children))
+(declaim (inline get-node-path get-node-tag get-node-tags get-node-children compound-node-p))
 
 (defun get-node-path (node)
   "Return the path list of NODE, or NIL if invalid."
@@ -50,6 +51,11 @@
     ((or (leaf _ _) (comment _ _)) nil)
     ((node _ _ children) children)
     (_ nil)))
+
+(defun compound-node-p (node)
+  "Return T if NODE is a compound parenthesized or bracketed collection."
+  (let ((tag (get-node-tag node)))
+    (or (eq tag :paren) (eq tag :square))))
 
 (defun parse-node (node)
   "Destructure NODE and return (values path tag children-or-leaf-val)."
