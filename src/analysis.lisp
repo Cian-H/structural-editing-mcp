@@ -891,140 +891,163 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
     "WHEN-LET" "IF-LET" "WHEN-SOME" "IF-SOME" "DO" "DO*")
   "List of head symbols whose child 1 is a list of lexical bindings.")
 
+(defun duplicate-subtree-eligible-p (tag children head-str context)
+  "Return T if a node with TAG, CHILDREN, HEAD-STR, and CONTEXT is eligible for duplicate tracking."
+  (and (member tag '(:paren :square :curly))
+       children
+       (not (member tag '(:workspace :common-lisp :clojure :scheme :emacs-lisp :fennel)))
+       (not (member context '(:binding-list :binding-clause)))
+       (not (member head-str *compiler-directive-heads* :test #'string=))))
+
+(defun record-duplicate-subtree (curr curr-path node-cnt depth exact buckets node-metadata)
+  "Record an eligible duplicate subtree node in BUCKETS and NODE-METADATA."
+  (let ((fingerprint (canonicalize-subtree curr :exact exact)))
+    (push (cons curr-path curr) (gethash fingerprint buckets nil))
+    (unless (gethash fingerprint node-metadata)
+      (setf (gethash fingerprint node-metadata)
+            (list :node-count node-cnt :depth depth :sample curr)))))
+
+(defun loop-with-vector-bindings-p (head-str children)
+  "Return T if form is a LOOP with a vector binding clause."
+  (and (equal head-str "LOOP")
+       children
+       (second children)
+       (eq (get-node-tag (second children)) :square)))
+
+(defun harvest-child-context (parent-context parent-tag head-str idx children)
+  "Determine child context during harvest traversal."
+  (cond
+    ((and (eq parent-context :binding-list) (eq parent-tag :square))
+     (if (evenp idx) :binding-clause nil))
+    ((eq parent-context :binding-list)
+     :binding-clause)
+    ((eq parent-context :binding-clause)
+     nil)
+    ((or (member head-str *binding-form-heads* :test #'string=)
+         (member head-str '("MULTIPLE-VALUE-BIND" "DESTRUCTURING-BIND") :test #'string=)
+         (loop-with-vector-bindings-p head-str children))
+     (if (= idx 1) :binding-list nil))
+    (t nil)))
+
+(defun harvest-duplicate-children (curr-path children tag head-str context exact min-nodes min-depth buckets node-metadata)
+  "Traverse children of a node with contextual rules."
+  (let ((skip-first (eq context :binding-clause)))
+    (loop for child in (if skip-first (rest children) children)
+          for idx from (if skip-first 1 0)
+          for cp = (or (get-node-path child) (append curr-path (list idx)))
+          for c-ctx = (harvest-child-context context tag head-str idx children)
+          do (harvest-duplicate-subtrees child cp exact min-nodes min-depth buckets node-metadata c-ctx))))
+
+(defun maybe-record-duplicate-subtree (node curr-path exact min-nodes min-depth buckets node-metadata context head-str)
+  "Check eligibility and record candidate duplicate subtree."
+  (when (duplicate-subtree-eligible-p (get-node-tag node) (get-node-children node) head-str context)
+    (let ((node-cnt (count-ast-nodes node))
+          (depth (compute-nesting-depth node 0)))
+      (when (and (>= node-cnt (or min-nodes 4))
+                 (>= depth (or min-depth 2)))
+        (record-duplicate-subtree node curr-path node-cnt depth exact buckets node-metadata)))))
+
+(defun harvest-duplicate-subtrees (node curr-path exact min-nodes min-depth buckets node-metadata &optional context)
+  "Recursively traverse NODE to collect candidate subtrees into BUCKETS and NODE-METADATA."
+  (let* ((children (get-node-children node))
+         (first-child (first children))
+         (first-val (when (and first-child (eq (get-node-tag first-child) :leaf))
+                      (nth-value 2 (parse-node first-child))))
+         (head-str (when (symbolp first-val) (string-upcase (symbol-name first-val)))))
+    (maybe-record-duplicate-subtree node curr-path exact min-nodes min-depth buckets node-metadata context head-str)
+    (unless (member head-str '("DECLARE" "DECLAIM" "PROCLAIM" "IN-PACKAGE" "DEFPACKAGE") :test #'string=)
+      (harvest-duplicate-children curr-path children (get-node-tag node)
+                                  head-str context exact min-nodes min-depth buckets node-metadata))))
+
+(defun extract-raw-duplicate-candidates (buckets node-metadata)
+  "Extract entries appearing at least twice from BUCKETS and associate with NODE-METADATA."
+  (let ((raw-candidates '()))
+    (maphash
+     (lambda (fingerprint entries)
+       (when (>= (length entries) 2)
+         (let* ((meta (gethash fingerprint node-metadata))
+                (paths (mapcar #'car entries))
+                (node-cnt (getf meta :node-count))
+                (depth (getf meta :depth))
+                (sample (getf meta :sample)))
+           (push (list :fingerprint fingerprint
+                       :paths (nreverse paths)
+                       :node-count node-cnt
+                       :depth depth
+                       :sample sample)
+                 raw-candidates))))
+     buckets)
+    raw-candidates))
+
+(defun candidate-subsumed-p (cand candidates)
+  "Return T if CAND is subsumed by any other candidate in CANDIDATES."
+  (let* ((c-paths (getf cand :paths))
+         (c-count (length c-paths)))
+    (some (lambda (other)
+            (unless (eq cand other)
+              (let ((o-paths (getf other :paths))
+                    (o-count (length (getf other :paths))))
+                (and (= c-count o-count)
+                     (> (getf other :node-count) (getf cand :node-count))
+                     (every (lambda (cp)
+                              (some (lambda (op) (path-prefix-p op cp)) o-paths))
+                            c-paths)))))
+          candidates)))
+
+(defun filter-subsumed-candidates (candidates)
+  "Filter out candidates that are completely subsumed by larger subtrees with identical occurrences."
+  (remove-if (lambda (cand) (candidate-subsumed-p cand candidates)) candidates))
+
+(defun make-duplicate-snippet (sample)
+  "Generate a single-line truncated snippet for SAMPLE node."
+  (let* ((raw-str (sexp-to-string sample))
+         (single-line (substitute #\Space #\Newline (string-trim '(#\Space #\Newline #\Tab) raw-str))))
+    (if (> (length single-line) 80)
+        (format nil "~A..." (subseq single-line 0 77))
+        single-line)))
+
+(defun build-duplicate-group (cand)
+  "Build a DUPLICATE-GROUP instance from CAND."
+  (let* ((paths (getf cand :paths))
+         (sample (getf cand :sample))
+         (snippet (make-duplicate-snippet sample))
+         (node-cnt (getf cand :node-count))
+         (depth (getf cand :depth))
+         (recomm (if (same-top-level-form-p paths)
+                     "Repeated expression within the same function — consider extracting into a local variable using 'ast_extract_variable'."
+                     "Repeated code across multiple locations — consider extracting into a shared helper function using 'ast_extract_function'.")))
+    (make-duplicate-group
+     :code-snippet snippet
+     :occurrence-count (length paths)
+     :paths paths
+     :node-count node-cnt
+     :depth depth
+     :recommendation recomm)))
+
+(defun sort-duplicate-groups (groups)
+  "Sort duplicate groups descending by AST savings, then by occurrence count."
+  (sort groups
+        (lambda (a b)
+          (let ((savings-a (* (duplicate-group-node-count a) (1- (duplicate-group-occurrence-count a))))
+                (savings-b (* (duplicate-group-node-count b) (1- (duplicate-group-occurrence-count b)))))
+            (if (= savings-a savings-b)
+                (> (duplicate-group-occurrence-count a) (duplicate-group-occurrence-count b))
+                (> savings-a savings-b))))))
+
 (defun find-duplicate-subtrees (tree &key path (min-nodes 4) (min-depth 2) (exact t))
   "Find repeated AST subtrees in TREE (or under PATH).
 Groups matching subtrees, removes redundant subsumed sub-expressions, and generates refactoring recommendations."
-  (let* ((start-node (resolve-tree-scope tree path))
-          (buckets (make-hash-table :test 'equal))
-          (node-metadata (make-hash-table :test 'equal)))
-    (when start-node
-      (labels ((harvest (curr curr-path &optional context)
-                 (let ((tag (get-node-tag curr))
-                       (children (get-node-children curr)))
-                   (when (and (member tag '(:paren :square :curly))
-                              children
-                              (not (member tag '(:workspace :common-lisp :clojure :scheme :emacs-lisp :fennel))))
-                     (let* ((first-child (first children))
-                            (first-val (when (and first-child (eq (get-node-tag first-child) :leaf))
-                                         (nth-value 2 (parse-node first-child))))
-                            (head-str (when (symbolp first-val) (string-upcase (symbol-name first-val)))))
-                       (unless (or (member context '(:binding-list :binding-clause))
-                                   (member head-str *compiler-directive-heads* :test #'string=))
-                         (let ((node-cnt (count-ast-nodes curr))
-                               (depth (compute-nesting-depth curr 0)))
-                           (when (and (>= node-cnt (or min-nodes 4))
-                                      (>= depth (or min-depth 2)))
-                             (let ((fingerprint (canonicalize-subtree curr :exact exact)))
-                               (push (cons curr-path curr) (gethash fingerprint buckets nil))
-                               (unless (gethash fingerprint node-metadata)
-                                 (setf (gethash fingerprint node-metadata)
-                                       (list :node-count node-cnt :depth depth :sample curr)))))))))
-                   (let* ((first-child (first children))
-                          (first-val (when (and first-child (eq (get-node-tag first-child) :leaf))
-                                       (nth-value 2 (parse-node first-child))))
-                          (head-str (when (symbolp first-val) (string-upcase (symbol-name first-val)))))
-                     (unless (member head-str '("DECLARE" "DECLAIM" "PROCLAIM" "IN-PACKAGE" "DEFPACKAGE") :test #'string=)
-                       (flet ((resolve-child-path (child idx)
-                                (or (get-node-path child) (append curr-path (list idx))))
-                              (recurse-children (child-list child-context)
-                                (loop for child in child-list
-                                      for idx from 0
-                                      for cp = (or (get-node-path child) (append curr-path (list idx)))
-                                      do (harvest child cp child-context))))
-                         (cond
-                           ;; Clojure-style vector binding list [k1 v1 k2 v2]
-                           ((and (eq context :binding-list) (eq tag :square))
-                            (loop for child in children
-                                  for idx from 0
-                                  for cp = (resolve-child-path child idx)
-                                  do (harvest child cp (if (evenp idx) :binding-clause nil))))
-                           ;; Lisp-style binding list ((var1 val1) (var2 val2))
-                           ((eq context :binding-list)
-                            (recurse-children children :binding-clause))
-                           ;; Individual binding clause (var val) or (fn (params) body)
-                           ((eq context :binding-clause)
-                            (loop for child in (rest children)
-                                  for idx from 1
-                                  for cp = (resolve-child-path child idx)
-                                  do (harvest child cp nil)))
-                           ;; Forms where child 1 is the bindings list
-                           ((or (member head-str *binding-form-heads* :test #'string=)
-                                (member head-str '("MULTIPLE-VALUE-BIND" "DESTRUCTURING-BIND") :test #'string=)
-                                (and (equal head-str "LOOP") children (second children) (eq (get-node-tag (second children)) :square)))
-                            (loop for child in children
-                                  for idx from 0
-                                  for cp = (resolve-child-path child idx)
-                                  do (harvest child cp (if (= idx 1) :binding-list nil))))
-                           ;; Default traversal
-                           (t
-                            (recurse-children children nil)))))))))
-        (harvest start-node (or (get-node-path start-node) path '()))))
-
-    (let ((raw-candidates '()))
-      (maphash
-       (lambda (fingerprint entries)
-         (when (>= (length entries) 2)
-           (let* ((meta (gethash fingerprint node-metadata))
-                  (paths (mapcar #'car entries))
-                  (node-cnt (getf meta :node-count))
-                  (depth (getf meta :depth))
-                  (sample (getf meta :sample)))
-             (push (list :fingerprint fingerprint
-                         :paths (nreverse paths)
-                         :node-count node-cnt
-                         :depth depth
-                         :sample sample)
-                   raw-candidates))))
-       buckets)
-
-      (let ((filtered-candidates '()))
-        (dolist (cand raw-candidates)
-          (let* ((c-paths (getf cand :paths))
-                 (c-count (length c-paths))
-                 (subsumed-p
-                   (some (lambda (other)
-                           (unless (eq cand other)
-                             (let ((o-paths (getf other :paths))
-                                   (o-count (length (getf other :paths))))
-                               (and (= c-count o-count)
-                                    (> (getf other :node-count) (getf cand :node-count))
-                                    (every (lambda (cp)
-                                             (some (lambda (op) (path-prefix-p op cp)) o-paths))
-                                           c-paths)))))
-                         raw-candidates)))
-            (unless subsumed-p
-              (push cand filtered-candidates))))
-
-        (let ((groups
-                (mapcar
-                 (lambda (cand)
-                   (let* ((paths (getf cand :paths))
-                          (sample (getf cand :sample))
-                          (raw-str (sexp-to-string sample))
-                          (single-line (substitute #\Space #\Newline (string-trim '(#\Space #\Newline #\Tab) raw-str)))
-                          (snippet (if (> (length single-line) 80)
-                                       (format nil "~A..." (subseq single-line 0 77))
-                                       single-line))
-                          (node-cnt (getf cand :node-count))
-                          (depth (getf cand :depth))
-                          (recomm (if (same-top-level-form-p paths)
-                                      "Repeated expression within the same function — consider extracting into a local variable using 'ast_extract_variable'."
-                                      "Repeated code across multiple locations — consider extracting into a shared helper function using 'ast_extract_function'.")))
-                     (make-duplicate-group
-                      :code-snippet snippet
-                      :occurrence-count (length paths)
-                      :paths paths
-                      :node-count node-cnt
-                      :depth depth
-                      :recommendation recomm)))
-                 filtered-candidates)))
-          (sort groups
-                (lambda (a b)
-                  (let ((savings-a (* (duplicate-group-node-count a) (1- (duplicate-group-occurrence-count a))))
-                        (savings-b (* (duplicate-group-node-count b) (1- (duplicate-group-occurrence-count b)))))
-                    (if (= savings-a savings-b)
-                        (> (duplicate-group-occurrence-count a) (duplicate-group-occurrence-count b))
-                        (> savings-a savings-b))))))))))
+  (let ((start-node (resolve-tree-scope tree path)))
+    (unless start-node
+      (return-from find-duplicate-subtrees nil))
+    (let ((buckets (make-hash-table :test 'equal))
+          (node-metadata (make-hash-table :test 'equal))
+          (start-path (or (get-node-path start-node) path '())))
+      (harvest-duplicate-subtrees start-node start-path exact min-nodes min-depth buckets node-metadata)
+      (let* ((raw-candidates (extract-raw-duplicate-candidates buckets node-metadata))
+             (filtered-candidates (filter-subsumed-candidates raw-candidates))
+             (groups (mapcar #'build-duplicate-group filtered-candidates)))
+        (sort-duplicate-groups groups)))))
 
 (defun format-duplicate-report (duplicate-groups)
   "Format a list of DUPLICATE-GROUP instances into a readable diagnostic report."
