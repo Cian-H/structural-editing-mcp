@@ -853,15 +853,20 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
                    (when (and (member tag '(:paren :square :curly))
                               children
                               (not (member tag '(:workspace :common-lisp :clojure :scheme :emacs-lisp :fennel))))
-                     (let ((node-cnt (count-ast-nodes curr))
-                           (depth (compute-nesting-depth curr 0)))
-                       (when (and (>= node-cnt (or min-nodes 4))
-                                  (>= depth (or min-depth 2)))
-                         (let ((fingerprint (canonicalize-subtree curr :exact exact)))
-                           (push (cons curr-path curr) (gethash fingerprint buckets nil))
-                           (unless (gethash fingerprint node-metadata)
-                             (setf (gethash fingerprint node-metadata)
-                                   (list :node-count node-cnt :depth depth :sample curr)))))))
+                     (let* ((first-child (first children))
+                            (first-val (when (and first-child (eq (get-node-tag first-child) :leaf))
+                                         (nth-value 2 (parse-node first-child))))
+                            (head-str (when (symbolp first-val) (string-upcase (symbol-name first-val)))))
+                       (unless (member head-str '("DECLARE" "DECLAIM" "PROCLAIM" "IN-PACKAGE") :test #'string=)
+                         (let ((node-cnt (count-ast-nodes curr))
+                               (depth (compute-nesting-depth curr 0)))
+                           (when (and (>= node-cnt (or min-nodes 4))
+                                      (>= depth (or min-depth 2)))
+                             (let ((fingerprint (canonicalize-subtree curr :exact exact)))
+                               (push (cons curr-path curr) (gethash fingerprint buckets nil))
+                               (unless (gethash fingerprint node-metadata)
+                                 (setf (gethash fingerprint node-metadata)
+                                       (list :node-count node-cnt :depth depth :sample curr)))))))))
                    (loop for child in children
                          for idx from 0
                          for child-path = (or (get-node-path child) (append curr-path (list idx)))
@@ -1018,6 +1023,12 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
       (string-equal name "ignore")
       (string-equal name "unused")))
 
+(defun dynamic-variable-name-p (name)
+  "Return T if variable NAME has earmuffs (*...*), indicating a dynamic variable."
+  (and (>= (length name) 2)
+       (char= (char name 0) #\*)
+       (char= (char name (1- (length name))) #\*)))
+
 (defun extract-cl-declarations (body-nodes)
   "Extract ignored/ignorable variable names from leading (declare ...) forms in BODY-NODES.
 Returns (values ignored-names remaining-body-nodes)."
@@ -1146,7 +1157,9 @@ Returns (values ignored-names remaining-body-nodes)."
 (defun check-and-register-binding (scope name path ignored-names findings)
   (let ((outer (find-in-lexical-scope (lexical-scope-parent scope) name))
         (ignored (member name ignored-names :test #'string-equal)))
-    (when (and outer (not (ignored-variable-name-p name)))
+    (when (and outer
+               (not (ignored-variable-name-p name))
+               (not (dynamic-variable-name-p name)))
       (push (make-binding-finding
              :kind :shadowed-variable
              :variable-name name
@@ -1329,7 +1342,8 @@ Returns (values ignored-names remaining-body-nodes)."
                         (setf findings-acc (walk-binding-tree b let-scope dialect findings-acc)))
                       (setf findings-acc (check-unused-in-scope let-scope dialect findings-acc))))))
 
-               ((or (member head-name '("let*" "letrec" "loop") :test #'string=)
+               ((or (member head-name '("let*" "letrec") :test #'string=)
+                    (and (equal head-name "loop") (or (eq dialect :clojure) (eq dialect :fennel)))
                     (and (equal head-name "let") (or (eq dialect :clojure) (eq dialect :fennel))))
                 (let* ((bindings-node (second children))
                        (body-nodes (cddr children))
@@ -1355,6 +1369,10 @@ Returns (values ignored-names remaining-body-nodes)."
                       (setf findings-acc (walk-binding-tree b curr-scope dialect findings-acc)))
                     (dolist (sc created-scopes)
                       (setf findings-acc (check-unused-in-scope sc dialect findings-acc))))))
+
+               ((equal head-name "loop")
+                (dolist (c (rest children))
+                  (setf findings-acc (walk-binding-tree c scope dialect findings-acc))))
 
                ((equal head-name "multiple-value-bind")
                 (let* ((vars-node (second children))
@@ -1606,7 +1624,7 @@ Returns a list of REFACTORING-SUGGESTION instances sorted by priority."
                     suggestions))))))
 
     (when (or (null cat-keywords) (member :duplicate cat-keywords) (member :duplicates cat-keywords))
-      (let ((duplicate-groups (find-duplicate-subtrees tree :path path :min-nodes 3 :min-depth 2)))
+      (let ((duplicate-groups (find-duplicate-subtrees tree :path path :min-nodes 5 :min-depth 2)))
         (dolist (g duplicate-groups)
           (let* ((savings (* (duplicate-group-node-count g) (1- (duplicate-group-occurrence-count g))))
                  (p (cond
