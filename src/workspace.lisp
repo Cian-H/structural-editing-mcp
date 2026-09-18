@@ -40,7 +40,7 @@
   "Mapping of file extensions to dialect keywords.")
 
 (defparameter *known-dialects*
-  '(:common-lisp :clojure :scheme :emacs-lisp :fennel)
+  structural-editing-mcp.parser:*supported-dialects*
   "List of supported Lisp dialect keywords.")
 
 (defvar *workspace-tree* nil

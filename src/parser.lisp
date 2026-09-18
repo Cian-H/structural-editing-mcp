@@ -10,10 +10,20 @@
            :format-sexp
            :parse-atom-string
            :format-atom
-           :*current-dialect*)
+           :*current-dialect*
+           :*supported-dialects*
+           :supported-dialect-p)
   (:documentation "Lexer, parser, and pretty-printer serializer for s-expressions."))
 
 (in-package :structural-editing-mcp.parser)
+
+(defparameter *supported-dialects*
+  '(:common-lisp :clojure :scheme :emacs-lisp :fennel)
+  "List of supported Lisp dialect keywords.")
+
+(defun supported-dialect-p (tag)
+  "Return T if TAG is a supported Lisp dialect keyword."
+  (and (member tag *supported-dialects*) t))
 
 (defvar *current-dialect* :common-lisp
   "Current Lisp dialect being parsed or formatted (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel).")
@@ -419,7 +429,7 @@ Always returns a (:path () :file ...) node representing the parsed file contents
            (terpri stream)
            (terpri stream))))
       ((guard (node _ tag children)
-              (member tag '(:common-lisp :clojure :scheme :emacs-lisp :fennel)))
+              (supported-dialect-p tag))
        (let ((*current-dialect* tag))
          (loop for (c . rest) on children do
            (print-sexp c stream indent :dialect tag)

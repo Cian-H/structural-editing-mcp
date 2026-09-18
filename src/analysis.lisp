@@ -515,7 +515,7 @@ Returns a list of LINT-FINDING instances."
                         (node-path (get-node-path node))
                         (effective-dialect
                           (cond
-                            ((member tag '(:common-lisp :clojure :scheme :emacs-lisp :fennel))
+                            ((supported-dialect-p tag)
                              tag)
                             (t (or current-dialect dialect :common-lisp))))
                         (node-findings (lint-node node node-path
@@ -722,7 +722,7 @@ Base complexity is 1, with +1 for each conditional branch, short-circuit point, 
                                for form-idx from 0
                                for form-path = (or (get-node-path form) (append f-path (list form-idx)))
                                do (push (cons form form-path) results)))))
-      ((member tag '(:common-lisp :clojure :scheme :emacs-lisp :fennel))
+      ((supported-dialect-p tag)
        (loop for file-child in (get-node-children node)
              for f-idx from 0
              for f-path = (or (get-node-path file-child) (append base-path (list f-idx)))
@@ -1208,7 +1208,7 @@ Returns (values ignored-names remaining-body-nodes)."
         ((eq tag :comment)
          nil)
 
-        ((member tag '(:workspace :file :common-lisp :clojure :scheme :emacs-lisp :fennel))
+        ((or (eq tag :workspace) (eq tag :file) (supported-dialect-p tag))
          (dolist (c children)
            (setf findings-acc (walk-binding-tree c scope dialect findings-acc))))
 
