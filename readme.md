@@ -171,7 +171,7 @@ Add to your `claude_desktop_config.json`:
 {
   "mcpServers": {
     "structural-editing": {
-      "command": "/path/to/structural-editing-mcp/structural-editing-mcp-server"
+      "command": "/path/to/structural-editing-mcp/semcp"
     }
   }
 }
@@ -238,7 +238,7 @@ Start the server directly over standard I/O:
 
 ### Building the Standalone Executable
 
-Build a self-contained compressed binary (`structural-editing-mcp-server`):
+Build a self-contained compressed binary (`semcp`):
 
 ```bash
 ./scripts/build.lisp

@@ -41,7 +41,7 @@ Always use these commands for development and verification:
 | :--- | :--- | :--- |
 | **Run All Tests** | `./scripts/run-tests.lisp` | Executes full Rove test suite. Must exit 0. |
 | **Run Targeted Test** | `./scripts/run-tests.lisp <test-symbol>` | e.g. `./scripts/run-tests.lisp test-mcp-tools-list` |
-| **Compile Standalone Binary** | `./scripts/build.lisp` | Builds `structural-editing-mcp-server` via `save-lisp-and-die`. |
+| **Compile Standalone Binary** | `./scripts/build.lisp` | Builds `semcp` via `save-lisp-and-die`. |
 | **Run MCP Server via Stdio** | `./scripts/run-server.lisp` | Runs stdio JSON-RPC server with load messages routed to stderr. |
 | **Interactive SBCL Shell** | `devenv shell -- sbcl` | Starts SBCL REPL with all dependencies loaded. |
 

@@ -18,7 +18,7 @@
 
 (asdf:load-system :structural-editing-mcp)
 
-(sb-ext:save-lisp-and-die "structural-editing-mcp-server"
+(sb-ext:save-lisp-and-die "semcp"
                           :executable t
                           :save-runtime-options t
                           :toplevel 'structural-editing-mcp:main

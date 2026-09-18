@@ -70,10 +70,9 @@ jobs:
           sbcl --no-userinit --disable-debugger \
             --load "$HOME/quicklisp/setup.lisp" \
             --script scripts/build.lisp
-          test -x structural-editing-mcp-server
-          ./structural-editing-mcp-server --version
-          cp structural-editing-mcp-server \
-            "structural-editing-mcp-server-linux-x86_64"
+          test -x semcp
+          ./semcp --version
+          cp semcp "semcp-linux-x86_64"
 
       - name: Create GitHub Release
         if: steps.check.outputs.exists == 'false'
@@ -86,5 +85,5 @@ jobs:
             --title "structural-editing-mcp ${VERSION}" \
             --notes "Automated CalVer release ${VERSION}.
 
-          Asset: structural-editing-mcp-server-linux-x86_64 (standalone Linux x86_64 executable)." \
-            "structural-editing-mcp-server-linux-x86_64"
+          Asset: semcp-linux-x86_64 (standalone Linux x86_64 executable)." \
+            "semcp-linux-x86_64"

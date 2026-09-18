@@ -27,7 +27,7 @@
        (uiop:quit 0))
       ((or (member "--help" args :test #'string=)
            (member "-h" args :test #'string=))
-       (format t "Usage: structural-editing-mcp-server [options]~%~%")
+       (format t "Usage: semcp [options]~%~%")
        (format t "Options:~%")
        (format t "  -v, --version    Print version and exit~%")
        (format t "  -h, --help       Print this help message and exit~%~%")
