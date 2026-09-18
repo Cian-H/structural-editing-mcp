@@ -417,6 +417,14 @@ Always returns a (:path () :file ...) node representing the parsed file contents
                             (write-string c stream)))
                  (write-string close stream))))))))
 
+(defun print-toplevel-sequence (children stream indent dialect)
+  "Print sequence of top-level CHILDREN separated by blank lines."
+  (loop for (c . rest) on children do
+    (print-sexp c stream indent :dialect dialect)
+    (when rest
+      (terpri stream)
+      (terpri stream))))
+
 (defun print-sexp (expr stream &optional (indent 0) &key (dialect *current-dialect*))
   "Serialize EXPR directly to STREAM with proper formatting."
   (declare (type fixnum indent))
@@ -428,25 +436,12 @@ Always returns a (:path () :file ...) node representing the parsed file contents
       ((structural-editing-mcp.tree::comment _ text)
        (write-string text stream))
       ((node _ (or :file 'file) children)
-       (loop for (c . rest) on children do
-         (print-sexp c stream indent :dialect dialect)
-         (when rest
-           (terpri stream)
-           (terpri stream))))
+       (print-toplevel-sequence children stream indent dialect))
       ((node _ (or :workspace 'workspace) children)
-       (loop for (c . rest) on children do
-         (print-sexp c stream indent :dialect dialect)
-         (when rest
-           (terpri stream)
-           (terpri stream))))
+       (print-toplevel-sequence children stream indent dialect))
       ((guard (node _ tag children)
               (supported-dialect-p tag))
-       (let ((*current-dialect* tag))
-         (loop for (c . rest) on children do
-           (print-sexp c stream indent :dialect tag)
-           (when rest
-             (terpri stream)
-             (terpri stream)))))
+       (print-toplevel-sequence children stream indent tag))
       ((node _ (or :paren 'paren) children)
        (print-collection "(" ")" children stream indent))
       ((node _ (or :square 'square) children)
