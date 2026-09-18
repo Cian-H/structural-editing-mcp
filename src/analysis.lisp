@@ -718,34 +718,29 @@ Base complexity is 1, with +1 for each conditional branch, short-circuit point, 
   "Collect all (form-node . path) pairs from NODE (workspace, dialect, file, or single form)."
   (let ((tag (get-node-tag node))
         (results '()))
-    (cond
-      ((eq tag :workspace)
-       (loop for dialect-child in (get-node-children node)
-             for d-idx from 0
-             for d-path = (or (get-node-path dialect-child) (append base-path (list d-idx)))
-             do (loop for file-child in (get-node-children dialect-child)
-                      for f-idx from 0
-                      for f-path = (or (get-node-path file-child) (append d-path (list f-idx)))
-                      do (loop for form in (get-node-children file-child)
-                               for form-idx from 0
-                               for form-path = (or (get-node-path form) (append f-path (list form-idx)))
-                               do (push (cons form form-path) results)))))
-      ((supported-dialect-p tag)
-       (loop for file-child in (get-node-children node)
-             for f-idx from 0
-             for f-path = (or (get-node-path file-child) (append base-path (list f-idx)))
-             do (loop for form in (get-node-children file-child)
-                      for form-idx from 0
-                      for form-path = (or (get-node-path form) (append f-path (list form-idx)))
-                      do (push (cons form form-path) results))))
-      ((eq tag :file)
-       (loop for form in (get-node-children node)
-             for form-idx from 0
-             for form-path = (or (get-node-path form) (append base-path (list form-idx)))
-             do (push (cons form form-path) results)))
-      (t
-       (push (cons node (or (get-node-path node) base-path)) results)))
-    (nreverse results)))
+    (labels ((collect-file (file-node f-path)
+               (loop for form in (get-node-children file-node)
+                     for form-idx from 0
+                     for form-path = (or (get-node-path form) (append f-path (list form-idx)))
+                     do (push (cons form form-path) results)))
+             (collect-dialect (dialect-node d-path)
+               (loop for file-child in (get-node-children dialect-node)
+                     for f-idx from 0
+                     for f-path = (or (get-node-path file-child) (append d-path (list f-idx)))
+                     do (collect-file file-child f-path))))
+      (cond
+        ((eq tag :workspace)
+         (loop for dialect-child in (get-node-children node)
+               for d-idx from 0
+               for d-path = (or (get-node-path dialect-child) (append base-path (list d-idx)))
+               do (collect-dialect dialect-child d-path)))
+        ((supported-dialect-p tag)
+         (collect-dialect node base-path))
+        ((eq tag :file)
+         (collect-file node base-path))
+        (t
+         (push (cons node (or (get-node-path node) base-path)) results)))
+      (nreverse results))))
 
 (defun analyze-complexity (tree &key path dialect (min-complexity 1) (min-depth 1))
   "Analyze structural complexity for forms in TREE (or under PATH).
