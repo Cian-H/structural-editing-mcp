@@ -36,13 +36,14 @@
       (let* ((res (gethash "result" result-json))
              (tools (gethash "tools" res)))
         (ok (listp tools))
-        (ok (= (length tools) 9))
+        (ok (= (length tools) 10))
         (let ((names (mapcar (lambda (x) (gethash "name" x)) tools)))
           (ok (member "read_node" names :test #'equal))
           (ok (not (member "read_workspace" names :test #'equal)))
           (ok (member "ast_modify" names :test #'equal))
           (ok (member "ast_remove" names :test #'equal))
           (ok (member "ast_relocate" names :test #'equal))
+          (ok (member "ast_extract_function" names :test #'equal))
           (ok (member "commit_workspace" names :test #'equal)))))))
 
 (deftest test-mcp-ast-operations
@@ -179,4 +180,56 @@
              (*standard-output* (make-string-output-stream)))
         (structural-editing-mcp.mcp:handle-message swap-msg)
         (let ((first-node (structural-editing-mcp.tree:get-node-at-path structural-editing-mcp.workspace:*workspace-tree* '(0 0 0))))
-          (ok (search "defun baz" (structural-editing-mcp.parser:sexp-to-string first-node)))))))
+          (ok (search "defun baz" (structural-editing-mcp.parser:sexp-to-string first-node)))))
+
+      ;; Test ast_relocate: split action
+      (let* ((split-msg (structural-editing-mcp.mcp::dict
+                         "jsonrpc" "2.0"
+                         "id" 15
+                         "method" "tools/call"
+                         "params" (structural-editing-mcp.mcp::dict
+                                   "name" "ast_relocate"
+                                   "arguments" (structural-editing-mcp.mcp::dict
+                                                "target_path" '(0 0)
+                                                "action" "split"
+                                                "index" 2))))
+             (*standard-output* (make-string-output-stream)))
+        (structural-editing-mcp.mcp:handle-message split-msg)
+        (let ((file-node (structural-editing-mcp.tree:get-node-at-path structural-editing-mcp.workspace:*workspace-tree* '(0 0))))
+          (ok (= (length (structural-editing-mcp.tree:get-node-children file-node)) 2))))
+
+      ;; Test ast_modify: range wrap with end_index
+      (let* ((range-wrap-msg (structural-editing-mcp.mcp::dict
+                              "jsonrpc" "2.0"
+                              "id" 16
+                              "method" "tools/call"
+                              "params" (structural-editing-mcp.mcp::dict
+                                        "name" "ast_modify"
+                                        "arguments" (structural-editing-mcp.mcp::dict
+                                                     "path" '(0 0 0)
+                                                     "action" "wrap"
+                                                     "new_node" ":square"
+                                                     "index" 0
+                                                     "end_index" 1))))
+             (*standard-output* (make-string-output-stream)))
+        (structural-editing-mcp.mcp:handle-message range-wrap-msg)
+        (let ((wrapped (structural-editing-mcp.tree:get-node-at-path structural-editing-mcp.workspace:*workspace-tree* '(0 0 0 0))))
+          (ok (eq (structural-editing-mcp.tree:get-node-tag wrapped) :square))))
+
+      ;; Test ast_extract_function
+      (let* ((ext-msg (structural-editing-mcp.mcp::dict
+                       "jsonrpc" "2.0"
+                       "id" 17
+                       "method" "tools/call"
+                       "params" (structural-editing-mcp.mcp::dict
+                                 "name" "ast_extract_function"
+                                 "arguments" (structural-editing-mcp.mcp::dict
+                                              "path" '(0 0 0 0 0 2)
+                                              "function_name" "extracted-helper"
+                                              "params" #("x" "y")))))
+             (*standard-output* (make-string-output-stream)))
+        (structural-editing-mcp.mcp:handle-message ext-msg)
+        (let ((code (structural-editing-mcp.parser:sexp-to-string structural-editing-mcp.workspace:*workspace-tree*)))
+          (ok (search "defun extracted-helper" code))))))
+
+

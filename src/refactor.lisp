@@ -3,8 +3,9 @@
         :cl
         :structural-editing-mcp.tree
         :structural-editing-mcp.parser
+        :structural-editing-mcp.edit
         :alexandria)
-  (:export :replace-pattern :extract-variable))
+  (:export :replace-pattern :extract-variable :extract-function))
 
 (in-package :structural-editing-mcp.refactor)
 
@@ -164,3 +165,36 @@
                      (completed-bindings-list ` (:path nil :paren ,completed-binding)))
                     `
                     (:path nil :paren (:path nil :leaf let) ,completed-bindings-list ,new-parent)))))))))))
+
+;;; --- Function Extraction ---
+
+(defun find-file-path-and-top-index (tree target-path)
+  "Find the file node path and top-level form index in that file for TARGET-PATH."
+  (cond
+    ((and (>= (length target-path) 3)
+          (eq (get-node-tag tree) :workspace))
+     (values (subseq target-path 0 2) (nth 2 target-path)))
+    ((eq (get-node-tag tree) :file)
+     (values '() (first target-path)))
+    (t
+     (values (butlast target-path) (lastcar target-path)))))
+
+(defun extract-function (tree target-path function-name &key params)
+  "Extract the node at TARGET-PATH into a new top-level function definition named FUNCTION-NAME."
+  (when (null target-path)
+    (error "Cannot extract root workspace/file node."))
+  (let ((target-node (get-node-at-path tree target-path)))
+    (unless target-node
+      (error "Target node not found at path ~A" target-path))
+    (multiple-value-bind (file-path top-idx) (find-file-path-and-top-index tree target-path)
+      (let* ((param-list (mapcar (lambda (p) (if (symbolp p) (symbol-name p) p)) (ensure-list params)))
+             (call-str (if param-list
+                           (format nil "(~A ~{~A~^ ~})" function-name param-list)
+                           (format nil "(~A)" function-name)))
+             (call-ast (first (get-node-children (string-to-sexp call-str))))
+             (def-str (format nil "(defun ~A (~{~A~^ ~}))" function-name param-list))
+             (def-ast-base (first (get-node-children (string-to-sexp def-str))))
+             (def-ast `(:path nil :paren ,@(get-node-children def-ast-base) ,target-node))
+             (tree-with-call (overwrite-node tree target-path call-ast))
+             (final-tree (insert-node tree-with-call file-path top-idx def-ast)))
+        (reindex-paths final-tree)))))

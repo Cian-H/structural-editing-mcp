@@ -234,37 +234,62 @@
 ;;; AST Mutation Dispatchers
 
 
-(defun perform-wrap (tree path wrapper-str)
-  "Wrap the node at PATH. WRAPPER-STR can be a delimiter keyword (e.g. ':paren', ':square', ':curly')
-or an enclosing form string (e.g. '(when condition)', '(progn)')."
-  (let*
-    ((clean-str (string-trim ' (#\space #\tab #\newline #\:) (or wrapper-str "")))
-     (lower (string-downcase clean-str)))
-    (cond
-      ((or (string= lower "paren") (string= lower "()") (string= lower ""))
-       (structural-editing-mcp.edit:wrap-node tree path :paren))
-      ((or (string= lower "square") (string= lower "bracket") (string= lower "[]"))
-       (structural-editing-mcp.edit:wrap-node tree path :square))
-      ((or (string= lower "curly") (string= lower "brace") (string= lower "{}"))
-       (structural-editing-mcp.edit:wrap-node tree path :curly))
-      (t
-         ;; Enclosing form, e.g. "(progn)" or "(when flag)"
+(defun perform-wrap (tree path wrapper-str &optional end-index index)
+  "Wrap the node at PATH, or range of nodes from START-INDEX to END-INDEX under PARENT-PATH."
+  (if (null end-index)
+      ;; Single node wrap
+      (let* ((clean-str (string-trim '(#\Space #\Tab #\Newline #\:) (or wrapper-str "")))
+             (lower (string-downcase clean-str)))
+        (cond
+          ((or (string= lower "paren") (string= lower "()") (string= lower ""))
+           (structural-editing-mcp.edit:wrap-node tree path :paren))
+          ((or (string= lower "square") (string= lower "bracket") (string= lower "[]"))
+           (structural-editing-mcp.edit:wrap-node tree path :square))
+          ((or (string= lower "curly") (string= lower "brace") (string= lower "{}"))
+           (structural-editing-mcp.edit:wrap-node tree path :curly))
+          (t
+           (let* ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
+                  (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
+             (if (and expr (structural-editing-mcp.tree:get-node-children expr))
+                 (let ((target-node (structural-editing-mcp.tree:get-node-at-path tree path)))
+                   (structural-editing-mcp.tree:update-node-at-path
+                    tree
+                    path
+                    (lambda (node)
+                      (declare (ignore node))
+                      (match expr ((node p tag children) `(:path ,p ,tag ,@children ,target-node))))))
+                 (structural-editing-mcp.edit:wrap-node tree path :paren))))))
+      ;; Range wrap
+      (let* ((parent-path (if index path (if (null (cdr path)) path (butlast path))))
+             (start-idx (if index index (if (null (cdr path)) 0 (lastcar path))))
+             (clean-str (string-trim '(#\Space #\Tab #\Newline #\:) (or wrapper-str "")))
+             (lower (string-downcase clean-str)))
+        (cond
+          ((or (string= lower "paren") (string= lower "()") (string= lower ""))
+           (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :paren))
+          ((or (string= lower "square") (string= lower "bracket") (string= lower "[]"))
+           (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :square))
+          ((or (string= lower "curly") (string= lower "brace") (string= lower "{}"))
+           (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :curly))
+          (t
+           (let* ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
+                  (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
+             (if (and expr (structural-editing-mcp.tree:get-node-children expr))
+                 (structural-editing-mcp.tree:update-node-at-path
+                  tree
+                  parent-path
+                  (lambda (parent)
+                    (match parent
+                      ((node p ptag children)
+                       (let ((before (subseq children 0 start-idx))
+                             (slice (subseq children start-idx (1+ end-index)))
+                             (after (subseq children (1+ end-index))))
+                         (match expr
+                           ((node _ tag expr-children)
+                            `(:path ,p ,ptag ,@before (:path ,p ,tag ,@expr-children ,@slice) ,@after)))))
+                      (_ parent))))
+                 (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :paren))))))))
 
-         (let*
-          ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
-           (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
-          (if
-              (and expr (structural-editing-mcp.tree:get-node-children expr))
-              (let
-              ((target-node (structural-editing-mcp.tree:get-node-at-path tree path)))
-              (structural-editing-mcp.tree:update-node-at-path
-                tree
-                path
-                (lambda
-                        (node)
-                        (declare (ignore node))
-                        (match expr ((node p tag children) ` (:path ,p ,tag ,@children ,target-node))))))
-              (structural-editing-mcp.edit:wrap-node tree path :paren)))))))
 
 (defun perform-insert (tree path new-node-str &optional index)
   "Insert NEW-NODE-STR into TREE. If INDEX is provided, PATH is the parent.
@@ -459,7 +484,13 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                 "type"
                 "integer"
                 "description"
-                "Optional child index for insert. If omitted when inserting, uses the last element of path."))
+                "Optional child index for insert. If omitted when inserting, uses the last element of path.")
+              "end_index"
+              (dict
+                "type"
+                "integer"
+                "description"
+                "Optional ending child index for range wrapping with action 'wrap'."))
             "required"
             (list "path" "action" "new_node")))
         (dict
@@ -495,7 +526,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
           "name"
           "ast_relocate"
           "description"
-          "Move, copy, swap, or merge AST nodes. Actions: 'move' (moves source_path to target_path), 'copy' (duplicates source_path to target_path), 'swap' (swaps nodes at source_path and target_path), 'merge' (merges sibling collection nodes). NOTE: Automatically returns an updated preview."
+          "Move, copy, swap, merge, or split AST nodes. Actions: 'move' (moves source_path to target_path), 'copy' (duplicates source_path to target_path), 'swap' (swaps nodes at source_path and target_path), 'merge' (merges sibling collection nodes), 'split' (splits target collection node at index). NOTE: Automatically returns an updated preview."
           "inputSchema"
           (dict
             "type"
@@ -509,7 +540,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                 "items"
                 (dict "type" "integer")
                 "description"
-                "Path to source node.")
+                "Path to source node (optional for split).")
               "target_path"
               (dict
                 "type"
@@ -517,13 +548,13 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                 "items"
                 (dict "type" "integer")
                 "description"
-                "Target path for move/copy/swap/merge (e.g. [0, 2] places before index 2 in file 0).")
+                "Target path for move/copy/swap/merge/split (e.g. [0, 2] places before index 2 in file 0).")
               "action"
               (dict
                 "type"
                 "string"
                 "enum"
-                (list "move" "copy" "swap" "merge")
+                (list "move" "copy" "swap" "merge" "split")
                 "description"
                 "Relocation action to perform.")
               "index"
@@ -531,9 +562,9 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                 "type"
                 "integer"
                 "description"
-                "Optional target child index for move/copy."))
+                "Optional target child index for move/copy/split."))
             "required"
-            (list "source_path" "target_path" "action")))
+            (list "target_path" "action")))
         (dict
           "name"
           "ast_search"
@@ -648,6 +679,41 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
             (list "path" "variable_name")))
         (dict
           "name"
+          "ast_extract_function"
+          "description"
+          "Extracts an AST node into a new top-level function definition and replaces the original node with a call to the new function."
+          "inputSchema"
+          (dict
+            "type"
+            "object"
+            "properties"
+            (dict
+              "path"
+              (dict
+                "type"
+                "array"
+                "items"
+                (dict "type" "integer")
+                "description"
+                "AST path of the node to extract into a function.")
+              "function_name"
+              (dict
+                "type"
+                "string"
+                "description"
+                "The name of the new function.")
+              "params"
+              (dict
+                "type"
+                "array"
+                "items"
+                (dict "type" "string")
+                "description"
+                "Optional list of parameter names for the new function."))
+            "required"
+            (list "path" "function_name")))
+        (dict
+          "name"
           "commit_workspace"
           "description"
           "Persists all in-memory workspace modifications back to their respective files on disk."
@@ -705,7 +771,8 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                   ((path (to-list (gethash "path" args)))
                    (action (gethash "action" args))
                    (new-node-str (gethash "new_node" args))
-                   (index (gethash "index" args)))
+                   (index (gethash "index" args))
+                   (end-index (gethash "end_index" args)))
                   (cond
                     ((equal action "insert")
                      (setf
@@ -728,7 +795,9 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                             (perform-wrap
                                       structural-editing-mcp.workspace:*workspace-tree*
                                       path
-                                      new-node-str)))
+                                      new-node-str
+                                      end-index
+                                      index)))
                     (t (error "Unknown action: ~A" action)))
                   (format-mutation-result
                     (format nil "Successfully executed ~A at ~A" action path)
@@ -776,12 +845,12 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                           tgt
                           index)
                         (setf
-                              structural-editing-mcp.workspace:*workspace-tree*
-                              (structural-editing-mcp.edit:move-node
-                            structural-editing-mcp.workspace:*workspace-tree*
-                            src
-                            tgt-parent
-                            tgt-idx))))
+                               structural-editing-mcp.workspace:*workspace-tree*
+                               (structural-editing-mcp.edit:move-node
+                             structural-editing-mcp.workspace:*workspace-tree*
+                             src
+                             tgt-parent
+                             tgt-idx))))
                     ((equal action "copy")
                      (multiple-value-bind
                         (tgt-parent tgt-idx)
@@ -790,12 +859,12 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                           tgt
                           index)
                         (setf
-                              structural-editing-mcp.workspace:*workspace-tree*
-                              (structural-editing-mcp.edit:copy-node
-                            structural-editing-mcp.workspace:*workspace-tree*
-                            src
-                            tgt-parent
-                            tgt-idx))))
+                               structural-editing-mcp.workspace:*workspace-tree*
+                               (structural-editing-mcp.edit:copy-node
+                             structural-editing-mcp.workspace:*workspace-tree*
+                             src
+                             tgt-parent
+                             tgt-idx))))
                     ((equal action "swap")
                      (setf
                             structural-editing-mcp.workspace:*workspace-tree*
@@ -810,6 +879,14 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                           structural-editing-mcp.workspace:*workspace-tree*
                           src
                           tgt)))
+                    ((equal action "split")
+                     (let ((split-idx (or index (if (null (cdr tgt)) 0 (lastcar tgt)))))
+                       (setf
+                              structural-editing-mcp.workspace:*workspace-tree*
+                              (structural-editing-mcp.edit:split-node
+                            structural-editing-mcp.workspace:*workspace-tree*
+                            tgt
+                            split-idx))))
                     (t (error "Unknown action: ~A" action)))
                   (format-mutation-result
                     (format nil "Successfully executed ~A from ~A to ~A" action src tgt)
@@ -820,7 +897,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                   ((path (to-list (gethash "path" args)))
                    (query (gethash "query" args))
                    (results
-                             (perform-search structural-editing-mcp.workspace:*workspace-tree* path query)))
+                              (perform-search structural-editing-mcp.workspace:*workspace-tree* path query)))
                   (if
                       results
                       (format nil "Found ~A matches. Paths:~%~{~A~^~%~}" (length results) results)
@@ -859,12 +936,30 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                           "Successfully extracted node at ~A into variable '~A'."
                           path
                           var-name)))
+              ((equal name "ast_extract_function")
+               (let
+                  ((path (to-list (gethash "path" args)))
+                   (func-name (gethash "function_name" args))
+                   (params (to-list (gethash "params" args))))
+                  (setf
+                        structural-editing-mcp.workspace:*workspace-tree*
+                        (structural-editing-mcp.refactor:extract-function
+                      structural-editing-mcp.workspace:*workspace-tree*
+                      path
+                      func-name
+                      :params params))
+                  (format
+                          nil
+                          "Successfully extracted node at ~A into function '~A'."
+                          path
+                          func-name)))
               ((equal name "commit_workspace")
                (structural-editing-mcp.workspace:write-workspace)
                (format
                         nil
                         "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))
               (t (error "Tool not found: ~A" name)))))
+
         (send-result id (dict "content" (list (dict "type" "text" "text" content)))))
                   (error
              (e)
