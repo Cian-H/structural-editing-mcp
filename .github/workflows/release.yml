@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish CalVer release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read CalVer from version.txt
+        id: version
+        run: |
+          VERSION="$(tr -d '[:space:]' < version.txt)"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "Invalid CalVer in version.txt: '$VERSION'" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Using CalVer ${VERSION}"
+
+      - name: Check whether this version is already released
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG already exists; nothing to do."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No existing release for $TAG; will build and publish."
+          fi
+
+      - name: Install SBCL
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sbcl libzstd1
+
+      - name: Install Quicklisp and Lisp dependencies
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          curl -fsSL https://beta.quicklisp.org/quicklisp.lisp -o /tmp/quicklisp.lisp
+          sbcl --non-interactive --no-userinit \
+            --load /tmp/quicklisp.lisp \
+            --eval '(quicklisp-quickstart:install :path #P"~/quicklisp/")' \
+            --eval '(ql:quickload (list "trivia" "alexandria" "serapeum" "yason" "rove") :silent t)' \
+            --eval '(uiop:quit 0)'
+
+      - name: Run tests
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          sbcl --no-userinit --disable-debugger \
+            --load "$HOME/quicklisp/setup.lisp" \
+            --script scripts/run-tests.lisp
+
+      - name: Build standalone binary
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          sbcl --no-userinit --disable-debugger \
+            --load "$HOME/quicklisp/setup.lisp" \
+            --script scripts/build.lisp
+          test -x structural-editing-mcp-server
+          ./structural-editing-mcp-server --version
+          cp structural-editing-mcp-server \
+            "structural-editing-mcp-server-linux-x86_64"
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          gh release create "$TAG" \
+            --title "structural-editing-mcp ${VERSION}" \
+            --notes "Automated CalVer release ${VERSION}.
+
+          Asset: structural-editing-mcp-server-linux-x86_64 (standalone Linux x86_64 executable)." \
+            "structural-editing-mcp-server-linux-x86_64"

@@ -15,7 +15,8 @@ if ! git diff --quiet version.txt; then
     NEW_VER=$(cat version.txt | tr -d '[:space:]')
     echo "CalVer: Staging and committing updated version.txt (${NEW_VER})..."
     git add version.txt
-    git commit -m "chore(release): bump CalVer to ${NEW_VER} [skip ci]"
+    # Do not use [skip ci]: the release workflow must run on CalVer bumps.
+    git commit -m "chore(release): bump CalVer to ${NEW_VER}"
 fi
 
 # Ensure git tag exists for this release

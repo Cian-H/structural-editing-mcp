@@ -141,6 +141,10 @@ The project uses Calendar Versioning (CalVer).
 - A **pre‑push Git hook** (`.githooks/pre‑push`) runs `calver.lisp --update`,
   commits any change to `version.txt`, and creates the tag before the push. The
   hook is activated automatically in the development shell via `devenv.nix`.
+- On every push to `main`, GitHub Actions (`.github/workflows/release.yml`)
+  reads `version.txt`, skips if that CalVer already has a GitHub Release, and
+  otherwise runs tests, builds a portable Linux x86_64 binary, and publishes it
+  to the Releases page.
 
 For CI pipelines you can invoke `./scripts/calver.lisp --check` to enforce
 version consistency.
