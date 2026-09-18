@@ -87,6 +87,27 @@
                          :token (get-output-stream-string out)
                          :message "Unterminated string literal"))))
 
+(defun parse-read-literal (tok predicate-fn)
+  "Attempt reading TOK with read-eval disabled; return parsed object if satisfying PREDICATE-FN."
+  (let* ((*read-eval* nil)
+         (parsed (ignore-errors (read-from-string tok))))
+    (when (and parsed (funcall predicate-fn parsed))
+      parsed)))
+
+(defun parse-character-token (string start end)
+  "Parse character token starting with #\\."
+  (let ((tok (subseq string start end)))
+    (or (parse-read-literal tok #'characterp)
+        (intern (string-upcase tok)))))
+
+(defun parse-numeric-token (string start end)
+  "Parse integer, float, or ratio token from STRING in range [START, END)."
+  (multiple-value-bind (val parsed-end)
+      (parse-integer string :start start :end end :junk-allowed t)
+    (if (and val (= (the fixnum parsed-end) end))
+        val
+        (parse-read-literal (subseq string start end) #'numberp))))
+
 (defun parse-token (string start end)
   "Parse a token delimited by [START, END) in STRING into a keyword, number, or symbol."
   (declare (type string string)
@@ -97,29 +118,13 @@
       ;; Keyword (:foo)
       ((and (>= len 2) (char= (char string start) #\:))
        (intern (string-upcase (subseq string (1+ start) end)) :keyword))
-      ;; Integer: parses directly from the string buffer without subseq
-      ((multiple-value-bind (val parsed-end)
-           (parse-integer string :start start :end end :junk-allowed t)
-         (when (and val (= (the fixnum parsed-end) end))
-           val)))
       ;; Character literal (#\...)
       ((and (char= (char string start) (code-char 35)) (eql (peek-char-ahead string start end) #\\))
-       (let* ((*read-eval* nil)
-              (tok (subseq string start end))
-              (parsed (ignore-errors (read-from-string tok))))
-         (if (characterp parsed)
-             parsed
-             (intern (string-upcase tok)))))
-      ;; Float or ratio
-      ((let* ((*read-eval* nil)
-              (tok (subseq string start end))
-              (parsed (ignore-errors (read-from-string tok))))
-         (if (numberp parsed)
-             parsed
-             (intern (string-upcase tok)))))
-      ;; Standard symbol
+       (parse-character-token string start end))
+      ;; Number or symbol
       (t
-       (intern (string-upcase (subseq string start end)))))))
+       (or (parse-numeric-token string start end)
+           (intern (string-upcase (subseq string start end))))))))
 
 (defun parse-atom-string (token)
   "Parse a token string into a keyword, number, or symbol (compatibility wrapper)."
