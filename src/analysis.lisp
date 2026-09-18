@@ -46,7 +46,18 @@
            :duplicate-group-recommendation
            :canonicalize-subtree
            :find-duplicate-subtrees
-           :format-duplicate-report)
+           :format-duplicate-report
+           :binding-finding
+           :make-binding-finding
+           :binding-finding-kind
+           :binding-finding-variable-name
+           :binding-finding-path
+           :binding-finding-scope-kind
+           :binding-finding-outer-path
+           :binding-finding-message
+           :binding-finding-recommendation
+           :analyze-bindings
+           :format-binding-report)
   (:documentation "Static analysis, pattern matching, structural search, and linting."))
 
 (in-package :structural-editing-mcp.analysis)
@@ -976,5 +987,597 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
               (when rec
                 (format s "   Recommendation: ~A~%" rec))
               (format s "~%")))))
+
+;;; --- Phase 4: Lexical Scope & Binding Analysis ---
+
+(defstruct binding-finding
+  kind               ; :unused-variable or :shadowed-variable
+  variable-name      ; string
+  path               ; AST path to the variable definition
+  scope-kind         ; :defun, :let, :lambda, etc.
+  outer-path         ; AST path to shadowed variable (or nil)
+  message            ; Human-readable message
+  recommendation     ; Refactoring suggestion
+  )
+
+(defstruct scope-binding
+  name               ; downcased string name
+  path               ; AST path where declared
+  scope-kind         ; :function, :let, :let*, :lambda, etc.
+  enclosing-name     ; function or form name
+  (ignored-p nil)    ; boolean
+  (usage-count 0)    ; integer
+  (usage-paths nil)  ; list of AST paths
+  )
+
+(defstruct lexical-scope
+  kind               ; :function, :let, :let*, :lambda, :multiple-value-bind, etc.
+  parent             ; lexical-scope or nil
+  dialect            ; :common-lisp, :clojure, etc.
+  enclosing-name     ; string or nil
+  (bindings nil)     ; list of scope-binding
+  )
+
+(defparameter *cl-lambda-keywords*
+  '("&optional" "&rest" "&key" "&aux" "&body" "&whole" "&environment" "&allow-other-keys" "&"))
+
+(defparameter *lisp-special-operators*
+  '("if" "when" "unless" "cond" "case" "typecase" "ecase" "ccase" "ctypecase" "etypecase"
+    "condp" "and" "or" "do" "progn" "block" "return-from" "tagbody" "go" "catch" "throw"
+    "unwind-protect" "let" "let*" "letrec" "loop" "defun" "defmacro" "defmethod" "defgeneric"
+    "define" "defn" "defn-" "fn" "lambda" "quote" "'" "function" "#'" "declare"
+    "multiple-value-bind" "destructuring-bind" "dolist" "dotimes" "when-let" "if-let" "when-some" "if-some"))
+
+(defun lisp-1-dialect-p (dialect)
+  (member dialect '(:clojure :scheme :fennel)))
+
+(defun leaf-any-symbol-p (node)
+  "Return T if NODE is a leaf node containing a symbol (not keyword, boolean, or literal)."
+  (multiple-value-bind (path tag val) (parse-node node)
+    (declare (ignore path))
+    (and (eq tag :leaf)
+         (symbolp val)
+         (not (keywordp val))
+         (not (member val '(t nil))))))
+
+(defun leaf-symbol-name (node)
+  "Return downcased string name of leaf symbol node, or NIL if not a leaf symbol."
+  (multiple-value-bind (path tag val) (parse-node node)
+    (declare (ignore path))
+    (when (and (eq tag :leaf) (symbolp val))
+      (string-downcase (symbol-name val)))))
+
+(defun ignored-variable-name-p (name)
+  "Return T if variable NAME follows ignored naming conventions (_ or starts with _)."
+  (or (string= name "_")
+      (starts-with-subseq "_" name)
+      (string-equal name "ignore")
+      (string-equal name "unused")))
+
+(defun extract-cl-declarations (body-nodes)
+  "Extract ignored/ignorable variable names from leading (declare ...) forms in BODY-NODES.
+Returns (values ignored-names remaining-body-nodes)."
+  (let ((ignored '())
+        (remaining body-nodes))
+    (loop while remaining
+          for form = (first remaining)
+          for tag = (get-node-tag form)
+          for children = (get-node-children form)
+          while (and (eq tag :paren)
+                     children
+                     (equal (leaf-symbol-name (first children)) "declare"))
+          do
+          (dolist (spec (rest children))
+            (when (eq (get-node-tag spec) :paren)
+              (let* ((spec-children (get-node-children spec))
+                     (spec-name (when spec-children (leaf-symbol-name (first spec-children)))))
+                (when (member spec-name '("ignore" "ignorable") :test #'string=)
+                  (dolist (var-node (rest spec-children))
+                    (when (leaf-any-symbol-p var-node)
+                      (push (leaf-symbol-name var-node) ignored)))))))
+          (setf remaining (rest remaining)))
+    (values ignored remaining)))
+
+(defun find-in-lexical-scope (scope var-name)
+  "Look up VAR-NAME in SCOPE and its enclosing parent scopes. Returns scope-binding or NIL."
+  (when scope
+    (or (find var-name (lexical-scope-bindings scope)
+              :key #'scope-binding-name
+              :test #'string=)
+        (find-in-lexical-scope (lexical-scope-parent scope) var-name))))
+
+(defun register-scope-binding (scope name path &key (ignored nil))
+  "Register a new binding in SCOPE. Returns the new scope-binding."
+  (let* ((is-ignored (or ignored (ignored-variable-name-p name)))
+         (binding (make-scope-binding
+                   :name name
+                   :path path
+                   :scope-kind (lexical-scope-kind scope)
+                   :enclosing-name (lexical-scope-enclosing-name scope)
+                   :ignored-p is-ignored)))
+    (push binding (lexical-scope-bindings scope))
+    binding))
+
+(defun record-variable-usage (scope var-name usage-path)
+  "Record an occurrence of VAR-NAME at USAGE-PATH in the nearest enclosing binding."
+  (let ((binding (find-in-lexical-scope scope var-name)))
+    (when binding
+      (incf (scope-binding-usage-count binding))
+      (push usage-path (scope-binding-usage-paths binding))
+      t)))
+
+(defun extract-param-bindings (params-node)
+  "Extract list of (name . path) pairs from PARAMS-NODE."
+  (let ((results '()))
+    (labels ((collect (node)
+               (when node
+                 (let ((tag (get-node-tag node)))
+                   (cond
+                     ((leaf-any-symbol-p node)
+                      (let ((name (leaf-symbol-name node)))
+                        (unless (member name *cl-lambda-keywords* :test #'string=)
+                          (push (cons name (get-node-path node)) results))))
+                     ((member tag '(:paren :square))
+                      (let ((children (get-node-children node)))
+                        (when children
+                          (let ((first-child (first children)))
+                            (cond
+                              ;; CL &optional / &key item: (var init [supplied-p])
+                              ;; or ((:key var) init [supplied-p])
+                              ((and (eq tag :paren)
+                                    (or (leaf-any-symbol-p first-child)
+                                        (and (eq (get-node-tag first-child) :paren)
+                                             (get-node-children first-child))))
+                               (if (and (eq (get-node-tag first-child) :paren)
+                                        (get-node-children first-child))
+                                   ;; ((:key var) init)
+                                   (let ((sub (get-node-children first-child)))
+                                     (when (>= (length sub) 2)
+                                       (collect (second sub))))
+                                   ;; (var init [supplied-p])
+                                   (collect first-child))
+                               ;; Check if supplied-p exists (third element)
+                               (when (>= (length children) 3)
+                                 (collect (third children))))
+                              (t
+                               (dolist (c children)
+                                 (collect c))))))))
+                     ((eq tag :curly)
+                      ;; Clojure map destructuring {:keys [a b] :as all}
+                      (let ((children (get-node-children node)))
+                        (loop for (k v) on children by #'cddr
+                              while k do
+                              (let ((k-name (leaf-symbol-name k)))
+                                (cond
+                                  ((and (equal k-name ":keys") (member (get-node-tag v) '(:square :paren)))
+                                   (dolist (c (get-node-children v))
+                                     (collect c)))
+                                  ((and (equal k-name ":as") (leaf-any-symbol-p v))
+                                   (collect v))
+                                  ((leaf-any-symbol-p k)
+                                   (collect k))))))))))))
+      (if (member (get-node-tag params-node) '(:paren :square))
+          (dolist (c (get-node-children params-node))
+            (collect c))
+          (collect params-node)))
+    (nreverse results)))
+
+(defun extract-let-clauses (bindings-node dialect)
+  "Extract list of plist (:pattern node :init node) from BINDINGS-NODE according to DIALECT."
+  (let ((results '()))
+    (when bindings-node
+      (let ((tag (get-node-tag bindings-node))
+            (children (get-node-children bindings-node)))
+        (cond
+          ;; Clojure / Fennel vector pairs: [var expr var expr]
+          ((or (eq dialect :clojure) (eq dialect :fennel) (eq tag :square))
+           (loop for (pat-node init-node) on children by #'cddr
+                 while pat-node do
+                 (push (list :pattern pat-node :init init-node) results)))
+          ;; Common Lisp / Scheme / Emacs Lisp list of clauses: ((var expr) ...)
+          (t
+           (dolist (clause children)
+             (cond
+               ((leaf-any-symbol-p clause)
+                (push (list :pattern clause :init nil) results))
+               ((member (get-node-tag clause) '(:paren :square))
+                (let ((c-children (get-node-children clause)))
+                  (push (list :pattern (first c-children)
+                              :init (second c-children))
+                        results)))))))))
+    (nreverse results)))
+
+(defun check-and-register-binding (scope name path ignored-names findings)
+  (let ((outer (find-in-lexical-scope (lexical-scope-parent scope) name))
+        (ignored (member name ignored-names :test #'string-equal)))
+    (when (and outer (not (ignored-variable-name-p name)))
+      (push (make-binding-finding
+             :kind :shadowed-variable
+             :variable-name name
+             :path path
+             :scope-kind (lexical-scope-kind scope)
+             :outer-path (scope-binding-path outer)
+             :message (format nil "Variable '~A' in ~A shadows outer binding at [~{~A~^, ~}]."
+                              name (lexical-scope-kind scope) (scope-binding-path outer))
+             :recommendation (format nil "Consider renaming local variable '~A' using 'ast_rename' to avoid shadowing." name))
+            findings))
+    (register-scope-binding scope name path :ignored (or ignored (ignored-variable-name-p name)))
+    findings))
+
+(defun check-unused-in-scope (scope dialect findings)
+  (dolist (b (lexical-scope-bindings scope))
+    (when (and (= (scope-binding-usage-count b) 0)
+               (not (scope-binding-ignored-p b)))
+      (let* ((name (scope-binding-name b))
+             (s-kind (scope-binding-scope-kind b))
+             (path (scope-binding-path b))
+             (recomm
+               (if (member s-kind '(:function :macro :lambda :method :definition))
+                   (if (lisp-1-dialect-p dialect)
+                       (format nil "If intentionally unused, prefix with '_' (e.g. '_~A')." name)
+                       (format nil "If intentionally unused, prefix with '_' or add '(declare (ignore ~A))'." name))
+                   (format nil "Variable '~A' is unused. Consider removing it with 'ast_remove' or prefixing with '_'." name))))
+        (push (make-binding-finding
+               :kind :unused-variable
+               :variable-name name
+               :path path
+               :scope-kind s-kind
+               :outer-path nil
+               :message (format nil "Variable '~A' defined in ~A is never used." name s-kind)
+               :recommendation recomm)
+              findings))))
+  findings)
+
+(defun walk-binding-tree (node scope dialect findings-acc)
+  "Recursively walk NODE in SCOPE, updating findings accumulator and resolving variable usages."
+  (when node
+    (let ((tag (get-node-tag node))
+          (children (get-node-children node)))
+      (cond
+        ((eq tag :leaf)
+         (when (leaf-any-symbol-p node)
+           (record-variable-usage scope (leaf-symbol-name node) (get-node-path node))))
+
+        ((eq tag :comment)
+         nil)
+
+        ((member tag '(:workspace :file :common-lisp :clojure :scheme :emacs-lisp :fennel))
+         (dolist (c children)
+           (setf findings-acc (walk-binding-tree c scope dialect findings-acc))))
+
+        ((member tag '(:curly :set))
+         (dolist (c children)
+           (setf findings-acc (walk-binding-tree c scope dialect findings-acc))))
+
+        ((member tag '(:paren :square))
+         (when children
+           (let* ((head (first children))
+                  (head-name (when (leaf-any-symbol-p head) (leaf-symbol-name head))))
+             (cond
+               ;; Quoted data
+               ((member head-name '("quote" "'") :test #'string=)
+                nil)
+
+               ;; Function quote in Lisp-2
+               ((and (not (lisp-1-dialect-p dialect))
+                     (member head-name '("function" "#'") :test #'string=))
+                nil)
+
+               ;; Declarations in CL
+               ((equal head-name "declare")
+                nil)
+
+               ;; Function / method definitions: defun, defmacro, defmethod, defn, defn-, define
+               ((member head-name '("defun" "defmacro" "defmethod" "defn" "defn-" "define") :test #'string=)
+                (let* ((name-child (second children))
+                       (fn-name (if (leaf-any-symbol-p name-child) (leaf-symbol-name name-child) "anonymous"))
+                       (params-node nil)
+                       (body-nodes nil))
+                  (cond
+                    ;; Scheme: (define (name params...) body...)
+                    ((and (equal head-name "define") (member (get-node-tag name-child) '(:paren :square)))
+                     (let ((sig-children (get-node-children name-child)))
+                       (when sig-children
+                         (setf fn-name (leaf-symbol-name (first sig-children)))
+                         (setf params-node (list* :path (get-node-path name-child) :paren (rest sig-children)))
+                         (setf body-nodes (cddr children)))))
+
+                    ;; Clojure: (defn name [params...] body...) or (defn name "doc" [params...] body...)
+                    ((or (eq dialect :clojure) (member head-name '("defn" "defn-") :test #'string=))
+                     (let ((rem (cddr children)))
+                       (when (and rem (or (stringp (third (parse-node (first rem))))
+                                          (eq (get-node-tag (first rem)) :curly)))
+                         (setf rem (rest rem)))
+                       (if (and rem (eq (get-node-tag (first rem)) :square))
+                           (progn
+                             (setf params-node (first rem))
+                             (setf body-nodes (rest rem)))
+                           (setf body-nodes rem))))
+
+                    ;; Standard CL / Elisp: (defun name (params...) body...)
+                    (t
+                     (setf params-node (third children))
+                     (setf body-nodes (cdddr children))))
+
+                  (if params-node
+                      (multiple-value-bind (ignored rem-body)
+                          (if (not (lisp-1-dialect-p dialect))
+                              (extract-cl-declarations body-nodes)
+                              (values nil body-nodes))
+                        (let* ((fn-scope (make-lexical-scope :kind :function
+                                                             :parent scope
+                                                             :dialect dialect
+                                                             :enclosing-name fn-name))
+                               (params (extract-param-bindings params-node)))
+                          (dolist (p params)
+                            (setf findings-acc (check-and-register-binding fn-scope (car p) (cdr p) ignored findings-acc)))
+                          (dolist (b rem-body)
+                            (setf findings-acc (walk-binding-tree b fn-scope dialect findings-acc)))
+                          (setf findings-acc (check-unused-in-scope fn-scope dialect findings-acc))))
+                      (dolist (form body-nodes)
+                        (if (member (get-node-tag form) '(:paren :square))
+                            (let* ((f-children (get-node-children form))
+                                   (p-node (first f-children))
+                                   (b-nodes (rest f-children)))
+                              (if (and p-node (member (get-node-tag p-node) '(:paren :square)))
+                                  (let* ((fn-scope (make-lexical-scope :kind :function
+                                                                       :parent scope
+                                                                       :dialect dialect
+                                                                       :enclosing-name fn-name))
+                                         (params (extract-param-bindings p-node)))
+                                    (dolist (p params)
+                                      (setf findings-acc (check-and-register-binding fn-scope (car p) (cdr p) nil findings-acc)))
+                                    (dolist (b b-nodes)
+                                      (setf findings-acc (walk-binding-tree b fn-scope dialect findings-acc)))
+                                    (setf findings-acc (check-unused-in-scope fn-scope dialect findings-acc)))
+                                  (setf findings-acc (walk-binding-tree form scope dialect findings-acc))))
+                            (setf findings-acc (walk-binding-tree form scope dialect findings-acc)))))))
+
+               ;; Lambda / fn / anonymous functions
+               ((member head-name '("lambda" "fn") :test #'string=)
+                (let* ((rem (rest children))
+                       (params-node nil)
+                       (body-nodes nil))
+                  (when (and rem (leaf-any-symbol-p (first rem)) (rest rem))
+                    (setf rem (rest rem)))
+                  (when rem
+                    (setf params-node (first rem))
+                    (setf body-nodes (rest rem)))
+                  (if (and params-node (member (get-node-tag params-node) '(:paren :square)))
+                      (multiple-value-bind (ignored rem-body)
+                          (if (not (lisp-1-dialect-p dialect))
+                              (extract-cl-declarations body-nodes)
+                              (values nil body-nodes))
+                        (let* ((lam-scope (make-lexical-scope :kind :lambda
+                                                              :parent scope
+                                                              :dialect dialect
+                                                              :enclosing-name "lambda"))
+                               (params (extract-param-bindings params-node)))
+                          (dolist (p params)
+                            (setf findings-acc (check-and-register-binding lam-scope (car p) (cdr p) ignored findings-acc)))
+                          (dolist (b rem-body)
+                            (setf findings-acc (walk-binding-tree b lam-scope dialect findings-acc)))
+                          (setf findings-acc (check-unused-in-scope lam-scope dialect findings-acc))))
+                      (dolist (c (rest children))
+                        (setf findings-acc (walk-binding-tree c scope dialect findings-acc))))))
+
+               ;; Simultaneous let in CL/Elisp/Scheme
+               ((and (equal head-name "let") (not (or (eq dialect :clojure) (eq dialect :fennel))))
+                (let* ((bindings-node (second children))
+                       (body-nodes (cddr children))
+                       (clauses (extract-let-clauses bindings-node dialect)))
+                  (dolist (cl clauses)
+                    (when (getf cl :init)
+                      (setf findings-acc (walk-binding-tree (getf cl :init) scope dialect findings-acc))))
+                  (multiple-value-bind (ignored rem-body)
+                      (if (not (lisp-1-dialect-p dialect))
+                          (extract-cl-declarations body-nodes)
+                          (values nil body-nodes))
+                    (let ((let-scope (make-lexical-scope :kind :let :parent scope :dialect dialect)))
+                      (dolist (cl clauses)
+                        (let ((bound (extract-param-bindings (getf cl :pattern))))
+                          (dolist (p bound)
+                            (setf findings-acc (check-and-register-binding let-scope (car p) (cdr p) ignored findings-acc)))))
+                      (dolist (b rem-body)
+                        (setf findings-acc (walk-binding-tree b let-scope dialect findings-acc)))
+                      (setf findings-acc (check-unused-in-scope let-scope dialect findings-acc))))))
+
+               ;; Sequential let* (CL/Scheme/Elisp), Clojure let/loop, Fennel let
+               ((or (member head-name '("let*" "letrec" "loop") :test #'string=)
+                    (and (equal head-name "let") (or (eq dialect :clojure) (eq dialect :fennel))))
+                (let* ((bindings-node (second children))
+                       (body-nodes (cddr children))
+                       (clauses (extract-let-clauses bindings-node dialect))
+                       (curr-scope scope)
+                       (created-scopes '()))
+                  (multiple-value-bind (ignored rem-body)
+                      (if (not (lisp-1-dialect-p dialect))
+                          (extract-cl-declarations body-nodes)
+                          (values nil body-nodes))
+                    (dolist (cl clauses)
+                      (when (getf cl :init)
+                        (setf findings-acc (walk-binding-tree (getf cl :init) curr-scope dialect findings-acc)))
+                      (let ((step-scope (make-lexical-scope :kind (if (equal head-name "loop") :loop :let*)
+                                                            :parent curr-scope
+                                                            :dialect dialect))
+                            (bound (extract-param-bindings (getf cl :pattern))))
+                        (dolist (p bound)
+                          (setf findings-acc (check-and-register-binding step-scope (car p) (cdr p) ignored findings-acc)))
+                        (push step-scope created-scopes)
+                        (setf curr-scope step-scope)))
+                    (dolist (b rem-body)
+                      (setf findings-acc (walk-binding-tree b curr-scope dialect findings-acc)))
+                    (dolist (sc created-scopes)
+                      (setf findings-acc (check-unused-in-scope sc dialect findings-acc))))))
+
+               ;; multiple-value-bind (CL)
+               ((equal head-name "multiple-value-bind")
+                (let* ((vars-node (second children))
+                       (val-node (third children))
+                       (body-nodes (cdddr children)))
+                  (setf findings-acc (walk-binding-tree val-node scope dialect findings-acc))
+                  (multiple-value-bind (ignored rem-body)
+                      (extract-cl-declarations body-nodes)
+                    (let ((mvb-scope (make-lexical-scope :kind :multiple-value-bind :parent scope :dialect dialect))
+                          (bound (extract-param-bindings vars-node)))
+                      (dolist (p bound)
+                        (setf findings-acc (check-and-register-binding mvb-scope (car p) (cdr p) ignored findings-acc)))
+                      (dolist (b rem-body)
+                        (setf findings-acc (walk-binding-tree b mvb-scope dialect findings-acc)))
+                      (setf findings-acc (check-unused-in-scope mvb-scope dialect findings-acc))))))
+
+               ;; destructuring-bind (CL)
+               ((equal head-name "destructuring-bind")
+                (let* ((pat-node (second children))
+                       (expr-node (third children))
+                       (body-nodes (cdddr children)))
+                  (setf findings-acc (walk-binding-tree expr-node scope dialect findings-acc))
+                  (multiple-value-bind (ignored rem-body)
+                      (extract-cl-declarations body-nodes)
+                    (let ((db-scope (make-lexical-scope :kind :destructuring-bind :parent scope :dialect dialect))
+                          (bound (extract-param-bindings pat-node)))
+                      (dolist (p bound)
+                        (setf findings-acc (check-and-register-binding db-scope (car p) (cdr p) ignored findings-acc)))
+                      (dolist (b rem-body)
+                        (setf findings-acc (walk-binding-tree b db-scope dialect findings-acc)))
+                      (setf findings-acc (check-unused-in-scope db-scope dialect findings-acc))))))
+
+               ;; dolist / dotimes (CL/Elisp)
+               ((member head-name '("dolist" "dotimes") :test #'string=)
+                (let* ((spec-node (second children))
+                       (body-nodes (cddr children)))
+                  (if (and spec-node (member (get-node-tag spec-node) '(:paren :square)))
+                      (let* ((spec-children (get-node-children spec-node))
+                             (var-node (first spec-children))
+                             (count-or-list (second spec-children))
+                             (res-form (third spec-children)))
+                        (when count-or-list
+                          (setf findings-acc (walk-binding-tree count-or-list scope dialect findings-acc)))
+                        (multiple-value-bind (ignored rem-body)
+                            (if (not (lisp-1-dialect-p dialect))
+                                (extract-cl-declarations body-nodes)
+                                (values nil body-nodes))
+                          (let ((loop-scope (make-lexical-scope :kind (if (equal head-name "dolist") :dolist :dotimes)
+                                                                :parent scope
+                                                                :dialect dialect)))
+                            (when (leaf-any-symbol-p var-node)
+                              (setf findings-acc (check-and-register-binding loop-scope
+                                                                             (leaf-symbol-name var-node)
+                                                                             (get-node-path var-node)
+                                                                             ignored
+                                                                             findings-acc)))
+                            (dolist (b rem-body)
+                              (setf findings-acc (walk-binding-tree b loop-scope dialect findings-acc)))
+                            (when res-form
+                              (setf findings-acc (walk-binding-tree res-form loop-scope dialect findings-acc)))
+                            (setf findings-acc (check-unused-in-scope loop-scope dialect findings-acc)))))
+                      (dolist (c (rest children))
+                        (setf findings-acc (walk-binding-tree c scope dialect findings-acc))))))
+
+               ;; when-let / if-let / when-some / if-some
+               ((member head-name '("when-let" "if-let" "when-some" "if-some") :test #'string=)
+                (let* ((bindings-node (second children))
+                       (body-nodes (cddr children))
+                       (clauses (extract-let-clauses bindings-node dialect))
+                       (wl-scope (make-lexical-scope :kind :when-let :parent scope :dialect dialect)))
+                  (dolist (cl clauses)
+                    (when (getf cl :init)
+                      (setf findings-acc (walk-binding-tree (getf cl :init) scope dialect findings-acc)))
+                    (let ((bound (extract-param-bindings (getf cl :pattern))))
+                      (dolist (p bound)
+                        (setf findings-acc (check-and-register-binding wl-scope (car p) (cdr p) nil findings-acc)))))
+                  (dolist (b body-nodes)
+                    (setf findings-acc (walk-binding-tree b wl-scope dialect findings-acc)))
+                  (setf findings-acc (check-unused-in-scope wl-scope dialect findings-acc))))
+
+               ;; flet / labels (CL/Elisp)
+               ((member head-name '("flet" "labels") :test #'string=)
+                (let* ((fns-node (second children))
+                       (body-nodes (cddr children)))
+                  (when (and fns-node (member (get-node-tag fns-node) '(:paren :square)))
+                    (dolist (f-def (get-node-children fns-node))
+                      (when (and f-def (member (get-node-tag f-def) '(:paren :square)))
+                        (let* ((f-children (get-node-children f-def))
+                               (fn-name-node (first f-children))
+                               (fn-name (if (leaf-any-symbol-p fn-name-node) (leaf-symbol-name fn-name-node) "local-fn"))
+                               (p-node (second f-children))
+                               (b-nodes (cddr f-children)))
+                          (when (and p-node (member (get-node-tag p-node) '(:paren :square)))
+                            (multiple-value-bind (ignored rem-body)
+                                (extract-cl-declarations b-nodes)
+                              (let* ((loc-scope (make-lexical-scope :kind :function
+                                                                    :parent scope
+                                                                    :dialect dialect
+                                                                    :enclosing-name fn-name))
+                                     (params (extract-param-bindings p-node)))
+                                (dolist (p params)
+                                  (setf findings-acc (check-and-register-binding loc-scope (car p) (cdr p) ignored findings-acc)))
+                                (dolist (b rem-body)
+                                  (setf findings-acc (walk-binding-tree b loc-scope dialect findings-acc)))
+                                (setf findings-acc (check-unused-in-scope loc-scope dialect findings-acc)))))))))
+                  (dolist (b body-nodes)
+                    (setf findings-acc (walk-binding-tree b scope dialect findings-acc)))))
+
+               ;; Standard application / form
+               (t
+                ;; In Lisp-1, head expression is evaluated in variable namespace (unless a special operator)
+                (when (and (lisp-1-dialect-p dialect)
+                           (leaf-any-symbol-p head)
+                           (not (member head-name *lisp-special-operators* :test #'string=)))
+                  (record-variable-usage scope head-name (get-node-path head)))
+                ;; Walk rest of children in current scope
+                (dolist (c (rest children))
+                  (setf findings-acc (walk-binding-tree c scope dialect findings-acc)))))))))))
+    findings-acc)
+
+(defun analyze-bindings (tree &key path (include-unused t) (include-shadowed t) (dialect *current-dialect*))
+  "Analyze variable bindings in TREE (or under PATH) for unused and shadowed variables.
+Returns a list of BINDING-FINDING instances."
+  (let* ((start-node (if (and path (not (null path)))
+                         (get-node-at-path tree path)
+                         tree))
+         (findings (walk-binding-tree start-node nil dialect '())))
+    (setf findings (nreverse findings))
+    (remove-if-not
+     (lambda (f)
+       (case (binding-finding-kind f)
+         (:unused-variable include-unused)
+         (:shadowed-variable include-shadowed)
+         (t t)))
+     findings)))
+
+(defun format-binding-report (findings)
+  "Format a list of BINDING-FINDING instances into a human-readable diagnostic report."
+  (if (null findings)
+      "No unused or shadowed variable bindings detected."
+      (let ((unused (remove-if-not (lambda (f) (eq (binding-finding-kind f) :unused-variable)) findings))
+            (shadowed (remove-if-not (lambda (f) (eq (binding-finding-kind f) :shadowed-variable)) findings)))
+        (with-output-to-string (s)
+          (format s "Variable Scope & Binding Report (~A finding~:P):~%~%" (length findings))
+          (when unused
+            (format s "Unused Variables (~A):~%" (length unused))
+            (loop for f in unused
+                  for i from 1
+                  do
+                  (format s "  ~A. '~A' in ~A [~{~A~^, ~}]~%"
+                          i (binding-finding-variable-name f)
+                          (binding-finding-scope-kind f)
+                          (binding-finding-path f))
+                  (when (binding-finding-recommendation f)
+                    (format s "     Recommendation: ~A~%" (binding-finding-recommendation f))))
+            (format s "~%"))
+          (when shadowed
+            (format s "Shadowed Variables (~A):~%" (length shadowed))
+            (loop for f in shadowed
+                  for i from 1
+                  do
+                  (format s "  ~A. '~A' in ~A [~{~A~^, ~}] shadows outer binding at [~{~A~^, ~}]~%"
+                          i (binding-finding-variable-name f)
+                          (binding-finding-scope-kind f)
+                          (binding-finding-path f)
+                          (binding-finding-outer-path f))
+                  (when (binding-finding-recommendation f)
+                    (format s "     Recommendation: ~A~%" (binding-finding-recommendation f))))
+            (format s "~%"))))))
 
 

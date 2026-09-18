@@ -800,6 +800,43 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                 "If true (default), matches exact identical code. If false, matches structural clones where variables/literals can vary."))))
         (dict
           "name"
+          "ast_analyze_bindings"
+          "description"
+          "Analyze lexical scope and variable bindings to detect unused variables and shadowed bindings across dialects. Recommends removals via ast_remove or renamings via ast_rename."
+          "inputSchema"
+          (dict
+            "type"
+            "object"
+            "properties"
+            (dict
+              "path"
+              (dict
+                "type"
+                "array"
+                "items"
+                (dict "type" "integer")
+                "description"
+                "Optional AST path to constrain analysis to a specific file or subtree. If omitted, analyzes all files in the workspace.")
+              "include_unused"
+              (dict
+                "type"
+                "boolean"
+                "description"
+                "If true (default), reports variables defined but never used in their lexical scope.")
+              "include_shadowed"
+              (dict
+                "type"
+                "boolean"
+                "description"
+                "If true (default), reports local variables that shadow outer bindings with the same name.")
+              "dialect"
+              (dict
+                "type"
+                "string"
+                "description"
+                "Optional dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel)."))))
+        (dict
+          "name"
           "commit_workspace"
           "description"
           "Persists all in-memory workspace modifications back to their respective files on disk."
@@ -1078,6 +1115,22 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                                 :min-depth min-depth
                                 :exact exact)))
                  (structural-editing-mcp.analysis:format-duplicate-report results)))
+              ((equal name "ast_analyze_bindings")
+               (let* ((path (to-list (gethash "path" args)))
+                      (inc-unused (let ((val (gethash "include_unused" args)))
+                                    (if (null val) t val)))
+                      (inc-shadowed (let ((val (gethash "include_shadowed" args)))
+                                      (if (null val) t val)))
+                      (dialect-str (gethash "dialect" args))
+                      (dialect (when (and dialect-str (plusp (length dialect-str)))
+                                 (intern (string-upcase (string-left-trim ":" dialect-str)) :keyword)))
+                      (findings (structural-editing-mcp.analysis:analyze-bindings
+                                 structural-editing-mcp.workspace:*workspace-tree*
+                                 :path path
+                                 :include-unused inc-unused
+                                 :include-shadowed inc-shadowed
+                                 :dialect (or dialect structural-editing-mcp.parser:*current-dialect*))))
+                 (structural-editing-mcp.analysis:format-binding-report findings)))
               ((equal name "commit_workspace")
                (structural-editing-mcp.workspace:write-workspace)
                (format

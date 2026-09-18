@@ -261,4 +261,76 @@
       (ok (search "occurrences" report))
       (ok (search "ast_extract_variable" report)))))
 
+(deftest test-binding-analysis-common-lisp
+  (testing "unused parameters in defun"
+    (let* ((code "(defun compute (x y z) (+ x 1))")
+           (ast (string-to-sexp code))
+           (findings (analyze-bindings ast :dialect :common-lisp)))
+      (ok (= (length findings) 2))
+      (let ((names (mapcar #'binding-finding-variable-name findings)))
+        (ok (member "y" names :test #'string=))
+        (ok (member "z" names :test #'string=)))))
+
+  (testing "ignored parameters with _ and declare ignore"
+    (let* ((code "(defun compute (x _y z) (declare (ignore z)) (+ x 1))")
+           (ast (string-to-sexp code))
+           (findings (analyze-bindings ast :dialect :common-lisp)))
+      (ok (= (length findings) 0))))
+
+  (testing "unused local variable in let"
+    (let* ((code "(defun compute (x) (let ((a 1) (b 2)) (+ x a)))")
+           (ast (string-to-sexp code))
+           (findings (analyze-bindings ast :dialect :common-lisp)))
+      (ok (= (length findings) 1))
+      (let ((f (first findings)))
+        (ok (eq (binding-finding-kind f) :unused-variable))
+        (ok (string= (binding-finding-variable-name f) "b")))))
+
+  (testing "shadowed variable in let inside defun"
+    (let* ((code "(defun compute (x) (let ((x 10)) (+ x 1)))")
+           (ast (string-to-sexp code))
+           (findings (analyze-bindings ast :dialect :common-lisp)))
+      ;; inner x is shadowed, outer x is unused
+      (ok (>= (length findings) 2))
+      (let ((shadowed (find :shadowed-variable findings :key #'binding-finding-kind))
+            (unused (find :unused-variable findings :key #'binding-finding-kind)))
+        (ok shadowed)
+        (ok (string= (binding-finding-variable-name shadowed) "x"))
+        (ok unused)
+        (ok (string= (binding-finding-variable-name unused) "x"))))))
+
+(deftest test-binding-analysis-clojure
+  (testing "clojure vector params and let bindings"
+    (let* ((code "(defn compute [x y] (let [z (+ x 1) extra 99] z))")
+           (ast (string-to-sexp code :dialect :clojure))
+           (findings (analyze-bindings ast :dialect :clojure)))
+      (ok (= (length findings) 2))
+      (let ((names (mapcar #'binding-finding-variable-name findings)))
+        (ok (member "y" names :test #'string=))
+        (ok (member "extra" names :test #'string=)))))
+
+  (testing "lisp-1 function position as variable usage"
+    (let* ((code "(defn call-fn [f x] (f x))")
+           (ast (string-to-sexp code :dialect :clojure))
+           (findings (analyze-bindings ast :dialect :clojure)))
+      (ok (= (length findings) 0)))))
+
+(deftest test-binding-analysis-scheme-and-reporting
+  (testing "scheme define with unused param"
+    (let* ((code "(define (calc x y) (+ x 10))")
+           (ast (string-to-sexp code :dialect :scheme))
+           (findings (analyze-bindings ast :dialect :scheme)))
+      (ok (= (length findings) 1))
+      (ok (string= (binding-finding-variable-name (first findings)) "y"))))
+
+  (testing "format binding report"
+    (let* ((code "(defun test (x y) (let ((x 1)) x))")
+           (ast (string-to-sexp code))
+           (findings (analyze-bindings ast))
+           (report (format-binding-report findings)))
+      (ok (search "Variable Scope & Binding Report" report))
+      (ok (search "Unused Variables" report))
+      (ok (search "Shadowed Variables" report)))))
+
+
 
