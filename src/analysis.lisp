@@ -57,6 +57,8 @@
            :binding-finding-message
            :binding-finding-recommendation
            :analyze-bindings
+           :format-unused-bindings
+           :format-shadowed-bindings
            :format-binding-report
            :refactoring-suggestion
            :make-refactoring-suggestion
@@ -1498,6 +1500,37 @@ Returns a list of BINDING-FINDING instances."
          (t t)))
      findings)))
 
+(defun format-unused-bindings (stream unused)
+  "Format list of unused variable findings to STREAM."
+  (when unused
+    (format stream "Unused Variables (~A):~%" (length unused))
+    (loop for f in unused
+          for i from 1
+          do
+             (format stream "  ~A. '~A' in ~A [~{~A~^, ~}]~%"
+                     i (binding-finding-variable-name f)
+                     (binding-finding-scope-kind f)
+                     (binding-finding-path f))
+             (when (binding-finding-recommendation f)
+               (format stream "     Recommendation: ~A~%" (binding-finding-recommendation f))))
+    (format stream "~%")))
+
+(defun format-shadowed-bindings (stream shadowed)
+  "Format list of shadowed variable findings to STREAM."
+  (when shadowed
+    (format stream "Shadowed Variables (~A):~%" (length shadowed))
+    (loop for f in shadowed
+          for i from 1
+          do
+             (format stream "  ~A. '~A' in ~A [~{~A~^, ~}] shadows outer binding at [~{~A~^, ~}]~%"
+                     i (binding-finding-variable-name f)
+                     (binding-finding-scope-kind f)
+                     (binding-finding-path f)
+                     (binding-finding-outer-path f))
+             (when (binding-finding-recommendation f)
+               (format stream "     Recommendation: ~A~%" (binding-finding-recommendation f))))
+    (format stream "~%")))
+
 (defun format-binding-report (findings)
   "Format a list of BINDING-FINDING instances into a human-readable diagnostic report."
   (if (null findings)
@@ -1506,31 +1539,8 @@ Returns a list of BINDING-FINDING instances."
             (shadowed (remove-if-not (lambda (f) (eq (binding-finding-kind f) :shadowed-variable)) findings)))
         (with-output-to-string (s)
           (format s "Variable Scope & Binding Report (~A finding~:P):~%~%" (length findings))
-          (when unused
-            (format s "Unused Variables (~A):~%" (length unused))
-            (loop for f in unused
-                  for i from 1
-                  do
-                  (format s "  ~A. '~A' in ~A [~{~A~^, ~}]~%"
-                          i (binding-finding-variable-name f)
-                          (binding-finding-scope-kind f)
-                          (binding-finding-path f))
-                  (when (binding-finding-recommendation f)
-                    (format s "     Recommendation: ~A~%" (binding-finding-recommendation f))))
-            (format s "~%"))
-          (when shadowed
-            (format s "Shadowed Variables (~A):~%" (length shadowed))
-            (loop for f in shadowed
-                  for i from 1
-                  do
-                  (format s "  ~A. '~A' in ~A [~{~A~^, ~}] shadows outer binding at [~{~A~^, ~}]~%"
-                          i (binding-finding-variable-name f)
-                          (binding-finding-scope-kind f)
-                          (binding-finding-path f)
-                          (binding-finding-outer-path f))
-                  (when (binding-finding-recommendation f)
-                    (format s "     Recommendation: ~A~%" (binding-finding-recommendation f))))
-            (format s "~%"))))))
+          (format-unused-bindings s unused)
+          (format-shadowed-bindings s shadowed)))))
 
 (defstruct refactoring-suggestion
   category
