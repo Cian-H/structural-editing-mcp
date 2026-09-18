@@ -125,6 +125,17 @@
   "Parse a token string into a keyword, number, or symbol (compatibility wrapper)."
   (parse-token token 0 (length token)))
 
+(declaim (inline skip-atom-chars))
+(defun skip-atom-chars (string index len &optional (dialect *current-dialect*))
+  "Advance and return INDEX past all characters that are neither whitespace nor delimiters."
+  (declare (type string string)
+           (type fixnum index len))
+  (loop while (and (< index len)
+                   (let ((c (char string index)))
+                     (not (or (whitespace-p c dialect) (delimiter-p c)))))
+        do (incf index))
+  index)
+
 (defun tokenize (string &key (dialect *current-dialect*))
   "Tokenize a string into a flat list of delimiter keywords and atomic values."
   (declare (type string string))
@@ -176,10 +187,7 @@
                               (char= (char string index) #\\)
                               (whitespace-p (char string index) dialect))
                           (incf index)
-                          (loop while (and (< index len)
-                                           (let ((c (char string index)))
-                                             (not (or (whitespace-p c dialect) (delimiter-p c)))))
-                                 do (incf index))))
+                          (setf index (skip-atom-chars string index len dialect))))
                   (push (parse-token string start index) tokens)))
                ((and (char= ch (code-char 35)) (eql (peek-char-ahead string index len) (code-char 123)))
                 (push '(:delim . :set-open) tokens)
@@ -196,11 +204,7 @@
                   (setf index next)))
                (t
                 (let ((start index))
-                  (loop while (and (< index len)
-                                   (let ((c (char string index)))
-                                     (not (or (whitespace-p c dialect)
-                                              (delimiter-p c)))))
-                        do (incf index))
+                  (setf index (skip-atom-chars string index len dialect))
                   (if (= start index)
                       ;; Invariant fallback: consume at least 1 character to guarantee progress
                       (progn
