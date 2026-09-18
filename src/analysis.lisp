@@ -18,6 +18,9 @@
            :lint-finding-severity
            :lint-finding-suggested-fix
            :lint-node
+           :if-form-p
+           :not-form-cond
+           :progn-form-body-nodes
            :lint-ast
            :format-lint-findings
            :complexity-metrics
@@ -218,50 +221,63 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
              (symbolp val)
              (and (eq dialect :clojure) (string-equal (symbol-name val) "FALSE"))))))
 
+(defun if-form-p (node)
+  "Return T if NODE is a compound (if ...) form with 3 or 4 elements."
+  (and (compound-node-p node)
+       (let ((children (get-node-children node)))
+         (and (or (= (length children) 3)
+                  (= (length children) 4))
+              (leaf-symbol-p (first children) "IF")))))
+
+(defun not-form-cond (node)
+  "If NODE is a compound (not <cond>) form, return the inner condition node; otherwise NIL."
+  (when (and (compound-node-p node)
+             (let ((children (get-node-children node)))
+               (and (= (length children) 2)
+                    (leaf-symbol-p (first children) "NOT"))))
+    (second (get-node-children node))))
+
+(defun progn-form-body-nodes (node)
+  "If NODE is a compound (progn <body...>) form, return (values T body-nodes); otherwise (values NIL NIL)."
+  (if (and (compound-node-p node)
+           (let ((children (get-node-children node)))
+             (and children (leaf-symbol-p (first children) "PROGN"))))
+      (values t (rest (get-node-children node)))
+      (values nil nil)))
+
 (defun check-if-progn-to-when (node path dialect)
   "Detect (if <cond> (progn <body...>)) or (if <cond> (progn <body...>) nil)."
   (declare (ignore dialect))
   (let ((children (get-node-children node)))
-    (when (and (compound-node-p node)
+    (when (and (if-form-p node)
                (or (= (length children) 3)
-                   (and (= (length children) 4) (leaf-nil-p (fourth children))))
-               (leaf-symbol-p (first children) "IF"))
-      (let* ((cond-node (second children))
-             (then-node (third children))
-             (then-children (get-node-children then-node)))
-        (when (and (compound-node-p then-node)
-                   then-children
-                   (leaf-symbol-p (first then-children) "PROGN"))
-          (let* ((body-nodes (rest then-children))
-                 (body-str (if body-nodes
-                               (format nil "~{~A~^ ~}" (mapcar #'sexp-to-string body-nodes))
-                               "nil"))
-                 (replacement (format nil "(when ~A ~A)" (sexp-to-string cond-node) body-str)))
-            (make-lint-finding
-             :rule :if-progn-to-when
-             :path path
-             :message "Prefer '(when ...)' over '(if ... (progn ...))' when there is no else branch."
-             :severity :style
-             :suggested-fix replacement)))))))
+                   (leaf-nil-p (fourth children))))
+      (let ((cond-node (second children))
+            (then-node (third children)))
+        (multiple-value-bind (is-progn body-nodes) (progn-form-body-nodes then-node)
+          (when is-progn
+            (let* ((body-str (if body-nodes
+                                 (format nil "~{~A~^ ~}" (mapcar #'sexp-to-string body-nodes))
+                                 "nil"))
+                   (replacement (format nil "(when ~A ~A)" (sexp-to-string cond-node) body-str)))
+              (make-lint-finding
+               :rule :if-progn-to-when
+               :path path
+               :message "Prefer '(when ...)' over '(if ... (progn ...))' when there is no else branch."
+               :severity :style
+               :suggested-fix replacement))))))))
 
 (defun check-if-nil-to-when (node path dialect)
   "Detect (if <cond> <then> nil) where <then> is not progn, not boolean true, and <cond> is not (not ...)."
   (let ((children (get-node-children node)))
-    (when (and (compound-node-p node)
+    (when (and (if-form-p node)
                (= (length children) 4)
-               (leaf-symbol-p (first children) "IF")
                (leaf-nil-p (fourth children)))
-      (let* ((cond-node (second children))
-             (then-node (third children))
-             (cond-children (get-node-children cond-node))
-             (then-children (get-node-children then-node)))
+      (let ((cond-node (second children))
+            (then-node (third children)))
         (unless (or (leaf-true-p then-node dialect)
-                    (and (compound-node-p cond-node)
-                         (= (length cond-children) 2)
-                         (leaf-symbol-p (first cond-children) "NOT"))
-                    (and (compound-node-p then-node)
-                         then-children
-                         (leaf-symbol-p (first then-children) "PROGN")))
+                    (not-form-cond cond-node)
+                    (nth-value 0 (progn-form-body-nodes then-node)))
           (let ((replacement (format nil "(when ~A ~A)"
                                      (sexp-to-string cond-node)
                                      (sexp-to-string then-node))))
@@ -276,20 +292,15 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
   "Detect (if (not <cond>) <then> nil) or (if (not <cond>) <then>)."
   (declare (ignore dialect))
   (let ((children (get-node-children node)))
-    (when (and (compound-node-p node)
+    (when (and (if-form-p node)
                (or (= (length children) 3)
-                   (and (= (length children) 4) (leaf-nil-p (fourth children))))
-               (leaf-symbol-p (first children) "IF"))
-      (let* ((test-node (second children))
-             (test-children (get-node-children test-node)))
-        (when (and (compound-node-p test-node)
-                   (= (length test-children) 2)
-                   (leaf-symbol-p (first test-children) "NOT"))
-          (let* ((inner-cond (second test-children))
-                 (then-node (third children))
-                 (replacement (format nil "(unless ~A ~A)"
-                                      (sexp-to-string inner-cond)
-                                      (sexp-to-string then-node))))
+                   (leaf-nil-p (fourth children))))
+      (let ((inner-cond (not-form-cond (second children)))
+            (then-node (third children)))
+        (when inner-cond
+          (let ((replacement (format nil "(unless ~A ~A)"
+                                     (sexp-to-string inner-cond)
+                                     (sexp-to-string then-node))))
             (make-lint-finding
              :rule :if-not-to-unless
              :path path
@@ -301,22 +312,17 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
   "Detect (if (not <cond>) <then> <else>) where <else> is not nil."
   (declare (ignore dialect))
   (let ((children (get-node-children node)))
-    (when (and (compound-node-p node)
+    (when (and (if-form-p node)
                (= (length children) 4)
-               (leaf-symbol-p (first children) "IF")
                (not (leaf-nil-p (fourth children))))
-      (let* ((test-node (second children))
-             (test-children (get-node-children test-node)))
-        (when (and (compound-node-p test-node)
-                   (= (length test-children) 2)
-                   (leaf-symbol-p (first test-children) "NOT"))
-          (let* ((inner-cond (second test-children))
-                 (then-node (third children))
-                 (else-node (fourth children))
-                 (replacement (format nil "(if ~A ~A ~A)"
-                                      (sexp-to-string inner-cond)
-                                      (sexp-to-string else-node)
-                                      (sexp-to-string then-node))))
+      (let ((inner-cond (not-form-cond (second children)))
+            (then-node (third children))
+            (else-node (fourth children)))
+        (when inner-cond
+          (let ((replacement (format nil "(if ~A ~A ~A)"
+                                     (sexp-to-string inner-cond)
+                                     (sexp-to-string else-node)
+                                     (sexp-to-string then-node))))
             (make-lint-finding
              :rule :invert-if-not
              :path path
