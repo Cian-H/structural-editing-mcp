@@ -261,7 +261,14 @@ Always returns a (:path () :file ...) node representing the parsed file contents
     ((type string)
      (format stream "~S" val))
     ((type character)
-     (format stream "~S" val))
+     (cond
+       ((char= val #\Space) (write-string "#\\space" stream))
+       ((not (graphic-char-p val))
+        (let ((name (char-name val)))
+          (if name
+              (format stream "#\\~A" (string-downcase name))
+              (format stream "~S" val))))
+       (t (format stream "~S" val))))
     ((type keyword)
      (format stream ":~A" (string-downcase (symbol-name val))))
     ((type symbol)
