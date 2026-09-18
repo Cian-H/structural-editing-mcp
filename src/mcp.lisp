@@ -85,66 +85,74 @@
              (when (> depth 1)
                (print-children-tree s child 1 depth cpath)))))
 
+(defun format-dialect-node-preview (s dialect-node d-path)
+  "Format preview for a single DIALECT-NODE under D-PATH to stream S."
+  (let* ((d-tag (structural-editing-mcp.tree:get-node-tag dialect-node))
+         (file-nodes (structural-editing-mcp.tree:get-node-children dialect-node)))
+    (format s "  [~{~A~^, ~}] ~A (~A file~:P):~%"
+            d-path d-tag (length file-nodes))
+    (loop for file-node in file-nodes
+          for f-idx from 0
+          for f-path = (or (structural-editing-mcp.tree:get-node-path file-node)
+                           (append d-path (list f-idx)))
+          for filepath = (structural-editing-mcp.workspace:get-filepath f-path)
+          for form-count = (length (structural-editing-mcp.tree:get-node-children file-node))
+          do
+          (format s "    [~{~A~^, ~}] :FILE (~A) — ~A top-level forms~%"
+                  f-path (or filepath "unknown") form-count))))
+
+(defun format-workspace-preview (s children)
+  "Format preview for workspace root to stream S."
+  (if (null children)
+      (format s "Workspace is empty. Provide load_files in read_node to load files into the workspace.~%")
+      (progn
+        (format s "Active Dialects (~A):~%" (length children))
+        (loop for dialect-node in children
+              for d-idx from 0
+              for d-path = (or (structural-editing-mcp.tree:get-node-path dialect-node) (list d-idx))
+              do (format-dialect-node-preview s dialect-node d-path)))))
+
+(defun format-dialect-preview (s children path tag)
+  "Format preview for a dialect partition node to stream S."
+  (format s "Dialect: ~A~%" tag)
+  (if (null children)
+      (format s "No files loaded for this dialect.~%")
+      (progn
+        (format s "Files Loaded (~A):~%" (length children))
+        (loop for file-node in children
+              for idx from 0
+              for f-path = (or (structural-editing-mcp.tree:get-node-path file-node)
+                               (append path (list idx)))
+              for filepath = (structural-editing-mcp.workspace:get-filepath f-path)
+              for form-count = (length (structural-editing-mcp.tree:get-node-children file-node))
+              do
+              (format s "  [~{~A~^, ~}] :FILE (~A) — ~A top-level forms~%"
+                      f-path (or filepath "unknown") form-count)))))
+
 (defun format-node-preview (node &key (depth 2))
   "Format a node with its path, tag, rendered code, and summary of children up to DEPTH."
-  (if
-      (null node)
+  (if (null node)
       "Node not found at given path."
-      (let*
-      ((path (structural-editing-mcp.tree:get-node-path node))
-       (tag (structural-editing-mcp.tree:get-node-tag node))
-       (children (structural-editing-mcp.tree:get-node-children node))
-       (code (structural-editing-mcp.parser:sexp-to-string node)))
-      (with-output-to-string
-        (s)
-        (format s "Path: ~A~%" (or path "()"))
-        (format s "Tag: ~A~%" tag)
-        (cond
-          ((eq tag :workspace)
-           (if (null children)
-               (format s "Workspace is empty. Provide load_files in read_node to load files into the workspace.~%")
-               (progn
-                 (format s "Active Dialects (~A):~%" (length children))
-                 (loop for dialect-node in children
-                       for d-idx from 0
-                       for d-path = (or (structural-editing-mcp.tree:get-node-path dialect-node) (list d-idx))
-                       for d-tag = (structural-editing-mcp.tree:get-node-tag dialect-node)
-                       for file-nodes = (structural-editing-mcp.tree:get-node-children dialect-node)
-                       do
-                       (format s "  [~{~A~^, ~}] ~A (~A file~:P):~%"
-                               d-path d-tag (length file-nodes))
-                       (loop for file-node in file-nodes
-                             for f-idx from 0
-                             for f-path = (or (structural-editing-mcp.tree:get-node-path file-node)
-                                              (append d-path (list f-idx)))
-                             for filepath = (structural-editing-mcp.workspace:get-filepath f-path)
-                             for form-count = (length (structural-editing-mcp.tree:get-node-children file-node))
-                             do
-                             (format s "    [~{~A~^, ~}] :FILE (~A) — ~A top-level forms~%"
-                                     f-path (or filepath "unknown") form-count))))))
-          ((member tag structural-editing-mcp.workspace:*known-dialects*)
-           (format s "Dialect: ~A~%" tag)
-           (if (null children)
-               (format s "No files loaded for this dialect.~%")
-               (progn
-                 (format s "Files Loaded (~A):~%" (length children))
-                 (loop for file-node in children
-                       for idx from 0
-                       for f-path = (or (structural-editing-mcp.tree:get-node-path file-node)
-                                        (append path (list idx)))
-                       for filepath = (structural-editing-mcp.workspace:get-filepath f-path)
-                       for form-count = (length (structural-editing-mcp.tree:get-node-children file-node))
-                       do
-                       (format s "  [~{~A~^, ~}] :FILE (~A) — ~A top-level forms~%"
-                               f-path (or filepath "unknown") form-count)))))
-          ((eq tag :file)
-           (let ((filepath (structural-editing-mcp.workspace:get-filepath path)))
-             (when filepath (format s "File: ~A~%" filepath)))
-           (format s "Code:~%~A~%" code)
-           (format-children-preview s children path depth " top-level forms"))
-          (t
-           (format s "Code:~%~A~%" code)
-           (format-children-preview s children path depth)))))))
+      (let* ((path (structural-editing-mcp.tree:get-node-path node))
+             (tag (structural-editing-mcp.tree:get-node-tag node))
+             (children (structural-editing-mcp.tree:get-node-children node))
+             (code (structural-editing-mcp.parser:sexp-to-string node)))
+        (with-output-to-string (s)
+          (format s "Path: ~A~%" (or path "()"))
+          (format s "Tag: ~A~%" tag)
+          (cond
+            ((eq tag :workspace)
+             (format-workspace-preview s children))
+            ((member tag structural-editing-mcp.workspace:*known-dialects*)
+             (format-dialect-preview s children path tag))
+            ((eq tag :file)
+             (let ((filepath (structural-editing-mcp.workspace:get-filepath path)))
+               (when filepath (format s "File: ~A~%" filepath)))
+             (format s "Code:~%~A~%" code)
+             (format-children-preview s children path depth " top-level forms"))
+            (t
+             (format s "Code:~%~A~%" code)
+             (format-children-preview s children path depth)))))))
 
 ;;; AST Mutation Dispatchers
 
@@ -159,46 +167,52 @@
       ((or (string= lower "curly") (string= lower "brace") (string= lower "{}")) :curly)
       (t nil))))
 
+(defun wrap-node-with-custom-form (tree path wrapper-str)
+  "Wrap node at PATH using the custom form expression in WRAPPER-STR."
+  (let* ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
+         (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
+    (if (and expr (structural-editing-mcp.tree:get-node-children expr))
+        (let ((target-node (structural-editing-mcp.tree:get-node-at-path tree path)))
+          (structural-editing-mcp.tree:update-node-at-path
+           tree
+           path
+           (lambda (node)
+             (declare (ignore node))
+             (match expr ((node p tag children) `(:path ,p ,tag ,@children ,target-node))))))
+        (structural-editing-mcp.edit:wrap-node tree path :paren))))
+
+(defun wrap-range-with-custom-form (tree parent-path start-idx end-index wrapper-str)
+  "Wrap range of nodes under PARENT-PATH using custom form expression in WRAPPER-STR."
+  (let* ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
+         (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
+    (if (and expr (structural-editing-mcp.tree:get-node-children expr))
+        (structural-editing-mcp.tree:update-node-at-path
+         tree
+         parent-path
+         (lambda (parent)
+           (match parent
+             ((node p ptag children)
+              (let ((before (subseq children 0 start-idx))
+                    (slice (subseq children start-idx (1+ end-index)))
+                    (after (subseq children (1+ end-index))))
+                (match expr
+                  ((node _ tag expr-children)
+                   `(:path ,p ,ptag ,@before (:path ,p ,tag ,@expr-children ,@slice) ,@after)))))
+             (_ parent))))
+        (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :paren))))
+
 (defun perform-wrap (tree path wrapper-str &optional end-index index)
   "Wrap the node at PATH, or range of nodes from START-INDEX to END-INDEX under PARENT-PATH."
   (let ((delim (parse-delimiter-type wrapper-str)))
     (if (null end-index)
-        ;; Single node wrap
         (if delim
             (structural-editing-mcp.edit:wrap-node tree path delim)
-            (let* ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
-                   (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
-              (if (and expr (structural-editing-mcp.tree:get-node-children expr))
-                  (let ((target-node (structural-editing-mcp.tree:get-node-at-path tree path)))
-                    (structural-editing-mcp.tree:update-node-at-path
-                     tree
-                     path
-                     (lambda (node)
-                       (declare (ignore node))
-                       (match expr ((node p tag children) `(:path ,p ,tag ,@children ,target-node))))))
-                  (structural-editing-mcp.edit:wrap-node tree path :paren))))
-        ;; Range wrap
+            (wrap-node-with-custom-form tree path wrapper-str))
         (let* ((parent-path (if index path (if (null (cdr path)) path (butlast path))))
                (start-idx (if index index (if (null (cdr path)) 0 (lastcar path)))))
           (if delim
               (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index delim)
-              (let* ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
-                     (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
-                (if (and expr (structural-editing-mcp.tree:get-node-children expr))
-                    (structural-editing-mcp.tree:update-node-at-path
-                     tree
-                     parent-path
-                     (lambda (parent)
-                       (match parent
-                         ((node p ptag children)
-                          (let ((before (subseq children 0 start-idx))
-                                (slice (subseq children start-idx (1+ end-index)))
-                                (after (subseq children (1+ end-index))))
-                            (match expr
-                              ((node _ tag expr-children)
-                               `(:path ,p ,ptag ,@before (:path ,p ,tag ,@expr-children ,@slice) ,@after)))))
-                         (_ parent))))
-                    (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :paren))))))))
+              (wrap-range-with-custom-form tree parent-path start-idx end-index wrapper-str))))))
 
 (defun resolve-parent-and-index (tree target-path &optional index)
   "Resolve target parent path and index for move or copy."
