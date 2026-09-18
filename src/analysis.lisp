@@ -1354,6 +1354,10 @@ Returns (values ignored-names remaining-body-nodes)."
   (dolist (item nodes findings-acc)
     (setf findings-acc (walk-binding-tree item scope dialect findings-acc))))
 
+(defun walk-binding-rest-children (children scope dialect findings-acc)
+  "Walk (rest CHILDREN) in SCOPE, accumulating binding findings."
+  (walk-binding-nodes (rest children) scope dialect findings-acc))
+
 (defun extract-scheme-define (name-child children)
   "Extract define components for Scheme-style (define (name . params) body)."
   (let ((sig-children (get-node-children name-child)))
@@ -1450,7 +1454,7 @@ Returns (values ignored-names remaining-body-nodes)."
       (extract-lambda-params-and-body children)
     (if (and params-node (compound-node-p params-node))
         (walk-lambda-body params-node body-nodes scope dialect findings-acc)
-        (walk-binding-nodes (rest children) scope dialect findings-acc))))
+        (walk-binding-rest-children children scope dialect findings-acc))))
 
 (defun walk-cl-let-form (children scope dialect findings-acc)
   "Walk parallel Common Lisp LET form."
@@ -1532,7 +1536,7 @@ Returns (values ignored-names remaining-body-nodes)."
               (when res-form
                 (setf findings-acc (walk-binding-tree res-form loop-scope dialect findings-acc)))
               (check-unused-in-scope loop-scope dialect findings-acc))))
-        (walk-binding-nodes (rest children) scope dialect findings-acc))))
+        (walk-binding-rest-children children scope dialect findings-acc))))
 
 (defun walk-when-let-form (children scope dialect findings-acc)
   "Walk WHEN-LET, IF-LET, WHEN-SOME, or IF-SOME form."
@@ -1599,7 +1603,7 @@ Returns (values ignored-names remaining-body-nodes)."
                (leaf-any-symbol-p head)
                (not (member head-name *lisp-special-operators* :test #'string=)))
       (record-variable-usage scope head-name (get-node-path head))))
-  (walk-binding-nodes (rest children) scope dialect findings-acc))
+  (walk-binding-rest-children children scope dialect findings-acc))
 
 (defun sequential-binding-form-p (head-name dialect)
   "Return T if HEAD-NAME in DIALECT evaluates bindings sequentially."
@@ -1621,7 +1625,7 @@ Returns (values ignored-names remaining-body-nodes)."
     ((sequential-binding-form-p head-name dialect)
      (walk-sequential-let-form head-name children scope dialect findings-acc))
     ((equal head-name "loop")
-     (walk-binding-nodes (rest children) scope dialect findings-acc))
+     (walk-binding-rest-children children scope dialect findings-acc))
     ((member head-name '("multiple-value-bind" "destructuring-bind") :test #'string=)
      (walk-bind-form head-name children scope dialect findings-acc))
     ((member head-name '("dolist" "dotimes") :test #'string=)
