@@ -340,9 +340,8 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
            :severity :style
            :suggested-fix replacement))))))
 
-(defun check-single-clause-cond (node path dialect)
-  "Detect (cond (<test> <body...>)) with a single clause."
-  (declare (ignore dialect))
+(defun single-clause-cond-info (node dialect)
+  "If NODE is (cond (<test> <body...>)) with a non-default test, return (values T test-node body-nodes)."
   (let ((children (get-node-children node)))
     (when (and (compound-node-p node)
                (= (length children) 2)
@@ -354,17 +353,22 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
                    (not (leaf-true-p (first clause-children) dialect))
                    (not (leaf-symbol-p (first clause-children) "OTHERWISE"))
                    (not (leaf-symbol-p (first clause-children) ":ELSE")))
-          (let* ((test-node (first clause-children))
-                 (body-nodes (rest clause-children))
-                 (replacement (format nil "(when ~A ~{~A~^ ~})"
-                                      (sexp-to-string test-node)
-                                      (mapcar #'sexp-to-string body-nodes))))
-            (make-lint-finding
-             :rule :single-clause-cond
-             :path path
-             :message "'cond' with a single clause can be simplified to '(when <test> <body...>)'."
-             :severity :style
-             :suggested-fix replacement)))))))
+          (values t (first clause-children) (rest clause-children)))))))
+
+(defun check-single-clause-cond (node path dialect)
+  "Detect (cond (<test> <body...>)) with a single clause."
+  (multiple-value-bind (match-p test-node body-nodes)
+      (single-clause-cond-info node dialect)
+    (when match-p
+      (let ((replacement (format nil "(when ~A ~{~A~^ ~})"
+                                 (sexp-to-string test-node)
+                                 (mapcar #'sexp-to-string body-nodes))))
+        (make-lint-finding
+         :rule :single-clause-cond
+         :path path
+         :message "'cond' with a single clause can be simplified to '(when <test> <body...>)'."
+         :severity :style
+         :suggested-fix replacement)))))
 
 (defun check-if-boolean-redundant (node path dialect)
   "Detect (if <cond> t nil) or (if <cond> true false)."
@@ -400,9 +404,8 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
          :severity :style
          :suggested-fix (sexp-to-string single-node))))))
 
-(defun check-nested-let (node path dialect)
-  "Detect nested (let ((x ...)) (let ((y ...)) ...)) that could be combined into let*."
-  (declare (ignore dialect))
+(defun nested-let-info (node)
+  "If NODE is (let outer-bindings (let inner-bindings ...)), return (values T outer-bindings inner-bindings inner-body)."
   (let ((children (get-node-children node)))
     (when (and (compound-node-p node)
                (>= (length children) 3)
@@ -415,50 +418,54 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
                  (inner-children (get-node-children inner-node)))
             (when (and (compound-node-p inner-node)
                        (>= (length inner-children) 3)
-                       (leaf-symbol-p (first inner-children) "LET"))
-              (let* ((inner-bindings (second inner-children))
-                     (inner-body (nthcdr 2 inner-children)))
-                (when (compound-node-p inner-bindings)
-                  (let* ((all-bindings (append (get-node-children outer-bindings)
-                                               (get-node-children inner-bindings)))
-                         (bindings-str (format nil "(~{~A~^ ~})" (mapcar #'sexp-to-string all-bindings)))
-                         (body-str (format nil "~{~A~^ ~}" (mapcar #'sexp-to-string inner-body)))
-                         (replacement (format nil "(let* ~A ~A)" bindings-str body-str)))
-                    (make-lint-finding
-                     :rule :nested-let
-                     :path path
-                     :message "Cascaded nested 'let' forms can be combined into a single 'let*'."
-                     :severity :style
-                     :suggested-fix replacement)))))))))))
+                       (leaf-symbol-p (first inner-children) "LET")
+                       (compound-node-p (second inner-children)))
+              (values t outer-bindings (second inner-children) (nthcdr 2 inner-children)))))))))
+
+(defun check-nested-let (node path dialect)
+  "Detect nested (let ((x ...)) (let ((y ...)) ...)) that could be combined into let*."
+  (declare (ignore dialect))
+  (multiple-value-bind (match-p outer-bindings inner-bindings inner-body)
+      (nested-let-info node)
+    (when match-p
+      (let* ((all-bindings (append (get-node-children outer-bindings)
+                                   (get-node-children inner-bindings)))
+             (bindings-str (format nil "(~{~A~^ ~})" (mapcar #'sexp-to-string all-bindings)))
+             (body-str (format nil "~{~A~^ ~}" (mapcar #'sexp-to-string inner-body)))
+             (replacement (format nil "(let* ~A ~A)" bindings-str body-str)))
+        (make-lint-finding
+         :rule :nested-let
+         :path path
+         :message "Cascaded nested 'let' forms can be combined into a single 'let*'."
+         :severity :style
+         :suggested-fix replacement)))))
+
+(defun nil-comparison-form-p (node)
+  "Return (values is-match-p other-node) if NODE is an (equal/eq/eql ?x nil) or (equal/eq/eql nil ?x) form."
+  (let ((children (get-node-children node)))
+    (when (and (compound-node-p node)
+               (= (length children) 3)
+               (or (leaf-symbol-p (first children) "EQUAL")
+                   (leaf-symbol-p (first children) "EQ")
+                   (leaf-symbol-p (first children) "EQL")))
+      (cond
+        ((leaf-nil-p (third children)) (values t (second children)))
+        ((leaf-nil-p (second children)) (values t (third children)))
+        (t (values nil nil))))))
 
 (defun check-equal-nil-to-null (node path dialect)
   "Detect (equal ?x nil), (eq ?x nil), or (eql ?x nil) in Common Lisp / Elisp."
   (when (member dialect '(:common-lisp :emacs-lisp nil))
-    (let ((children (get-node-children node)))
-      (when (and (compound-node-p node)
-                 (= (length children) 3)
-                 (or (leaf-symbol-p (first children) "EQUAL")
-                     (leaf-symbol-p (first children) "EQ")
-                     (leaf-symbol-p (first children) "EQL")))
-        (cond
-          ((leaf-nil-p (third children))
-           (let ((replacement (format nil "(null ~A)" (sexp-to-string (second children)))))
-             (make-lint-finding
-              :rule :equal-nil-to-null
-              :path path
-              :message (format nil "Prefer '(null ~A)' over comparison with nil."
-                               (sexp-to-string (second children)))
-              :severity :style
-              :suggested-fix replacement)))
-          ((leaf-nil-p (second children))
-           (let ((replacement (format nil "(null ~A)" (sexp-to-string (third children)))))
-             (make-lint-finding
-              :rule :equal-nil-to-null
-              :path path
-              :message (format nil "Prefer '(null ~A)' over comparison with nil."
-                               (sexp-to-string (third children)))
-              :severity :style
-              :suggested-fix replacement))))))))
+    (multiple-value-bind (match-p target-node) (nil-comparison-form-p node)
+      (when match-p
+        (let* ((target-str (sexp-to-string target-node))
+               (replacement (format nil "(null ~A)" target-str)))
+          (make-lint-finding
+           :rule :equal-nil-to-null
+           :path path
+           :message (format nil "Prefer '(null ~A)' over comparison with nil." target-str)
+           :severity :style
+           :suggested-fix replacement))))))
 
 (defparameter *anti-pattern-rules*
   (list
@@ -545,6 +552,16 @@ Returns a list of LINT-FINDING instances."
         (walk start-node dialect)))
     (nreverse findings)))
 
+(defun format-lint-fix (stream fix)
+  "Format suggested fix FIX to STREAM."
+  (when fix
+    (cond
+      ((and (listp fix) (getf fix :pattern) (getf fix :replacement))
+       (format stream "   Suggested Fix:~%     Pattern:     ~A~%     Replacement: ~A~%"
+               (getf fix :pattern) (getf fix :replacement)))
+      ((stringp fix)
+       (format stream "   Suggested Fix: ~A~%" fix)))))
+
 (defun format-lint-findings (findings)
   "Format a list of LINT-FINDING instances into a human-readable diagnostic report."
   (if (null findings)
@@ -561,13 +578,7 @@ Returns a list of LINT-FINDING instances."
               do
               (format s "~A. [~A] [~{~A~^, ~}] ~A~%   Message: ~A~%"
                       i sev (or path "()") (string-downcase (string rule)) msg)
-              (when fix
-                (cond
-                  ((and (listp fix) (getf fix :pattern) (getf fix :replacement))
-                   (format s "   Suggested Fix:~%     Pattern:     ~A~%     Replacement: ~A~%"
-                           (getf fix :pattern) (getf fix :replacement)))
-                  ((stringp fix)
-                   (format s "   Suggested Fix: ~A~%" fix))))
+              (format-lint-fix s fix)
               (format s "~%")))))
 
 (defstruct (complexity-metrics (:constructor make-complexity-metrics))
