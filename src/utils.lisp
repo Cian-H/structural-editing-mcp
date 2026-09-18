@@ -1,10 +1,11 @@
-(defpackage :structural-editing-mcp.utils (:use :cl)
-  (:export :insert-at :remove-at :split-at)
+(defpackage :structural-editing-mcp.utils
+  (:use :cl)
+  (:export :insert-at
+           :remove-at
+           :split-at)
   (:documentation "Pure list manipulation utilities for structural editing."))
 
 (in-package :structural-editing-mcp.utils)
-
-(declaim (optimize (speed 3) (safety 0) (debug 0)))
 
 (declaim (inline insert-at remove-at split-at))
 

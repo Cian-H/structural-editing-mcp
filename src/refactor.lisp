@@ -8,7 +8,7 @@
 
 (in-package :structural-editing-mcp.refactor)
 
-(declaim (optimize (speed 3) (safety 0) (debug 0)))
+(declaim (optimize (speed 2) (safety 3)))
 
 ;;; --- Pattern Matching ---
 
@@ -19,7 +19,10 @@
     (path tag val)
     (parse-node node)
     (declare (ignore path))
-    (and (eq tag :leaf) (symbolp val) (char= (char (symbol-name val) 0) #\?))))
+    (and (eq tag :leaf)
+         (symbolp val)
+         (plusp (length (symbol-name val)))
+         (char= (char (symbol-name val) 0) #\?))))
 
 (defun match-pattern (pattern target bindings)
   "Match TARGET node against PATTERN node. Return (values success new-bindings)."

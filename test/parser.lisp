@@ -67,7 +67,22 @@
                      (:path (0 6) :leaf #\\)))
                  (string-to-sexp code)))
       (ok (string= "(char= ch #\\; #\\( #\\) #\\\" #\\\\)"
-                   (sexp-to-string (string-to-sexp code)))))))
+                   (sexp-to-string (string-to-sexp code))))))
+
+  (testing "space and whitespace character literals"
+    (let ((code "(char= ch #\\  #\\Tab #\\Newline)"))
+      (ok (equal '(:path () :file
+                   (:path (0) :paren
+                     (:path (0 0) :leaf char=)
+                     (:path (0 1) :leaf ch)
+                     (:path (0 2) :leaf #\Space)
+                     (:path (0 3) :leaf #\Tab)
+                     (:path (0 4) :leaf #\Newline)))
+                 (string-to-sexp code)))))
+
+  (testing "unclosed string and block comment error handling"
+    (signals (string-to-sexp "\"unclosed string") 'sexp-parse-error)
+    (signals (string-to-sexp "#| unclosed block comment") 'sexp-parse-error)))
 
 (deftest test-dialect-parsing-and-printing
   (testing "clojure comma as whitespace"
@@ -89,4 +104,5 @@
     (let* ((code "(define flag #t)")
            (ast (string-to-sexp code :dialect :scheme)))
       (ok (string= code (sexp-to-string ast :dialect :scheme))))))
+
 

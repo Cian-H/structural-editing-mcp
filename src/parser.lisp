@@ -17,7 +17,7 @@
 (defvar *current-dialect* :common-lisp
   "Current Lisp dialect being parsed or formatted (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel).")
 
-(declaim (optimize (speed 3) (safety 0) (debug 0)))
+(declaim (optimize (speed 2) (safety 3)))
 
 (declaim (inline whitespace-p delimiter-p))
 
@@ -63,7 +63,9 @@
                (t
                 (write-char ch out)
                 (incf index)))
-          finally (return (values (get-output-stream-string out) index)))))
+          finally (error 'sexp-parse-error
+                         :token (get-output-stream-string out)
+                         :message "Unterminated string literal"))))
 
 (defun parse-token (string start end)
   "Parse a token delimited by [START, END) in STRING into a keyword, number, or symbol."
@@ -143,12 +145,18 @@
                               (incf index 2))
                              (t
                               (incf index))))
+                  (when (> depth 0)
+                    (error 'sexp-parse-error
+                           :token (subseq string start len)
+                           :message "Unterminated multiline block comment #|...|#"))
                   (push (list :comment (subseq string start index)) tokens)))
                ((and (char= ch (code-char 35)) (< (1+ index) len) (char= (char string (1+ index)) #\\))
                 (let ((start index))
                   (incf index 2)
                   (if (< index len)
-                      (if (or (delimiter-p (char string index)) (char= (char string index) #\\))
+                      (if (or (delimiter-p (char string index))
+                              (char= (char string index) #\\)
+                              (whitespace-p (char string index) dialect))
                           (incf index)
                           (loop while (and (< index len)
                                            (let ((c (char string index)))

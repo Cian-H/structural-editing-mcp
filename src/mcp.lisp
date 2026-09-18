@@ -12,7 +12,7 @@
 
 (in-package :structural-editing-mcp.mcp)
 
-(declaim (optimize (speed 3) (safety 0) (debug 0)))
+(declaim (optimize (speed 2) (safety 3)))
 
 ;;; JSON-RPC & MCP Utilities
 

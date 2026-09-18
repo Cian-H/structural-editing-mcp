@@ -20,7 +20,7 @@
 
 (in-package :structural-editing-mcp.workspace)
 
-(declaim (optimize (speed 3) (safety 0) (debug 0)))
+(declaim (optimize (speed 2) (safety 3)))
 
 (defparameter *dialect-extensions*
   '(("lisp" . :common-lisp)
@@ -110,11 +110,12 @@ Non-Lisp files, ignored directories, and non-existent paths return NIL."
 (defun file-loaded-p (filepath)
   "Return T if FILEPATH is already tracked in *FILE-REGISTRY*."
   (let ((true-target (ignore-errors (namestring (truename filepath)))))
-    (when true-target
-      (loop for path being the hash-values of *file-registry*
-            thereis (and (stringp path)
-                         (let ((true-path (ignore-errors (namestring (truename path)))))
-                           (and true-path (string= true-target true-path))))))))
+    (loop for path being the hash-values of *file-registry*
+          thereis (and (stringp path)
+                       (or (string= filepath path)
+                           (and true-target
+                                (let ((true-path (ignore-errors (namestring (truename path)))))
+                                  (and true-path (string= true-target true-path)))))))))
 
 (defun read-workspace-file (filepath)
   "Read a file from disk, parse it, add it to the dialect partition in the workspace tree, and return its ID.

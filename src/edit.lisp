@@ -28,46 +28,41 @@
 
 (in-package :structural-editing-mcp.edit)
 
-(declaim (optimize (speed 3) (safety 0) (debug 0)))
+(declaim (optimize (speed 2) (safety 3)))
 
 (defun insert-node (tree parent-path index node)
   "Insert AST NODE into the children of the node at PARENT-PATH at the given INDEX."
   (update-node-at-path
     tree
     parent-path
-    (lambda
-            (parent)
-            (match
-        parent
+    (lambda (parent)
+      (match parent
         ((node p tag children)
-         `
-         (:path ,p ,tag ,@ (take index children) ,node ,@ (drop index children)))
+         `(:path ,p ,tag ,@(take index children) ,node ,@(drop index children)))
         (_ parent)))))
 
 (defun insert-expression (tree parent-path index source-string)
   "Parse SOURCE-STRING and insert its first expression into the children of the node at PARENT-PATH at the given INDEX."
-  (when-let
-            ((children (get-node-children (string-to-sexp source-string))))
-            (insert-node tree parent-path index (first children))))
+  (let ((children (get-node-children (string-to-sexp source-string))))
+    (if (null children)
+        (error 'sexp-parse-error
+               :token source-string
+               :message "No valid expression found in source string to insert")
+        (insert-node tree parent-path index (first children)))))
 
 (defun delete-node (tree path)
   "Delete the node at PATH."
-  (if
-      (null path)
+  (if (null path)
       nil
-      (let
-      ((idx (lastcar path)))
-      (update-node-at-path
-        tree
-        (butlast path)
-        (lambda
-                (parent)
-                (match
-            parent
-            ((node p tag children)
-             `
-             (:path ,p ,tag ,@ (take idx children) ,@ (drop (1+ idx) children)))
-            (_ parent)))))))
+      (let ((idx (lastcar path)))
+        (update-node-at-path
+          tree
+          (butlast path)
+          (lambda (parent)
+            (match parent
+              ((node p tag children)
+               `(:path ,p ,tag ,@(take idx children) ,@(drop (1+ idx) children)))
+              (_ parent)))))))
 
 (defun overwrite-node (tree path node)
   "Replace the node at PATH with NODE."
@@ -75,46 +70,49 @@
 
 (defun overwrite-expression (tree path source-string)
   "Parse SOURCE-STRING and replace the node at PATH with the first resulting expression."
-  (when-let
-            ((children (get-node-children (string-to-sexp source-string))))
-            (overwrite-node tree path (first children))))
+  (let ((children (get-node-children (string-to-sexp source-string))))
+    (if (null children)
+        (error 'sexp-parse-error
+               :token source-string
+               :message "No valid expression found in source string to overwrite")
+        (overwrite-node tree path (first children)))))
 
 (defun copy-node (tree source-path target-parent-path target-index)
   "Copy the node at SOURCE-PATH and insert it at TARGET-INDEX under TARGET-PARENT-PATH."
-  (insert-node
-               tree
-               target-parent-path
-               target-index
-               (get-node-at-path tree source-path)))
+  (let ((node (get-node-at-path tree source-path)))
+    (unless node
+      (error 'invalid-path-error
+             :path source-path
+             :tree tree
+             :message (format nil "Source node at path ~A not found for copy" source-path)))
+    (insert-node tree target-parent-path target-index node)))
 
 (defun pop-node (tree target-path)
   "Remove the node at TARGET-PATH from the tree and return both the new tree and the removed node."
-  (if
-      (null target-path)
+  (if (null target-path)
       (values nil tree)
-      (let*
-      ((idx (lastcar target-path))
-       popped-node
-       (new-tree
-                  (update-node-at-path
-            tree
-            (butlast target-path)
-            (lambda
-                    (parent)
-                    (match
-                parent
-                ((node p tag children)
-                 (setf popped-node (nth idx children))
-                 `
-                 (:path ,p ,tag ,@ (take idx children) ,@ (drop (1+ idx) children)))
-                (_ parent))))))
-      (values new-tree popped-node))))
+      (let* ((idx (lastcar target-path))
+             popped-node
+             (new-tree
+               (update-node-at-path
+                 tree
+                 (butlast target-path)
+                 (lambda (parent)
+                   (match parent
+                     ((node p tag children)
+                      (setf popped-node (nth idx children))
+                      `(:path ,p ,tag ,@(take idx children) ,@(drop (1+ idx) children)))
+                     (_ parent))))))
+        (values new-tree popped-node))))
 
 (defun move-node (tree source-path target-parent-path target-index)
   "Move the node at SOURCE-PATH to TARGET-INDEX under TARGET-PARENT-PATH."
-  (multiple-value-bind
-    (new-tree node)
-    (pop-node tree source-path)
+  (multiple-value-bind (new-tree node) (pop-node tree source-path)
+    (unless node
+      (error 'invalid-path-error
+             :path source-path
+             :tree tree
+             :message (format nil "Source node at path ~A not found for move" source-path)))
     (insert-node new-tree target-parent-path target-index node)))
 
 (defun swap-nodes (tree path1 path2)
