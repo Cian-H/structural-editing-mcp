@@ -74,8 +74,6 @@
 
 (declaim (optimize (speed 2) (safety 3)))
 
-;;; --- Pattern Matching Primitives ---
-
 (defun variable-node-p (node)
   "Check if a leaf node is a pattern variable (symbol starting with ?)."
   (multiple-value-bind (path tag val) (parse-node node)
@@ -130,8 +128,6 @@
               (get-node-tag pattern)
               (mapcar (lambda (c) (instantiate-pattern c bindings)) children))))))
 
-;;; --- Search Primitives ---
-
 (defun search-ast (tree query &key path exact)
   "Search the AST in TREE (optionally starting under PATH) for leaf nodes matching QUERY.
 If EXACT is T, requires exact match; otherwise searches case-insensitively for substrings."
@@ -182,17 +178,12 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
         (walk start-node)))
     (nreverse matches)))
 
-;;; --- Lint Finding Structure ---
-
 (defstruct (lint-finding (:constructor make-lint-finding))
   rule
   path
   message
-  severity      ; :style, :warning, :info
-  suggested-fix ; nil, or plist (:pattern ... :replacement ...), or string
-  )
-
-;;; --- Node Inspection Helpers for Linting Rules ---
+  severity
+  suggested-fix)
 
 (defun leaf-symbol-p (node name)
   "Return T if NODE is a leaf symbol matching NAME (case-insensitive string or symbol)."
@@ -228,8 +219,6 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
         (and (eq tag :leaf)
              (symbolp val)
              (and (eq dialect :clojure) (string-equal (symbol-name val) "FALSE"))))))
-
-;;; --- Rule Implementations ---
 
 (defun check-if-progn-to-when (node path dialect)
   "Detect (if <cond> (progn <body...>)) or (if <cond> (progn <body...>) nil)."
@@ -268,9 +257,6 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
              (then-node (third children))
              (cond-children (get-node-children cond-node))
              (then-children (get-node-children then-node)))
-        ;; Don't fire if then is boolean true (handled by check-if-boolean-redundant)
-        ;; Don't fire if cond is (not ...) (handled by check-if-not-to-unless)
-        ;; Don't fire if then is progn (handled by check-if-progn-to-when)
         (unless (or (leaf-true-p then-node dialect)
                     (and (member (get-node-tag cond-node) '(:paren :square))
                          (= (length cond-children) 2)
@@ -460,8 +446,6 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
               :severity :style
               :suggested-fix replacement))))))))
 
-;;; --- Catalog of Anti-Pattern Rules ---
-
 (defparameter *anti-pattern-rules*
   (list
    (list :id :if-progn-to-when
@@ -492,8 +476,6 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
          :check #'check-equal-nil-to-null
          :dialects '(:common-lisp :emacs-lisp)))
   "Active structural anti-pattern and code smell lint rules.")
-
-;;; --- Lint Engine ---
 
 (defun rule-matches-dialect-p (rule dialect)
   "Return T if RULE applies to DIALECT."
@@ -535,7 +517,6 @@ Returns a list of LINT-FINDING instances."
       (labels ((walk (node current-dialect)
                  (let* ((tag (get-node-tag node))
                         (node-path (get-node-path node))
-                        ;; Track dialect transitions if traversing workspace/dialect nodes
                         (effective-dialect
                           (cond
                             ((member tag '(:common-lisp :clojure :scheme :emacs-lisp :fennel))
@@ -577,11 +558,9 @@ Returns a list of LINT-FINDING instances."
                    (format s "   Suggested Fix: ~A~%" fix))))
               (format s "~%")))))
 
-;;; --- Complexity Metrics ---
-
 (defstruct (complexity-metrics (:constructor make-complexity-metrics))
   name
-  kind ; :function, :macro, :method, :generic, :form
+  kind
   path
   cyclomatic-complexity
   max-nesting-depth
@@ -634,12 +613,10 @@ Base complexity is 1, with +1 for each conditional branch, short-circuit point, 
                        (when (symbolp val)
                          (let ((name (string-upcase (symbol-name val))))
                            (cond
-                             ;; Standard conditional constructs: +1
                              ((member name '("IF" "WHEN" "UNLESS" "WHEN-NOT" "IF-NOT"
                                              "WHEN-LET" "IF-LET" "WHEN-FIRST")
                                       :test #'string=)
                               (incf complexity))
-                             ;; COND: each non-default test clause adds +1
                              ((string= name "COND")
                               (dolist (clause (rest children))
                                 (let ((c-children (get-node-children clause)))
@@ -650,7 +627,6 @@ Base complexity is 1, with +1 for each conditional branch, short-circuit point, 
                                                   (leaf-symbol-p test "OTHERWISE")
                                                   (leaf-symbol-p test ":ELSE"))
                                         (incf complexity)))))))
-                             ;; CASE/TYPECASE constructs: each clause adds +1
                              ((member name '("CASE" "CCASE" "ECASE" "TYPECASE" "CTYPECASE"
                                              "ETYPECASE" "CONDP")
                                       :test #'string=)
@@ -662,20 +638,16 @@ Base complexity is 1, with +1 for each conditional branch, short-circuit point, 
                                       (unless (or (leaf-true-p selector dialect)
                                                   (leaf-symbol-p selector "OTHERWISE"))
                                         (incf complexity)))))))
-                             ;; Short-circuiting booleans: each extra operand adds +1
                              ((member name '("AND" "OR") :test #'string=)
                               (when (> (length children) 2)
                                 (incf complexity (- (length children) 2))))
-                             ;; Loops: +1
                              ((member name '("LOOP" "DOLIST" "DOTIMES" "DO" "DO*" "DOSEQ" "RECUR")
                                       :test #'string=)
                               (incf complexity))
-                             ;; Error & condition handlers: each clause adds +1
                              ((member name '("HANDLER-CASE" "RESTART-CASE") :test #'string=)
                               (dolist (clause (nthcdr 2 children))
                                 (when (member (get-node-tag clause) '(:paren :square))
                                   (incf complexity))))))))))
-                 ;; Recurse into children
                  (dolist (c children)
                    (walk c)))))
       (walk node)
@@ -788,7 +760,6 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
         (when (and (>= (complexity-metrics-cyclomatic-complexity metrics) (or min-complexity 1))
                    (>= (complexity-metrics-max-nesting-depth metrics) (or min-depth 1)))
           (push metrics results))))
-    ;; Sort by cyclomatic complexity descending, then max-nesting-depth descending
     (sort results
           (lambda (a b)
             (let ((ca (complexity-metrics-cyclomatic-complexity a))
@@ -822,8 +793,6 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
                   (format s "     - ~A~%" r)))
               (format s "~%")))))
 
-;;; --- Duplicate & Structural Clone Detection ---
-
 (defstruct (duplicate-group (:constructor make-duplicate-group))
   code-snippet
   occurrence-count
@@ -838,7 +807,6 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
       (let* ((raw (sexp-to-string node))
              (cleaned (string-trim '(#\Space #\Newline #\Tab) raw)))
         cleaned)
-      ;; Structural mode: preserve operators and structure, replace variables and literals with ?_
       (labels ((anonymize (curr is-head)
                  (match curr
                    ((leaf path val)
@@ -882,7 +850,6 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
       (labels ((harvest (curr curr-path)
                  (let ((tag (get-node-tag curr))
                        (children (get-node-children curr)))
-                   ;; Only inspect compound collections that are not workspace or dialect roots
                    (when (and (member tag '(:paren :square :curly))
                               children
                               (not (member tag '(:workspace :common-lisp :clojure :scheme :emacs-lisp :fennel))))
@@ -895,14 +862,12 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
                            (unless (gethash fingerprint node-metadata)
                              (setf (gethash fingerprint node-metadata)
                                    (list :node-count node-cnt :depth depth :sample curr)))))))
-                   ;; Recurse into children
                    (loop for child in children
                          for idx from 0
                          for child-path = (or (get-node-path child) (append curr-path (list idx)))
                          do (harvest child child-path)))))
         (harvest start-node (or (get-node-path start-node) path '()))))
 
-    ;; Filter buckets with at least 2 occurrences
     (let ((raw-candidates '()))
       (maphash
        (lambda (fingerprint entries)
@@ -920,9 +885,6 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
                    raw-candidates))))
        buckets)
 
-      ;; Subsumption filtering:
-      ;; If candidate B is contained within candidate A for all occurrences of B,
-      ;; and occurrence count of B equals occurrence count of A, B is subsumed by A.
       (let ((filtered-candidates '()))
         (dolist (cand raw-candidates)
           (let* ((c-paths (getf cand :paths))
@@ -934,7 +896,6 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
                                    (o-count (length (getf other :paths))))
                                (and (= c-count o-count)
                                     (> (getf other :node-count) (getf cand :node-count))
-                                    ;; Every path in c-paths has a prefix in o-paths
                                     (every (lambda (cp)
                                              (some (lambda (op) (path-prefix-p op cp)) o-paths))
                                            c-paths)))))
@@ -942,7 +903,6 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
             (unless subsumed-p
               (push cand filtered-candidates))))
 
-        ;; Convert to duplicate-group instances
         (let ((groups
                 (mapcar
                  (lambda (cand)
@@ -966,7 +926,6 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
                       :depth depth
                       :recommendation recomm)))
                  filtered-candidates)))
-          ;; Sort by total AST node savings: node-count * (occurrence-count - 1) descending
           (sort groups
                 (lambda (a b)
                   (let ((savings-a (* (duplicate-group-node-count a) (1- (duplicate-group-occurrence-count a))))
@@ -998,35 +957,30 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
                 (format s "   Recommendation: ~A~%" rec))
               (format s "~%")))))
 
-;;; --- Phase 4: Lexical Scope & Binding Analysis ---
-
 (defstruct binding-finding
-  kind               ; :unused-variable or :shadowed-variable
-  variable-name      ; string
-  path               ; AST path to the variable definition
-  scope-kind         ; :defun, :let, :lambda, etc.
-  outer-path         ; AST path to shadowed variable (or nil)
-  message            ; Human-readable message
-  recommendation     ; Refactoring suggestion
-  )
+  kind
+  variable-name
+  path
+  scope-kind
+  outer-path
+  message
+  recommendation)
 
 (defstruct scope-binding
-  name               ; downcased string name
-  path               ; AST path where declared
-  scope-kind         ; :function, :let, :let*, :lambda, etc.
-  enclosing-name     ; function or form name
-  (ignored-p nil)    ; boolean
-  (usage-count 0)    ; integer
-  (usage-paths nil)  ; list of AST paths
-  )
+  name
+  path
+  scope-kind
+  enclosing-name
+  (ignored-p nil)
+  (usage-count 0)
+  (usage-paths nil))
 
 (defstruct lexical-scope
-  kind               ; :function, :let, :let*, :lambda, :multiple-value-bind, etc.
-  parent             ; lexical-scope or nil
-  dialect            ; :common-lisp, :clojure, etc.
-  enclosing-name     ; string or nil
-  (bindings nil)     ; list of scope-binding
-  )
+  kind
+  parent
+  dialect
+  enclosing-name
+  (bindings nil))
 
 (defparameter *cl-lambda-keywords*
   '("&optional" "&rest" "&key" "&aux" "&body" "&whole" "&environment" "&allow-other-keys" "&"))
@@ -1132,28 +1086,22 @@ Returns (values ignored-names remaining-body-nodes)."
                         (when children
                           (let ((first-child (first children)))
                             (cond
-                              ;; CL &optional / &key item: (var init [supplied-p])
-                              ;; or ((:key var) init [supplied-p])
                               ((and (eq tag :paren)
                                     (or (leaf-any-symbol-p first-child)
                                         (and (eq (get-node-tag first-child) :paren)
                                              (get-node-children first-child))))
                                (if (and (eq (get-node-tag first-child) :paren)
                                         (get-node-children first-child))
-                                   ;; ((:key var) init)
                                    (let ((sub (get-node-children first-child)))
                                      (when (>= (length sub) 2)
                                        (collect (second sub))))
-                                   ;; (var init [supplied-p])
                                    (collect first-child))
-                               ;; Check if supplied-p exists (third element)
                                (when (>= (length children) 3)
                                  (collect (third children))))
                               (t
                                (dolist (c children)
                                  (collect c))))))))
                      ((eq tag :curly)
-                      ;; Clojure map destructuring {:keys [a b] :as all}
                       (let ((children (get-node-children node)))
                         (loop for (k v) on children by #'cddr
                               while k do
@@ -1179,12 +1127,10 @@ Returns (values ignored-names remaining-body-nodes)."
       (let ((tag (get-node-tag bindings-node))
             (children (get-node-children bindings-node)))
         (cond
-          ;; Clojure / Fennel vector pairs: [var expr var expr]
           ((or (eq dialect :clojure) (eq dialect :fennel) (eq tag :square))
            (loop for (pat-node init-node) on children by #'cddr
                  while pat-node do
                  (push (list :pattern pat-node :init init-node) results)))
-          ;; Common Lisp / Scheme / Emacs Lisp list of clauses: ((var expr) ...)
           (t
            (dolist (clause children)
              (cond
@@ -1261,30 +1207,25 @@ Returns (values ignored-names remaining-body-nodes)."
 
         ((member tag '(:paren :square))
          (when children
-           (let* ((head (first children))
-                  (head-name (when (leaf-any-symbol-p head) (leaf-symbol-name head))))
+            (let* ((head (first children))
+                   (head-name (when (leaf-any-symbol-p head) (leaf-symbol-name head))))
              (cond
-               ;; Quoted data
                ((member head-name '("quote" "'") :test #'string=)
                 nil)
 
-               ;; Function quote in Lisp-2
                ((and (not (lisp-1-dialect-p dialect))
                      (member head-name '("function" "#'") :test #'string=))
                 nil)
 
-               ;; Declarations in CL
                ((equal head-name "declare")
                 nil)
 
-               ;; Function / method definitions: defun, defmacro, defmethod, defn, defn-, define
                ((member head-name '("defun" "defmacro" "defmethod" "defn" "defn-" "define") :test #'string=)
                 (let* ((name-child (second children))
                        (fn-name (if (leaf-any-symbol-p name-child) (leaf-symbol-name name-child) "anonymous"))
                        (params-node nil)
                        (body-nodes nil))
                   (cond
-                    ;; Scheme: (define (name params...) body...)
                     ((and (equal head-name "define") (member (get-node-tag name-child) '(:paren :square)))
                      (let ((sig-children (get-node-children name-child)))
                        (when sig-children
@@ -1292,7 +1233,6 @@ Returns (values ignored-names remaining-body-nodes)."
                          (setf params-node (list* :path (get-node-path name-child) :paren (rest sig-children)))
                          (setf body-nodes (cddr children)))))
 
-                    ;; Clojure: (defn name [params...] body...) or (defn name "doc" [params...] body...)
                     ((or (eq dialect :clojure) (member head-name '("defn" "defn-") :test #'string=))
                      (let ((rem (cddr children)))
                        (when (and rem (or (stringp (third (parse-node (first rem))))
@@ -1304,7 +1244,6 @@ Returns (values ignored-names remaining-body-nodes)."
                              (setf body-nodes (rest rem)))
                            (setf body-nodes rem))))
 
-                    ;; Standard CL / Elisp: (defun name (params...) body...)
                     (t
                      (setf params-node (third children))
                      (setf body-nodes (cdddr children))))
@@ -1343,7 +1282,6 @@ Returns (values ignored-names remaining-body-nodes)."
                                   (setf findings-acc (walk-binding-tree form scope dialect findings-acc))))
                             (setf findings-acc (walk-binding-tree form scope dialect findings-acc)))))))
 
-               ;; Lambda / fn / anonymous functions
                ((member head-name '("lambda" "fn") :test #'string=)
                 (let* ((rem (rest children))
                        (params-node nil)
@@ -1371,7 +1309,6 @@ Returns (values ignored-names remaining-body-nodes)."
                       (dolist (c (rest children))
                         (setf findings-acc (walk-binding-tree c scope dialect findings-acc))))))
 
-               ;; Simultaneous let in CL/Elisp/Scheme
                ((and (equal head-name "let") (not (or (eq dialect :clojure) (eq dialect :fennel))))
                 (let* ((bindings-node (second children))
                        (body-nodes (cddr children))
@@ -1392,7 +1329,6 @@ Returns (values ignored-names remaining-body-nodes)."
                         (setf findings-acc (walk-binding-tree b let-scope dialect findings-acc)))
                       (setf findings-acc (check-unused-in-scope let-scope dialect findings-acc))))))
 
-               ;; Sequential let* (CL/Scheme/Elisp), Clojure let/loop, Fennel let
                ((or (member head-name '("let*" "letrec" "loop") :test #'string=)
                     (and (equal head-name "let") (or (eq dialect :clojure) (eq dialect :fennel))))
                 (let* ((bindings-node (second children))
@@ -1420,7 +1356,6 @@ Returns (values ignored-names remaining-body-nodes)."
                     (dolist (sc created-scopes)
                       (setf findings-acc (check-unused-in-scope sc dialect findings-acc))))))
 
-               ;; multiple-value-bind (CL)
                ((equal head-name "multiple-value-bind")
                 (let* ((vars-node (second children))
                        (val-node (third children))
@@ -1436,7 +1371,6 @@ Returns (values ignored-names remaining-body-nodes)."
                         (setf findings-acc (walk-binding-tree b mvb-scope dialect findings-acc)))
                       (setf findings-acc (check-unused-in-scope mvb-scope dialect findings-acc))))))
 
-               ;; destructuring-bind (CL)
                ((equal head-name "destructuring-bind")
                 (let* ((pat-node (second children))
                        (expr-node (third children))
@@ -1452,7 +1386,6 @@ Returns (values ignored-names remaining-body-nodes)."
                         (setf findings-acc (walk-binding-tree b db-scope dialect findings-acc)))
                       (setf findings-acc (check-unused-in-scope db-scope dialect findings-acc))))))
 
-               ;; dolist / dotimes (CL/Elisp)
                ((member head-name '("dolist" "dotimes") :test #'string=)
                 (let* ((spec-node (second children))
                        (body-nodes (cddr children)))
@@ -1484,7 +1417,6 @@ Returns (values ignored-names remaining-body-nodes)."
                       (dolist (c (rest children))
                         (setf findings-acc (walk-binding-tree c scope dialect findings-acc))))))
 
-               ;; when-let / if-let / when-some / if-some
                ((member head-name '("when-let" "if-let" "when-some" "if-some") :test #'string=)
                 (let* ((bindings-node (second children))
                        (body-nodes (cddr children))
@@ -1500,7 +1432,6 @@ Returns (values ignored-names remaining-body-nodes)."
                     (setf findings-acc (walk-binding-tree b wl-scope dialect findings-acc)))
                   (setf findings-acc (check-unused-in-scope wl-scope dialect findings-acc))))
 
-               ;; flet / labels (CL/Elisp)
                ((member head-name '("flet" "labels") :test #'string=)
                 (let* ((fns-node (second children))
                        (body-nodes (cddr children)))
@@ -1528,14 +1459,11 @@ Returns (values ignored-names remaining-body-nodes)."
                   (dolist (b body-nodes)
                     (setf findings-acc (walk-binding-tree b scope dialect findings-acc)))))
 
-               ;; Standard application / form
                (t
-                ;; In Lisp-1, head expression is evaluated in variable namespace (unless a special operator)
                 (when (and (lisp-1-dialect-p dialect)
                            (leaf-any-symbol-p head)
                            (not (member head-name *lisp-special-operators* :test #'string=)))
                   (record-variable-usage scope head-name (get-node-path head)))
-                ;; Walk rest of children in current scope
                 (dolist (c (rest children))
                   (setf findings-acc (walk-binding-tree c scope dialect findings-acc)))))))))))
     findings-acc)
@@ -1590,16 +1518,13 @@ Returns a list of BINDING-FINDING instances."
                     (format s "     Recommendation: ~A~%" (binding-finding-recommendation f))))
             (format s "~%"))))))
 
-;;; --- Phase 5: Unified Refactoring Opportunity Engine ---
-
 (defstruct refactoring-suggestion
-  category           ; :lint, :complexity, :duplicate, or :binding
-  priority           ; :high, :medium, or :low
-  path               ; AST path
-  description        ; Human-readable description of the opportunity
-  recommended-tool   ; Name of the MCP tool to execute (e.g. "ast_modify", "ast_extract_function")
-  action-plan        ; Concrete refactoring instructions
-  )
+  category
+  priority
+  path
+  description
+  recommended-tool
+  action-plan)
 
 (defun priority-rank (p)
   "Return numeric rank for PRIORITY keyword (:high = 3, :medium = 2, :low = 1)."
@@ -1631,7 +1556,6 @@ Returns a list of REFACTORING-SUGGESTION instances sorted by priority."
                          (mapcar #'parse-category-keyword categories)))
          (suggestions '()))
 
-    ;; 1. Anti-Pattern Lint Findings
     (when (or (null cat-keywords) (member :lint cat-keywords))
       (let ((lint-findings (lint-ast tree :path path :dialect dialect)))
         (dolist (f lint-findings)
@@ -1656,7 +1580,6 @@ Returns a list of REFACTORING-SUGGESTION instances sorted by priority."
                      :action-plan plan)
                     suggestions))))))
 
-    ;; 2. Complexity Metrics
     (when (or (null cat-keywords) (member :complexity cat-keywords))
       (let ((complex-forms (analyze-complexity tree :path path :dialect dialect :min-complexity 8 :min-depth 5)))
         (dolist (m complex-forms)
@@ -1682,7 +1605,6 @@ Returns a list of REFACTORING-SUGGESTION instances sorted by priority."
                      :action-plan plan)
                     suggestions))))))
 
-    ;; 3. Duplicate Subtrees & Clones
     (when (or (null cat-keywords) (member :duplicate cat-keywords) (member :duplicates cat-keywords))
       (let ((duplicate-groups (find-duplicate-subtrees tree :path path :min-nodes 3 :min-depth 2)))
         (dolist (g duplicate-groups)
@@ -1710,7 +1632,6 @@ Returns a list of REFACTORING-SUGGESTION instances sorted by priority."
                      :action-plan plan)
                     suggestions))))))
 
-    ;; 4. Scope & Variable Bindings
     (when (or (null cat-keywords) (member :binding cat-keywords) (member :bindings cat-keywords))
       (let ((binding-findings (analyze-bindings tree :path path :dialect dialect)))
         (dolist (f binding-findings)
@@ -1728,7 +1649,6 @@ Returns a list of REFACTORING-SUGGESTION instances sorted by priority."
                      :action-plan plan)
                     suggestions))))))
 
-    ;; Sort by priority rank descending, then category
     (sort suggestions
           (lambda (a b)
             (let ((r-a (priority-rank (refactoring-suggestion-priority a)))

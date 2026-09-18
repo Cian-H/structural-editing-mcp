@@ -15,8 +15,6 @@
 
 (declaim (optimize (speed 2) (safety 3)))
 
-;;; --- Pattern Replacement ---
-
 (defun replace-pattern (tree pattern-str replacement-str)
   "Recursively search TREE, replacing subtrees that match PATTERN-STR with REPLACEMENT-STR."
   (let*
@@ -41,9 +39,6 @@
                       (list* :path (get-node-path node) (get-node-tag node) (mapcar #'walk children))
                       node)))))))
       (reindex-paths (walk tree)))))
-
-;;; --- Variable Extraction ---
-
 
 (defun extract-variable (tree target-path var-name)
   "Extract the node at TARGET-PATH into a let binding around its parent."
@@ -94,8 +89,6 @@
                      (completed-bindings-list ` (:path nil :paren ,completed-binding)))
                     `
                     (:path nil :paren (:path nil :leaf let) ,completed-bindings-list ,new-parent)))))))))))
-
-;;; --- Function Extraction ---
 
 (defun find-file-path-and-top-index (tree target-path)
   "Find the file node path and top-level form index in that file for TARGET-PATH."
