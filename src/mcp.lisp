@@ -44,57 +44,46 @@
 ;;; Node Presentation & Discovery Helpers
 
 
+(defun truncate-preview-string (raw-str &key (max-length 70))
+  "Format RAW-STR into a single line trimmed of newlines, capped at MAX-LENGTH with ellipsis."
+  (let* ((single-line (substitute #\space #\newline (string-trim '(#\space #\newline) (or raw-str ""))))
+         (len (length single-line)))
+    (if (> len max-length)
+        (format nil "~A..." (subseq single-line 0 (max 0 (- max-length 3))))
+        single-line)))
+
 (defun print-children-tree (s node current-depth max-depth base-path)
-  (when
-        (and
-         (< current-depth max-depth)
-         (not
-           (member (structural-editing-mcp.tree:get-node-tag node) ' (:leaf :comment))))
-        (let
-      ((children (structural-editing-mcp.tree:get-node-children node)))
-      (when
-            children
-            (loop
-              for
-              child
-              in
-              children
-              for
-              idx
-              from
-              0
-              for
-              cpath
-              =
-              (or
-              (structural-editing-mcp.tree:get-node-path child)
-              (append base-path (list idx)))
-              for
-              ctag
-              =
-              (structural-editing-mcp.tree:get-node-tag child)
-              for
-              raw-str
-              =
-              (structural-editing-mcp.parser:sexp-to-string child)
-              for
-              single-line
-              =
-              (substitute #\space #\newline (string-trim ' (#\space #\newline) raw-str))
-              for
-              snippet
-              =
-              (if
-              (> (length single-line) 70)
-              (format nil "~A..." (subseq single-line 0 67))
-              single-line)
-              for
-              indent
-              =
-              (make-string (* (1+ current-depth) 2) :initial-element #\space)
+  (when (and (< current-depth max-depth)
+             (not (member (structural-editing-mcp.tree:get-node-tag node) '(:leaf :comment))))
+    (let ((children (structural-editing-mcp.tree:get-node-children node)))
+      (when children
+        (loop for child in children
+              for idx from 0
+              for cpath = (or (structural-editing-mcp.tree:get-node-path child)
+                              (append base-path (list idx)))
+              for ctag = (structural-editing-mcp.tree:get-node-tag child)
+              for snippet = (truncate-preview-string
+                             (structural-editing-mcp.parser:sexp-to-string child))
+              for indent = (make-string (* (1+ current-depth) 2) :initial-element #\space)
               do
-              (format s "~A[~{~A~^, ~}] ~A: ~A~%" indent cpath ctag snippet)
-              (print-children-tree s child (1+ current-depth) max-depth cpath))))))
+                 (format s "~A[~{~A~^, ~}] ~A: ~A~%" indent cpath ctag snippet)
+                 (print-children-tree s child (1+ current-depth) max-depth cpath))))))
+
+(defun format-children-preview (s children path depth &optional (label-suffix ""))
+  "Format child nodes with paths, tags, and preview snippets up to DEPTH."
+  (when children
+    (format s "~%Children (~A~A):~%" (length children) label-suffix)
+    (loop for child in children
+          for idx from 0
+          for cpath = (or (structural-editing-mcp.tree:get-node-path child)
+                          (append path (list idx)))
+          for ctag = (structural-editing-mcp.tree:get-node-tag child)
+          for snippet = (truncate-preview-string
+                         (structural-editing-mcp.parser:sexp-to-string child))
+          do
+             (format s "  [~{~A~^, ~}] ~A: ~A~%" cpath ctag snippet)
+             (when (> depth 1)
+               (print-children-tree s child 1 depth cpath)))))
 
 (defun format-node-preview (node &key (depth 2))
   "Format a node with its path, tag, rendered code, and summary of children up to DEPTH."
@@ -152,84 +141,10 @@
            (let ((filepath (structural-editing-mcp.workspace:get-filepath path)))
              (when filepath (format s "File: ~A~%" filepath)))
            (format s "Code:~%~A~%" code)
-           (when
-                  children
-                  (format s "~%Children (~A top-level forms):~%" (length children))
-                  (loop
-                    for
-                    child
-                    in
-                    children
-                    for
-                    idx
-                    from
-                    0
-                    for
-                    cpath
-                    =
-                    (or (structural-editing-mcp.tree:get-node-path child) (append path (list idx)))
-                    for
-                    ctag
-                    =
-                    (structural-editing-mcp.tree:get-node-tag child)
-                    for
-                    raw-str
-                    =
-                    (structural-editing-mcp.parser:sexp-to-string child)
-                    for
-                    single-line
-                    =
-                    (substitute #\space #\newline (string-trim ' (#\space #\newline) raw-str))
-                    for
-                    snippet
-                    =
-                    (if
-                    (> (length single-line) 70)
-                    (format nil "~A..." (subseq single-line 0 67))
-                    single-line)
-                    do
-                    (format s "  [~{~A~^, ~}] ~A: ~A~%" cpath ctag snippet)
-                    (when (> depth 1) (print-children-tree s child 1 depth cpath)))))
+           (format-children-preview s children path depth " top-level forms"))
           (t
-             (format s "Code:~%~A~%" code)
-             (when
-                  children
-                  (format s "~%Children (~A):~%" (length children))
-                  (loop
-                    for
-                    child
-                    in
-                    children
-                    for
-                    idx
-                    from
-                    0
-                    for
-                    cpath
-                    =
-                    (or (structural-editing-mcp.tree:get-node-path child) (append path (list idx)))
-                    for
-                    ctag
-                    =
-                    (structural-editing-mcp.tree:get-node-tag child)
-                    for
-                    raw-str
-                    =
-                    (structural-editing-mcp.parser:sexp-to-string child)
-                    for
-                    single-line
-                    =
-                    (substitute #\space #\newline (string-trim ' (#\space #\newline) raw-str))
-                    for
-                    snippet
-                    =
-                    (if
-                    (> (length single-line) 70)
-                    (format nil "~A..." (subseq single-line 0 67))
-                    single-line)
-                    do
-                    (format s "  [~{~A~^, ~}] ~A: ~A~%" cpath ctag snippet)
-                    (when (> depth 1) (print-children-tree s child 1 depth cpath))))))))))
+           (format s "Code:~%~A~%" code)
+           (format-children-preview s children path depth)))))))
 
 ;;; AST Mutation Dispatchers
 
