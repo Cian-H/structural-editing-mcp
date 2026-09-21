@@ -297,7 +297,13 @@
                       (ok shadowed)
                       (ok (string= (binding-finding-variable-name shadowed) "x"))
                       (ok unused)
-                      (ok (string= (binding-finding-variable-name unused) "x"))))))
+                      (ok (string= (binding-finding-variable-name unused) "x")))))
+
+         (testing "variables used in cond test expressions are recognized as used"
+                  (let* ((code "(defun check (x y) (cond ((> x 0) :pos) ((= y 0) :zero) (t :other)))")
+                         (ast (string-to-sexp code))
+                         (findings (analyze-bindings ast :dialect :common-lisp)))
+                    (ok (= (length findings) 0)))))
 
 (deftest test-binding-analysis-clojure
          (testing "clojure vector params and let bindings"

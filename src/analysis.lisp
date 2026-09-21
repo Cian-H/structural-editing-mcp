@@ -911,7 +911,7 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
   "Determine child context during harvest traversal."
   (cond
     ((and (eq parent-context :binding-list) (eq parent-tag :square))
-      (if (evenp idx) :binding-clause nil))
+      (when (evenp idx) :binding-clause))
     ((eq parent-context :binding-list)
       :binding-clause)
     ((eq parent-context :binding-clause)
@@ -919,7 +919,7 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
     ((or (member head-str *binding-form-heads* :test #'string=)
          (member head-str '("MULTIPLE-VALUE-BIND" "DESTRUCTURING-BIND") :test #'string=)
          (loop-with-vector-bindings-p head-str children))
-      (if (= idx 1) :binding-list nil))
+      (when (= idx 1) :binding-list))
     (t nil)))
 
 (defun harvest-duplicate-children (curr-path children tag head-str context exact min-nodes min-depth buckets node-metadata)
@@ -1603,6 +1603,25 @@ Returns (values ignored-names remaining-body-nodes)."
     (walk-binding-bind-form kind (second children) (third children) (cdddr children)
                             scope dialect findings-acc)))
 
+(defun walk-cond-binding-form (children scope dialect findings-acc)
+  "Walk COND clauses, evaluating both test and body expressions in each clause."
+  (if (eq dialect :clojure)
+    (walk-binding-rest-children children scope dialect findings-acc)
+    (dolist (clause (rest children) findings-acc)
+      (if (compound-node-p clause)
+        (dolist (expr (get-node-children clause))
+          (setf findings-acc (walk-binding-tree expr scope dialect findings-acc)))
+        (setf findings-acc (walk-binding-tree clause scope dialect findings-acc))))))
+
+(defun walk-case-binding-form (children scope dialect findings-acc)
+  "Walk CASE form: keyform is evaluated, each clause has literals then body expressions."
+  (when (second children)
+    (setf findings-acc (walk-binding-tree (second children) scope dialect findings-acc)))
+  (dolist (clause (cddr children) findings-acc)
+    (when (compound-node-p clause)
+      (dolist (body-form (rest (get-node-children clause)))
+        (setf findings-acc (walk-binding-tree body-form scope dialect findings-acc))))))
+
 (defun walk-scope-binding-form (head-name children scope dialect findings-acc)
   "Walk lexical bindings, iteration, or fallback forms."
   (cond
@@ -1612,6 +1631,10 @@ Returns (values ignored-names remaining-body-nodes)."
       (walk-sequential-let-form head-name children scope dialect findings-acc))
     ((equal head-name "loop")
       (walk-binding-rest-children children scope dialect findings-acc))
+    ((equal head-name "cond")
+      (walk-cond-binding-form children scope dialect findings-acc))
+    ((member head-name '("case" "ccase" "ecase" "typecase" "ctypecase" "etypecase") :test #'string=)
+      (walk-case-binding-form children scope dialect findings-acc))
     ((member head-name '("multiple-value-bind" "destructuring-bind") :test #'string=)
       (walk-bind-form head-name children scope dialect findings-acc))
     ((member head-name '("dolist" "dotimes") :test #'string=)

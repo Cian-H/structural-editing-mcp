@@ -518,15 +518,18 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
         (and (member (get-node-tag binds) '(:paren :square))
              (>= (length (get-node-children binds)) 2)))))
 
+(defparameter *multiline-min-child-counts*
+  (dict :def-package 0 :def-type 0 :cond 0 :mvb 0
+        :lambda 3 :case 3
+        :if 4 :when 4 :iteration 4)
+  "Minimum child count to force multiline formatting by operator category.")
+
 (defun always-multiline-op-p (op-cat children)
   "Return T if OP-CAT should never be formatted as a single line."
-  (let ((n (length children)))
-    (case op-cat
-      ((:def-package :def-type :cond :mvb) t)
-      ((:lambda :case) (>= n 3))
-      ((:if :when :iteration) (>= n 4))
-      (:binding (binding-form-multiline-p children))
-      (otherwise nil))))
+  (if (eq op-cat :binding)
+    (binding-form-multiline-p children)
+    (let ((min-count (gethash op-cat *multiline-min-child-counts*)))
+      (and min-count (>= (length children) min-count)))))
 
 (defun raw-multiline-text (open close blocks op-cat)
   "Compose BLOCKS into a multiline raw string with the head and short leading blocks inline."

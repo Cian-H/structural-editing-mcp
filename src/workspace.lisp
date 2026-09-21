@@ -187,21 +187,23 @@ Returns the newly assigned numerical file ID."
       (register-clean-file-state canonical-path parsed-file-node)
       id)))
 
+(defun try-load-file-text (canonical-path filepath dialect)
+  "Read and register file contents, returning file ID or NIL on failure."
+  (handler-case
+      (let ((text (uiop:read-file-string canonical-path)))
+        (parse-and-register-file canonical-path text dialect))
+    (error (c)
+      (format *error-output* "~&[Workspace] Warning: failed to load ~A: ~A~%" filepath c)
+     nil)))
+
 (defun read-workspace-file (filepath)
   "Read a file from disk, parse it, add it to the dialect partition in the workspace tree, and return its ID.
 If the file is already loaded, returns its existing ID. Gracefully returns NIL on parse/read failure."
   (unless *workspace-tree* (init-workspace))
   (let* ((canonical-path (or (ignore-errors (namestring (truename filepath))) filepath))
          (dialect (or (file-dialect canonical-path) :common-lisp)))
-    (when (file-loaded-p canonical-path)
-      (let ((existing-id (find-loaded-file-id canonical-path)))
-        (when existing-id (return-from read-workspace-file existing-id))))
-    (handler-case
-        (let ((text (uiop:read-file-string canonical-path)))
-          (parse-and-register-file canonical-path text dialect))
-      (error (c)
-        (format *error-output* "~&[Workspace] Warning: failed to load ~A: ~A~%" filepath c)
-       nil))))
+    (or (find-loaded-file-id canonical-path)
+        (try-load-file-text canonical-path filepath dialect))))
 
 (defun load-into-workspace (paths)
   "Given a list of file/directory paths (or a single path), expand directories,
