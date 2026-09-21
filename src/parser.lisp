@@ -4,10 +4,10 @@
         :trivia
         :structural-editing-mcp.tree
         :structural-editing-mcp.conditions)
+  (:import-from :serapeum :trim-whitespace :dict :string-prefix-p :fmt)
   (:export :string-to-sexp
            :sexp-to-string
            :print-sexp
-           :format-sexp
            :print-file-with-clean-sources
            :classify-form-operator
            :parse-atom-string
@@ -46,16 +46,9 @@
 (defun delimiter-p (char)
   "Return T if CHAR is a delimiter character."
   (declare (type character char))
-  (cond
-    ((char= char (code-char 40)) t)
-    ((char= char (code-char 41)) t)
-    ((char= char (code-char 91)) t)
-    ((char= char (code-char 93)) t)
-    ((char= char (code-char 123)) t)
-    ((char= char (code-char 125)) t)
-    ((char= char (code-char 59)) t)
-    ((char= char (code-char 34)) t)
-    (t nil)))
+  (case char
+    ((#\( #\) #\[ #\] #\{ #\} #\; #\") t)
+    (otherwise nil)))
 
 (defun peek-char-ahead (string index len &optional (offset 1))
   "Return character at (+ index offset) in STRING if within bounds [0, len), otherwise NIL."
@@ -79,7 +72,7 @@
                  (when (< index len)
                    (write-char (char string index) out)
                    (incf index)))
-               ((char= ch (code-char 34))
+               ((char= ch #\")
                  (incf index)
                  (return (values (get-output-stream-string out) index)))
                (t
@@ -156,11 +149,11 @@
 (defun step-block-comment-depth (string index len depth)
   "Inspect characters at INDEX in STRING and return (values new-depth index-increment)."
   (cond
-    ((and (char= (char string index) (code-char 35))
-          (eql (peek-char-ahead string index len) (code-char 124)))
+    ((and (char= (char string index) #\#)
+          (eql (peek-char-ahead string index len) #\|))
       (values (1+ depth) 2))
-    ((and (char= (char string index) (code-char 124))
-          (eql (peek-char-ahead string index len) (code-char 35)))
+    ((and (char= (char string index) #\|)
+          (eql (peek-char-ahead string index len) #\#))
       (values (1- depth) 2))
     (t
       (values depth 1))))
@@ -195,13 +188,13 @@
 
 (defun delimiter-char-token (ch)
   "Return delimiter keyword for CH or NIL if CH is not a single-character delimiter."
-  (case (char-code ch)
-    (40 :paren-open)
-    (41 :paren-close)
-    (91 :square-open)
-    (93 :square-close)
-    (123 :curly-open)
-    (125 :curly-close)
+  (case ch
+    (#\( :paren-open)
+    (#\) :paren-close)
+    (#\[ :square-open)
+    (#\] :square-close)
+    (#\{ :curly-open)
+    (#\} :curly-close)
     (otherwise nil)))
 
 (defun read-default-atom-token (string index len dialect)
@@ -218,20 +211,20 @@
     (cond
       ((whitespace-p ch dialect)
         (values nil (1+ index) nil))
-      ((char= ch (code-char 59))
+      ((char= ch #\;)
         (multiple-value-bind (tok next) (read-line-comment-token string index len)
           (values tok next t)))
-      ((and (char= ch (code-char 35)) (eql (peek-char-ahead string index len) (code-char 124)))
+      ((and (char= ch #\#) (eql (peek-char-ahead string index len) #\|))
         (multiple-value-bind (tok next) (read-block-comment-token string index len)
           (values tok next t)))
-      ((and (char= ch (code-char 35)) (eql (peek-char-ahead string index len) #\\))
+      ((and (char= ch #\#) (eql (peek-char-ahead string index len) #\\))
         (multiple-value-bind (tok next) (read-escaped-char-token string index len dialect)
           (values tok next t)))
-      ((and (char= ch (code-char 35)) (eql (peek-char-ahead string index len) (code-char 123)))
+      ((and (char= ch #\#) (eql (peek-char-ahead string index len) #\{))
         (values '(:delim . :set-open) (+ index 2) t))
       ((delimiter-char-token ch)
         (values (cons :delim (delimiter-char-token ch)) (1+ index) t))
-      ((char= ch (code-char 34))
+      ((char= ch #\")
         (multiple-value-bind (tok next) (read-string-literal string index len)
           (values tok next t)))
       (t
@@ -429,68 +422,66 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
 
 (defun flat-collection-string (open blocks close)
   "Join BLOCKS with single spaces into a single-line collection string."
-  (format nil "~A~{~A~^ ~}~A" open blocks close))
+  (fmt "~A~{~A~^ ~}~A" open blocks close))
 
 (defparameter *operator-category-table*
-  (let ((ht (make-hash-table :test 'equal)))
-    (dolist (entry '(("DEFPACKAGE" . :def-package)
-                     ("DEFCLASS" . :def-type)
-                     ("DEFINE-CONDITION" . :def-type)
-                     ("DEFSTRUCT" . :def-type)
-                     ("DEFTYPE" . :def-type)
-                     ("DEFVAR" . :def-var)
-                     ("DEFPARAMETER" . :def-var)
-                     ("DEFCONSTANT" . :def-var)
-                     ("DEFCUSTOM" . :def-var)
-                     ("DEFUN" . :def-fn)
-                     ("DEFMACRO" . :def-fn)
-                     ("DEFMETHOD" . :def-fn)
-                     ("DEFGENERIC" . :def-fn)
-                     ("DEFN" . :def-fn)
-                     ("DEFN-" . :def-fn)
-                     ("DEFMACRO*" . :def-fn)
-                     ("LET" . :binding)
-                     ("LET*" . :binding)
-                     ("FLET" . :binding)
-                     ("LABELS" . :binding)
-                     ("MACROLET" . :binding)
-                     ("SYMBOL-MACROLET" . :binding)
-                     ("WHEN-LET" . :binding)
-                     ("WHEN-LET*" . :binding)
-                     ("IF-LET" . :binding)
-                     ("IF-LET*" . :binding)
-                     ("WHEN-SOME" . :binding)
-                     ("IF-SOME" . :binding)
-                     ("BINDING" . :binding)
-                     ("IF" . :if)
-                     ("IF-NOT" . :if)
-                     ("WHEN" . :when)
-                     ("UNLESS" . :when)
-                     ("WHEN-NOT" . :when)
-                     ("COND" . :cond)
-                     ("CASE" . :case)
-                     ("CCASE" . :case)
-                     ("ECASE" . :case)
-                     ("TYPECASE" . :case)
-                     ("CTYPECASE" . :case)
-                     ("ETYPECASE" . :case)
-                     ("MATCH" . :case)
-                     ("MULTIPLE-VALUE-BIND" . :mvb)
-                     ("DESTRUCTURING-BIND" . :mvb)
-                     ("MULTIPLE-VALUE-SETQ" . :mvb)
-                     ("UNWIND-PROTECT" . :with)
-                     ("HANDLER-CASE" . :with)
-                     ("HANDLER-BIND" . :with)
-                     ("RESTART-CASE" . :with)
-                     ("DOLIST" . :iteration)
-                     ("DOTIMES" . :iteration)
-                     ("LOOP" . :iteration)
-                     ("DO" . :iteration)
-                     ("DO*" . :iteration)
-                     ("LAMBDA" . :lambda)
-                     ("FN" . :lambda)))
-      (setf (gethash (car entry) ht) (cdr entry)))
-    ht)
+  (dict
+    "DEFPACKAGE" :def-package
+    "DEFCLASS" :def-type
+    "DEFINE-CONDITION" :def-type
+    "DEFSTRUCT" :def-type
+    "DEFTYPE" :def-type
+    "DEFVAR" :def-var
+    "DEFPARAMETER" :def-var
+    "DEFCONSTANT" :def-var
+    "DEFCUSTOM" :def-var
+    "DEFUN" :def-fn
+    "DEFMACRO" :def-fn
+    "DEFMETHOD" :def-fn
+    "DEFGENERIC" :def-fn
+    "DEFN" :def-fn
+    "DEFN-" :def-fn
+    "DEFMACRO*" :def-fn
+    "LET" :binding
+    "LET*" :binding
+    "FLET" :binding
+    "LABELS" :binding
+    "MACROLET" :binding
+    "SYMBOL-MACROLET" :binding
+    "WHEN-LET" :binding
+    "WHEN-LET*" :binding
+    "IF-LET" :binding
+    "IF-LET*" :binding
+    "WHEN-SOME" :binding
+    "IF-SOME" :binding
+    "BINDING" :binding
+    "IF" :if
+    "IF-NOT" :if
+    "WHEN" :when
+    "UNLESS" :when
+    "WHEN-NOT" :when
+    "COND" :cond
+    "CASE" :case
+    "CCASE" :case
+    "ECASE" :case
+    "TYPECASE" :case
+    "CTYPECASE" :case
+    "ETYPECASE" :case
+    "MATCH" :case
+    "MULTIPLE-VALUE-BIND" :mvb
+    "DESTRUCTURING-BIND" :mvb
+    "MULTIPLE-VALUE-SETQ" :mvb
+    "UNWIND-PROTECT" :with
+    "HANDLER-CASE" :with
+    "HANDLER-BIND" :with
+    "RESTART-CASE" :with
+    "DOLIST" :iteration
+    "DOTIMES" :iteration
+    "LOOP" :iteration
+    "DO" :iteration
+    "DO*" :iteration
+    "LAMBDA" :lambda
+    "FN" :lambda)
   "Lookup table mapping operator names to category keywords.")
 
 (defun classify-form-operator (name)
@@ -498,8 +489,8 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
   (when name
     (or (gethash name *operator-category-table*)
         (cond
-          ((starts-with-subseq "WITH-" name) :with)
-          ((starts-with-subseq "DEF" name) :def-fn)
+          ((string-prefix-p "WITH-" name) :with)
+          ((string-prefix-p "DEF" name) :def-fn)
           (t :general)))))
 
 (defun head-inline-count (op-cat)
@@ -520,19 +511,22 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
     (:cond        1)
     (otherwise    2)))
 
+(defun binding-form-multiline-p (children)
+  "Return T if binding form should be formatted across multiple lines."
+  (or (>= (length children) 4)
+      (let ((binds (second children)))
+        (and (member (get-node-tag binds) '(:paren :square))
+             (>= (length (get-node-children binds)) 2)))))
+
 (defun always-multiline-op-p (op-cat children)
   "Return T if OP-CAT should never be formatted as a single line."
-  (case op-cat
-    ((:def-package :def-type :cond :mvb) t)
-    ((:lambda) (>= (length children) 3))
-    ((:if) (>= (length children) 4))
-    ((:case) (>= (length children) 3))
-    ((:when :iteration) (>= (length children) 4))
-    ((:binding) (or (>= (length children) 4)
-                    (let ((binds (second children)))
-                      (and (member (get-node-tag binds) '(:paren :square))
-                           (>= (length (get-node-children binds)) 2)))))
-    (otherwise nil)))
+  (let ((n (length children)))
+    (case op-cat
+      ((:def-package :def-type :cond :mvb) t)
+      ((:lambda :case) (>= n 3))
+      ((:if :when :iteration) (>= n 4))
+      (:binding (binding-form-multiline-p children))
+      (otherwise nil))))
 
 (defun raw-multiline-text (open close blocks op-cat)
   "Compose BLOCKS into a multiline raw string with the head and short leading blocks inline."
@@ -562,7 +556,7 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
          ((leaf _ val)
           (format-atom val))
          ((comment _ text)
-          (string-trim '(#\Newline #\Return #\Space) text))
+          (trim-whitespace text))
          ((node _ tag children)
           (multiple-value-bind (open close) (collection-delims tag)
             (if (null children)
@@ -586,7 +580,7 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
          ((leaf _ val)
           (format-atom val))
          ((comment _ text)
-          (string-trim '(#\Newline #\Return #\Space) text))
+          (trim-whitespace text))
          ((node _ tag children)
           (multiple-value-bind (open close) (collection-delims tag)
             (if (null children)
@@ -669,58 +663,81 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
           (terpri stream)
           (terpri stream))))
 
+(defun clean-source-for-child (child clean-children clean-sources)
+  "Return clean source string for CHILD if it exists unmodified in CLEAN-CHILDREN."
+  (when (and clean-children clean-sources)
+    (let ((pos (position child clean-children :test #'equal)))
+      (when (and pos (< pos (length clean-sources)))
+        (aref clean-sources pos)))))
+
 (defun print-file-with-clean-sources (file-node clean-node clean-sources stream &optional (dialect *current-dialect*))
   "Print FILE-NODE to STREAM, emitting original source text from CLEAN-SOURCES for unmodified forms."
   (let* ((current-children (get-node-children file-node))
          (clean-children (and clean-node (get-node-children clean-node))))
     (loop for (c . rest) on current-children do
-          (let ((clean-pos (and clean-children (position c clean-children :test #'equal))))
-            (if (and clean-pos clean-sources (< clean-pos (length clean-sources)))
-              (write-string (aref clean-sources clean-pos) stream)
+          (let ((clean-str (clean-source-for-child c clean-children clean-sources)))
+            (if clean-str
+              (write-string clean-str stream)
               (progn
                 (print-sexp c stream 0 :dialect dialect)
                 (when rest
                   (terpri stream)
                   (terpri stream))))))))
 
+(defun toplevel-container-tag-p (tag)
+  "Return T if TAG represents a top-level container sequence."
+  (or (member tag '(:file file :workspace workspace))
+      (supported-dialect-p tag)))
+
+(defun print-toplevel-node (expr stream indent dialect)
+  "Print top-level container sequence for EXPR."
+  (match expr
+         ((node _ tag children)
+          (let ((d (if (supported-dialect-p tag) tag dialect)))
+            (print-toplevel-sequence children stream indent d)))))
+
+(defun collection-tag-p (tag)
+  "Return T if TAG is a collection delimiter tag."
+  (member tag '(:paren :square :curly :set paren square curly set)))
+
+(defun print-collection-expr (expr stream indent)
+  "Render collection EXPR using formatting rules."
+  (let ((tag (get-node-tag expr)))
+    (cond
+      ((collection-tag-p tag)
+        (print-formatted-form expr stream indent))
+      ((and (consp expr) (collection-tag-p (first expr)))
+        (print-formatted-form `(:path nil ,(first expr) ,@(rest expr)) stream indent))
+      (t
+        (print-formatted-form `(:path nil :paren ,@expr) stream indent)))))
+
+(defun print-leaf-expr (expr stream)
+  "Serialize atomic or leaf node EXPR to STREAM."
+  (match expr
+         ((leaf _ val)
+          (write-atom val stream))
+         ((structural-editing-mcp.tree::comment _ text)
+          (write-string (trim-whitespace text) stream))
+         ((list :path _ val)
+          (write-atom val stream))
+         (_
+           (write-atom expr stream))))
+
 (defun print-sexp (expr stream &optional (indent 0) &key (dialect *current-dialect*))
   "Serialize EXPR directly to STREAM with proper formatting."
   (declare (type fixnum indent))
   (let ((*current-dialect* dialect))
-    (match expr
-           ;; Tagged leaf node: (:path _ :leaf val)
-           ((leaf _ val)
-            (write-atom val stream))
-           ((structural-editing-mcp.tree::comment _ text)
-            (write-string (string-trim '(#\Newline #\Return #\Space) text) stream))
-           ((node _ (or :file 'file) children)
-            (print-toplevel-sequence children stream indent dialect))
-           ((node _ (or :workspace 'workspace) children)
-            (print-toplevel-sequence children stream indent dialect))
-           ((guard (node _ tag children)
-                   (supported-dialect-p tag))
-            (print-toplevel-sequence children stream indent tag))
-           ((node _ (or :paren 'paren :square 'square :curly 'curly :set 'set) children)
-            (print-formatted-form expr stream indent))
-           ;; Tagged leaf node without :leaf: (:path _ val)
-           ((list :path _ val)
-            (write-atom val stream))
-           ;; Backward-compatible untagged collections:
-           ((list* (or :paren 'paren :square 'square :curly 'curly :set 'set) children)
-            (let ((tag (first expr)))
-              (print-formatted-form `(:path nil ,tag ,@children) stream indent)))
-           ((list* _ _)
-            (print-formatted-form `(:path nil :paren ,@expr) stream indent))
-           ;; Direct atoms:
-           (_
-             (write-atom expr stream)))))
+    (cond
+      ((toplevel-container-tag-p (get-node-tag expr))
+        (print-toplevel-node expr stream indent dialect))
+      ((or (member (get-node-tag expr) '(:paren :square :curly :set 'paren 'square 'curly 'set))
+           (and (consp expr) (not (eq (first expr) :path))))
+        (print-collection-expr expr stream indent))
+      (t
+        (print-leaf-expr expr stream)))))
 
 (defun sexp-to-string (expr &key (indent 0) (dialect *current-dialect*))
   "Serialize an s-expression back into its string representation with proper formatting."
   (with-output-to-string (out)
     (print-sexp expr out indent :dialect dialect)))
-
-(defun format-sexp (expr indent)
-  "Serialize EXPR with INDENT (compatibility wrapper)."
-  (sexp-to-string expr :indent indent))
 

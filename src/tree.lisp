@@ -1,11 +1,11 @@
 (defpackage :structural-editing-mcp.tree
   (:use :cl :trivia :alexandria :structural-editing-mcp.conditions)
+  (:import-from :serapeum :fmt)
   (:export :get-node-at-path
            :reindex-paths
            :update-node-at-path
            :get-node-path
            :get-node-tag
-           :get-node-tags
            :get-node-children
            :compound-node-p
            :resolve-tree-scope
@@ -26,7 +26,7 @@
 (defpattern comment (path text)
             `(list :path ,path :comment ,text))
 
-(declaim (inline get-node-path get-node-tag get-node-tags get-node-children compound-node-p))
+(declaim (inline get-node-path get-node-tag get-node-children compound-node-p))
 
 (defun get-node-path (node)
   "Return the path list of NODE, or NIL if invalid."
@@ -41,10 +41,6 @@
          ((comment _ _) :comment)
          ((node _ tag _) tag)
          (_ nil)))
-
-(defun get-node-tags (node)
-  "Return the tag keyword of NODE (alias for GET-NODE-TAG)."
-  (get-node-tag node))
 
 (defun get-node-children (node)
   "Return the children of collection NODE, or NIL if it is a leaf or invalid."
@@ -115,7 +111,7 @@ Only re-indexes the modified subtree at PATH rather than traversing the entire t
                            (error 'invalid-path-error
                                   :path path
                                   :tree tree
-                                  :message (format nil "Child index ~D out of bounds for node at path ~A" child-idx node-path))
+                                  :message (fmt "Child index ~D out of bounds for node at path ~A" child-idx node-path))
                            (list* :path node-path tag
                                   (loop for child in children
                                         for i of-type fixnum from 0
@@ -125,5 +121,5 @@ Only re-indexes the modified subtree at PATH rather than traversing the entire t
                       (_ (error 'invalid-path-error
                                 :path path
                                 :tree tree
-                                :message (format nil "Cannot navigate into non-node element at path ~A" curr-path)))))))
+                                :message (fmt "Cannot navigate into non-node element at path ~A" curr-path)))))))
     (walk tree path '())))

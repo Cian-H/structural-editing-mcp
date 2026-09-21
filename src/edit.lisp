@@ -5,9 +5,8 @@
     :alexandria
     :structural-editing-mcp.parser
     :structural-editing-mcp.tree
-    :structural-editing-mcp.utils
     :structural-editing-mcp.conditions)
-  (:import-from :serapeum :take :drop :halves)
+  (:import-from :serapeum :take :drop :halves :fmt)
   (:export
     :insert-node
     :insert-expression
@@ -74,7 +73,7 @@
       (error 'invalid-path-error
              :path source-path
              :tree tree
-             :message (format nil "Source node at path ~A not found for copy" source-path)))
+             :message (fmt "Source node at path ~A not found for copy" source-path)))
     (insert-node tree target-parent-path target-index node)))
 
 (defun pop-node (tree target-path)
@@ -102,7 +101,7 @@
       (error 'invalid-path-error
              :path source-path
              :tree tree
-             :message (format nil "Source node at path ~A not found for move" source-path)))
+             :message (fmt "Source node at path ~A not found for move" source-path)))
     (insert-node new-tree target-parent-path target-index node)))
 
 (defun swap-nodes (tree path1 path2)

@@ -4,6 +4,7 @@
         :structural-editing-mcp.parser
         :structural-editing-mcp.tree
         :structural-editing-mcp.conditions)
+  (:import-from :serapeum :filter-map :mappend :string-prefix-p)
   (:export :*workspace-tree*
            :*file-registry*
            :*file-clean-state*
@@ -89,10 +90,9 @@
 
 (defun ignored-dir-p (dir-pathname)
   "Return T if DIR-PATHNAME should be ignored when walking directories."
-  (let* ((dir-list (pathname-directory dir-pathname))
-         (name (car (last dir-list))))
+  (let ((name (lastcar (pathname-directory dir-pathname))))
     (and name
-         (or (and (> (length name) 0) (char= (char name 0) #\.))
+         (or (string-prefix-p "." name)
              (member (string-downcase name)
                      '("target" "node_modules" "fasl" "dist" "build" "bin" "obj")
                      :test #'string=)))))
@@ -125,20 +125,20 @@ Non-Lisp files, ignored directories, and non-existent paths return NIL."
 (defun file-loaded-p (filepath)
   "Return T if FILEPATH is already tracked in *FILE-REGISTRY*."
   (let ((true-target (ignore-errors (namestring (truename filepath)))))
-    (loop for path being the hash-values of *file-registry*
-          thereis (and (stringp path)
-                       (or (string= filepath path)
-                           (and true-target
-                                (let ((true-path (ignore-errors (namestring (truename path)))))
-                                  (and true-path (string= true-target true-path)))))))))
+    (some (lambda (path)
+            (and (stringp path)
+                 (or (string= filepath path)
+                     (and true-target
+                          (let ((true-path (ignore-errors (namestring (truename path)))))
+                            (and true-path (string= true-target true-path)))))))
+          (hash-table-values *file-registry*))))
 
 (defun find-loaded-file-id (canonical-path)
   "Return existing file ID for CANONICAL-PATH from *FILE-REGISTRY*, or NIL."
-  (loop for id being the hash-keys of *file-registry*
-        using (hash-value path)
-        when (and (integerp id)
-                  (string= canonical-path (or (ignore-errors (namestring (truename path))) path)))
-        do (return id)))
+  (find-if (lambda (id)
+             (let ((path (gethash id *file-registry*)))
+               (string= canonical-path (or (ignore-errors (namestring (truename path))) path))))
+           (remove-if-not #'integerp (hash-table-keys *file-registry*))))
 
 (defun insert-file-into-workspace (parsed-file-node canonical-path dialect)
   "Register and insert PARSED-FILE-NODE into *WORKSPACE-TREE* under DIALECT partition.
@@ -164,6 +164,29 @@ Returns the newly assigned numerical file ID."
     (setf *workspace-tree* (reindex-paths *workspace-tree*))
     new-id))
 
+(defun find-file-path-coords (canonical-path)
+  "Locate the workspace tree coordinate path for CANONICAL-PATH."
+  (loop for k being the hash-keys of *file-registry*
+        using (hash-value v)
+        when (and (listp k) (equal v canonical-path))
+        return k))
+
+(defun register-clean-file-state (canonical-path parsed-file-node)
+  "Record clean snapshot of PARSED-FILE-NODE for CANONICAL-PATH."
+  (let* ((coords (find-file-path-coords canonical-path))
+         (reindexed (and coords (get-node-at-path *workspace-tree* coords))))
+    (setf (gethash canonical-path *file-clean-state*)
+          (copy-tree (or reindexed parsed-file-node)))))
+
+(defun parse-and-register-file (canonical-path text dialect)
+  "Parse TEXT into AST, insert into workspace, and record clean source state."
+  (multiple-value-bind (parsed-file-node toplevel-sources)
+                       (string-to-sexp text :dialect dialect)
+    (setf (gethash canonical-path *file-clean-sources*) toplevel-sources)
+    (let ((id (insert-file-into-workspace parsed-file-node canonical-path dialect)))
+      (register-clean-file-state canonical-path parsed-file-node)
+      id)))
+
 (defun read-workspace-file (filepath)
   "Read a file from disk, parse it, add it to the dialect partition in the workspace tree, and return its ID.
 If the file is already loaded, returns its existing ID. Gracefully returns NIL on parse/read failure."
@@ -175,18 +198,7 @@ If the file is already loaded, returns its existing ID. Gracefully returns NIL o
         (when existing-id (return-from read-workspace-file existing-id))))
     (handler-case
         (let ((text (uiop:read-file-string canonical-path)))
-          (multiple-value-bind (parsed-file-node toplevel-sources)
-                               (string-to-sexp text :dialect dialect)
-            (setf (gethash canonical-path *file-clean-sources*) toplevel-sources)
-            (let ((id (insert-file-into-workspace parsed-file-node canonical-path dialect)))
-              (let* ((coords (loop for k being the hash-keys of *file-registry*
-                                   using (hash-value v)
-                                   when (and (listp k) (equal v canonical-path))
-                                   return k))
-                     (reindexed (and coords (get-node-at-path *workspace-tree* coords))))
-                (setf (gethash canonical-path *file-clean-state*)
-                      (copy-tree (or reindexed parsed-file-node))))
-              id)))
+          (parse-and-register-file canonical-path text dialect))
       (error (c)
         (format *error-output* "~&[Workspace] Warning: failed to load ~A: ~A~%" filepath c)
        nil))))
@@ -196,13 +208,8 @@ If the file is already loaded, returns its existing ID. Gracefully returns NIL o
 filter for Lisp files, and load them into the workspace tree.
 Returns a list of loaded numerical file IDs."
   (unless *workspace-tree* (init-workspace))
-  (let ((loaded-ids '()))
-    (dolist (path (alexandria:ensure-list paths))
-      (let ((files (collect-lisp-files path)))
-        (dolist (f files)
-          (let ((id (read-workspace-file f)))
-            (when id (pushnew id loaded-ids))))))
-    (nreverse loaded-ids)))
+  (let ((files (remove-duplicates (mappend #'collect-lisp-files (ensure-list paths)) :test #'equal)))
+    (filter-map #'read-workspace-file files)))
 
 (defun file-clean-p (file-node &optional fallback-path)
   "Return T if FILE-NODE is structurally identical to its clean loaded state."
@@ -211,6 +218,15 @@ Returns a list of loaded numerical file IDs."
     (and filepath
          (let ((clean-node (gethash filepath *file-clean-state*)))
            (and clean-node (equal file-node clean-node))))))
+
+(defun update-written-file-clean-state (filepath file-node dialect)
+  "Re-parse written file on disk to update clean state and clean sources."
+  (let ((written-text (uiop:read-file-string filepath)))
+    (multiple-value-bind (re-parsed new-sources)
+                         (string-to-sexp written-text :dialect dialect)
+      (declare (ignore re-parsed))
+      (setf (gethash filepath *file-clean-state*) (copy-tree file-node))
+      (setf (gethash filepath *file-clean-sources*) new-sources))))
 
 (defun write-file-node-to-disk (file-node dialect &optional fallback-path)
   "Write a single :file node to its registered filepath on disk."
@@ -223,12 +239,13 @@ Returns a list of loaded numerical file IDs."
                                (if (and clean-node clean-sources)
                                  (structural-editing-mcp.parser:print-file-with-clean-sources file-node clean-node clean-sources out dialect)
                                  (print-sexp file-node out 0 :dialect dialect)))
-        (let ((written-text (uiop:read-file-string filepath)))
-          (multiple-value-bind (re-parsed new-sources)
-                               (string-to-sexp written-text :dialect dialect)
-            (declare (ignore re-parsed))
-            (setf (gethash filepath *file-clean-state*) (copy-tree file-node))
-            (setf (gethash filepath *file-clean-sources*) new-sources)))))))
+        (update-written-file-clean-state filepath file-node dialect)))))
+
+(defun write-dirty-dialect-files (dialect-node dialect)
+  "Write all modified file nodes under DIALECT-NODE to disk."
+  (dolist (file-node (get-node-children dialect-node))
+    (unless (file-clean-p file-node)
+      (write-file-node-to-disk file-node dialect))))
 
 (defun write-workspace ()
   "Write all modified :file nodes in the workspace back to disk. Clean files are skipped."
@@ -238,9 +255,8 @@ Returns a list of loaded numerical file IDs."
     (let ((child-tag (get-node-tag child)))
       (cond
         ((member child-tag *known-dialects*)
-          (dolist (file-node (get-node-children child))
-            (unless (file-clean-p file-node)
-              (write-file-node-to-disk file-node child-tag))))
+          (write-dirty-dialect-files child child-tag))
         ((eq child-tag :file)
-          (unless (file-clean-p child (first (get-node-path child)))
-            (write-file-node-to-disk child :common-lisp (first (get-node-path child)))))))))
+          (let ((fallback (first (get-node-path child))))
+            (unless (file-clean-p child fallback)
+              (write-file-node-to-disk child :common-lisp fallback))))))))

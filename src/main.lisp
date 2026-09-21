@@ -4,7 +4,6 @@
   (:use-reexport
     :structural-editing-mcp.conditions
     :structural-editing-mcp.version
-    :structural-editing-mcp.utils
     :structural-editing-mcp.tree
     :structural-editing-mcp.parser
     :structural-editing-mcp.edit

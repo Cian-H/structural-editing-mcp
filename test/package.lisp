@@ -3,7 +3,6 @@
         :rove
         :structural-editing-mcp.conditions
         :structural-editing-mcp.version
-        :structural-editing-mcp.utils
         :structural-editing-mcp.tree
         :structural-editing-mcp.edit
         :structural-editing-mcp.parser

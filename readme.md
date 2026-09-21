@@ -278,7 +278,7 @@ structural-editing-mcp/
 │   ├── workspace.lisp      # Multi-file workspace registry, dialect routing, disk I/O
 │   ├── mcp.lisp            # MCP JSON-RPC protocol server and tool handlers
 │   ├── conditions.lisp     # Condition types and error definitions
-│   ├── utils.lisp          # General helper functions
+│   ├── version.lisp        # CalVer version resolution
 │   └── main.lisp           # System entry point
 ├── test/                   # Comprehensive Rove test suite
 ├── devenv.nix              # Reproducible Nix environment specification

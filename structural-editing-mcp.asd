@@ -6,7 +6,6 @@
   :pathname "src"
   :components ((:file "conditions")
                (:file "version")
-               (:file "utils")
                (:file "tree")
                (:file "parser")
                (:file "edit")
@@ -23,7 +22,6 @@
   :pathname "test"
   :components ((:file "package")
                (:file "version")
-               (:file "utils")
                (:file "conditions")
                (:file "tree")
                (:file "parser")

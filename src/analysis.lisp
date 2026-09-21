@@ -4,6 +4,7 @@
         :trivia
         :structural-editing-mcp.tree
         :structural-editing-mcp.parser)
+  (:import-from :serapeum :trim-whitespace :ellipsize :filter-map :fmt :string-join)
   (:export :variable-node-p
            :match-pattern
            :instantiate-pattern
@@ -524,9 +525,7 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
   "Return T if RULE-ID is permitted by REQUESTED-RULES (list of keywords or strings)."
   (if (null requested-rules)
     t
-    (member (string-downcase (string rule-id))
-            (mapcar (lambda (r) (string-downcase (string r))) requested-rules)
-            :test #'string=)))
+    (member (string rule-id) requested-rules :test #'string-equal)))
 
 (defun lint-node (node path &key (dialect :common-lisp) rules)
   "Check a single NODE against active rules. Return a list of LINT-FINDING instances."
@@ -705,13 +704,9 @@ Base complexity is 1, with +1 for each conditional branch, short-circuit point, 
   (let ((children (get-node-children node)))
     (if (and (member (get-node-tag node) '(:paren :square :curly))
              children)
-      (let ((next-depth (1+ current-depth))
-            (max-child-depth (1+ current-depth)))
-        (dolist (c children)
-          (let ((d (compute-nesting-depth c next-depth)))
-            (when (> d max-child-depth)
-              (setf max-child-depth d))))
-        max-child-depth)
+      (reduce #'max children
+              :key (lambda (c) (compute-nesting-depth c (1+ current-depth)))
+              :initial-value (1+ current-depth))
       current-depth)))
 
 (defun count-ast-nodes (node)
@@ -846,9 +841,7 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
 (defun canonicalize-subtree (node &key (exact t))
   "Produce a canonical string fingerprint of NODE for equality/clone matching."
   (if exact
-    (let* ((raw (sexp-to-string node))
-           (cleaned (string-trim '(#\Space #\Newline #\Tab) raw)))
-      cleaned)
+    (trim-whitespace (sexp-to-string node))
     (labels ((anonymize (curr is-head)
                (match curr
                       ((leaf path val)
@@ -961,23 +954,18 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
 
 (defun extract-raw-duplicate-candidates (buckets node-metadata)
   "Extract entries appearing at least twice from BUCKETS and associate with NODE-METADATA."
-  (let ((raw-candidates '()))
-    (maphash
-      (lambda (fingerprint entries)
+  (filter-map
+    (lambda (fingerprint)
+      (let ((entries (gethash fingerprint buckets)))
         (when (>= (length entries) 2)
           (let* ((meta (gethash fingerprint node-metadata))
-                 (paths (mapcar #'car entries))
-                 (node-cnt (getf meta :node-count))
-                 (depth (getf meta :depth))
-                 (sample (getf meta :sample)))
-            (push (list :fingerprint fingerprint
-                        :paths (nreverse paths)
-                        :node-count node-cnt
-                        :depth depth
-                        :sample sample)
-                  raw-candidates))))
-      buckets)
-    raw-candidates))
+                 (paths (mapcar #'car entries)))
+            (list :fingerprint fingerprint
+                  :paths (nreverse paths)
+                  :node-count (getf meta :node-count)
+                  :depth (getf meta :depth)
+                  :sample (getf meta :sample))))))
+    (hash-table-keys buckets)))
 
 (defun candidate-subsumed-p (cand candidates)
   "Return T if CAND is subsumed by any other candidate in CANDIDATES."
@@ -1001,10 +989,8 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
 (defun make-duplicate-snippet (sample)
   "Generate a single-line truncated snippet for SAMPLE node."
   (let* ((raw-str (sexp-to-string sample))
-         (single-line (substitute #\Space #\Newline (string-trim '(#\Space #\Newline #\Tab) raw-str))))
-    (if (> (length single-line) 80)
-      (format nil "~A..." (subseq single-line 0 77))
-      single-line)))
+         (cleaned (trim-whitespace raw-str)))
+    (ellipsize (substitute #\Space #\Newline cleaned) 80)))
 
 (defun build-duplicate-group (cand)
   "Build a DUPLICATE-GROUP instance from CAND."
@@ -1318,9 +1304,9 @@ Returns (values ignored-names remaining-body-nodes)."
               :path path
               :scope-kind (lexical-scope-kind scope)
               :outer-path (scope-binding-path outer)
-              :message (format nil "Variable '~A' in ~A shadows outer binding at [~{~A~^, ~}]."
-                               name (lexical-scope-kind scope) (scope-binding-path outer))
-              :recommendation (format nil "Consider renaming local variable '~A' using 'ast_rename' to avoid shadowing." name))
+              :message (fmt "Variable '~A' in ~A shadows outer binding at [~{~A~^, ~}]."
+                            name (lexical-scope-kind scope) (scope-binding-path outer))
+              :recommendation (fmt "Consider renaming local variable '~A' using 'ast_rename' to avoid shadowing." name))
             findings))
     (register-scope-binding scope name path :ignored (or ignored (ignored-variable-name-p name)))
     findings))
@@ -1335,16 +1321,16 @@ Returns (values ignored-names remaining-body-nodes)."
              (recomm
                (if (member s-kind '(:function :macro :lambda :method :definition))
                  (if (lisp-1-dialect-p dialect)
-                   (format nil "If intentionally unused, prefix with '_' (e.g. '_~A')." name)
-                   (format nil "If intentionally unused, prefix with '_' or add '(declare (ignore ~A))'." name))
-                 (format nil "Variable '~A' is unused. Consider removing it with 'ast_remove' or prefixing with '_'." name))))
+                   (fmt "If intentionally unused, prefix with '_' (e.g. '_~A')." name)
+                   (fmt "If intentionally unused, prefix with '_' or add '(declare (ignore ~A))'." name))
+                 (fmt "Variable '~A' is unused. Consider removing it with 'ast_remove' or prefixing with '_'." name))))
         (push (make-binding-finding
                 :kind :unused-variable
                 :variable-name name
                 :path path
                 :scope-kind s-kind
                 :outer-path nil
-                :message (format nil "Variable '~A' defined in ~A is never used." name s-kind)
+                :message (fmt "Variable '~A' defined in ~A is never used." name s-kind)
                 :recommendation recomm)
               findings))))
   findings)

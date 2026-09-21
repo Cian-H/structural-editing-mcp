@@ -5,6 +5,7 @@
         :structural-editing-mcp.edit
         :structural-editing-mcp.analysis
         :alexandria)
+  (:import-from :serapeum :fmt :string-join)
   (:export :replace-pattern
            :extract-variable
            :extract-function
@@ -63,7 +64,7 @@
                                    (list :path nil :leaf (intern (string-upcase var-name)))
                                    child)))
                  (new-parent `(:path nil ,p-tag ,@new-children))
-                 (let-ast (string-to-sexp (format nil "(let ((~A )))" var-name)))
+                 (let-ast (string-to-sexp (fmt "(let ((~A )))" var-name)))
                  (let-node (first (get-node-children let-ast)))
                  (bindings-list (second (get-node-children let-node)))
                  (first-binding (first (get-node-children bindings-list)))
@@ -93,10 +94,10 @@
     (multiple-value-bind (file-path top-idx) (find-file-path-and-top-index tree target-path)
       (let* ((param-list (mapcar (lambda (p) (if (symbolp p) (symbol-name p) p)) (ensure-list params)))
              (call-str (if param-list
-                         (format nil "(~A ~{~A~^ ~})" function-name param-list)
-                         (format nil "(~A)" function-name)))
+                         (fmt "(~A ~A)" function-name (string-join param-list " "))
+                         (fmt "(~A)" function-name)))
              (call-ast (first (get-node-children (string-to-sexp call-str))))
-             (def-str (format nil "(defun ~A (~{~A~^ ~}))" function-name param-list))
+             (def-str (fmt "(defun ~A (~A))" function-name (string-join param-list " ")))
              (def-ast-base (first (get-node-children (string-to-sexp def-str))))
              (def-ast `(:path nil :paren ,@(get-node-children def-ast-base) ,target-node))
              (tree-with-call (overwrite-node tree target-path call-ast))

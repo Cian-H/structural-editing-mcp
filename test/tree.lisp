@@ -14,7 +14,6 @@
            (let ((fn-node (get-node-at-path ast '(0))))
              (ok (equal '(0) (get-node-path fn-node)))
              (ok (eq :paren (get-node-tag fn-node)))
-             (ok (eq :paren (get-node-tags fn-node)))
              (ok (= 4 (length (get-node-children fn-node))))
              (multiple-value-bind (path tag children) (parse-node fn-node)
                (ok (equal '(0) path))
