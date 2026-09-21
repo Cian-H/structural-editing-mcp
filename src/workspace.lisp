@@ -19,7 +19,14 @@
            :get-filepath
            :lisp-file-p
            :collect-lisp-files
-           :load-into-workspace)
+           :load-into-workspace
+           :*workspace-lock*
+           :*workspace-revision*
+           :*agent-views*
+           :compute-suggested-read-path
+           :record-agent-read
+           :validate-agent-edit
+           :commit-agent-edit)
   (:documentation "Project-level multi-file workspace management, file tracking, and disk I/O."))
 
 (in-package :structural-editing-mcp.workspace)
@@ -62,13 +69,59 @@
 (defvar *next-file-id* 0
                        "Monotonically increasing counter for numerical file IDs.")
 
+(defparameter *workspace-revision* 1
+  "Monotonically increasing integer tracking the global workspace revision for OCC.")
+
+(defvar *workspace-lock* (bt:make-lock "workspace-lock")
+  "Global mutex protecting the workspace tree, revisions, and agent views.")
+
+(defvar *agent-views* (make-hash-table :test 'equal)
+  "Maps agent-id to the *workspace-revision* observed during the agent's last read or edit.")
+
 (defun init-workspace ()
   "Initialize an empty workspace."
-  (setf *file-registry* (make-hash-table :test 'equal))
-  (setf *file-clean-state* (make-hash-table :test 'equal))
-  (setf *file-clean-sources* (make-hash-table :test 'equal))
-  (setf *next-file-id* 0)
-  (setf *workspace-tree* '(:path () :workspace)))
+  (bt:with-lock-held (*workspace-lock*)
+    (setf *file-registry* (make-hash-table :test 'equal))
+    (setf *file-clean-state* (make-hash-table :test 'equal))
+    (setf *file-clean-sources* (make-hash-table :test 'equal))
+    (setf *next-file-id* 0)
+    (setf *workspace-revision* 1)
+    (setf *agent-views* (make-hash-table :test 'equal))
+    (setf *workspace-tree* '(:path () :workspace))))
+
+(defun compute-suggested-read-path (target-path)
+  "Compute the parent file or dialect path from TARGET-PATH to inspect upon conflict."
+  (cond
+    ((null target-path) nil)
+    ((>= (length target-path) 2) (subseq target-path 0 2))
+    (t target-path)))
+
+(defun record-agent-read (&optional (agent-id "default"))
+  "Record that AGENT-ID has observed the current *WORKSPACE-REVISION*."
+  (let ((id (if (or (null agent-id) (equal agent-id "")) "default" agent-id)))
+    (setf (gethash id *agent-views*) *workspace-revision*)))
+
+(defun validate-agent-edit (&key (agent-id "default") target-path)
+  "Validate that AGENT-ID is editing against the current *WORKSPACE-REVISION*.
+Signals OCC-CONFLICT-ERROR if the workspace has changed since the agent's last read or edit."
+  (let* ((id (if (or (null agent-id) (equal agent-id "")) "default" agent-id))
+         (agent-rev (gethash id *agent-views*)))
+    (when (or (and agent-rev (/= agent-rev *workspace-revision*))
+              (and (null agent-rev) (> *workspace-revision* 1)))
+      (error 'occ-conflict-error
+             :agent-id id
+             :target-path target-path
+             :suggested-read-path (compute-suggested-read-path target-path)
+             :current-revision *workspace-revision*
+             :agent-revision agent-rev))
+    t))
+
+(defun commit-agent-edit (&optional (agent-id "default"))
+  "Advance *WORKSPACE-REVISION* and update AGENT-ID's view to the new revision."
+  (let ((id (if (or (null agent-id) (equal agent-id "")) "default" agent-id)))
+    (incf *workspace-revision*)
+    (setf (gethash id *agent-views*) *workspace-revision*)
+    *workspace-revision*))
 
 (defun get-filepath (id-or-path)
   "Get the filepath associated with numerical ID or tree path."

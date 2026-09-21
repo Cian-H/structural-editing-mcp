@@ -3,6 +3,7 @@
     (pkgs.sbcl.withPackages (ps:
       with ps; [
         alexandria
+        bordeaux-threads
         cl-indentify
         rove
         serapeum

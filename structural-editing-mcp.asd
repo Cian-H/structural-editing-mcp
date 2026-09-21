@@ -2,7 +2,7 @@
   :version (:read-file-line "version.txt")
   :author "Cian Hughes"
   :license "LGPLv3"
-  :depends-on (:trivia :alexandria :serapeum :yason :cl-indentify)
+  :depends-on (:trivia :alexandria :serapeum :yason :cl-indentify :bordeaux-threads)
   :pathname "src"
   :components ((:file "conditions")
                (:file "version")

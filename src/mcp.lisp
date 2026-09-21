@@ -7,9 +7,10 @@
         :structural-editing-mcp.parser
         :structural-editing-mcp.edit
         :structural-editing-mcp.analysis
+        :structural-editing-mcp.conditions
         :structural-editing-mcp.workspace)
   (:import-from :serapeum :dict :trim-whitespace :ellipsize :fmt :href :defconst)
-  (:export :start-server :handle-message :dict))
+  (:export :start-server :handle-message :dict :start-worker-pool :stop-worker-pool))
 
 (in-package :structural-editing-mcp.mcp)
 
@@ -17,16 +18,19 @@
 
 ;;; JSON-RPC & MCP Utilities
 
+(defvar *stdout-lock* (bt:make-lock "stdout-lock")
+  "Mutex serializing output to *standard-output* across concurrent worker threads.")
 
 (defun to-list (val)
   "Ensure val is a list, converting from vector if necessary."
   (if (vectorp val) (coerce val 'list) val))
 
 (defun send-json (object)
-  "Encode and send JSON over stdout."
-  (yason:encode object *standard-output*)
-  (terpri *standard-output*)
-  (force-output *standard-output*))
+  "Encode and send JSON over stdout under *stdout-lock*."
+  (bt:with-lock-held (*stdout-lock*)
+    (yason:encode object *standard-output*)
+    (terpri *standard-output*)
+    (force-output *standard-output*)))
 
 (defun send-error (id code message)
   (send-json
@@ -34,6 +38,58 @@
 
 (defun send-result (id result)
   (send-json (dict "jsonrpc" "2.0" "id" id "result" result)))
+
+;;; Worker Thread Pool
+
+(defvar *worker-queue* nil)
+(defvar *worker-queue-lock* (bt:make-lock "worker-queue-lock"))
+(defvar *worker-queue-cvar* (bt:make-condition-variable :name "worker-queue-cvar"))
+(defvar *worker-threads* nil)
+(defvar *worker-pool-running* nil)
+(defparameter *default-worker-count* 4)
+
+(defun worker-loop ()
+  (loop
+    (let ((task nil))
+      (bt:with-lock-held (*worker-queue-lock*)
+        (loop while (and *worker-pool-running* (null *worker-queue*))
+              do (bt:condition-wait *worker-queue-cvar* *worker-queue-lock*))
+        (when (null *worker-queue*)
+          (unless *worker-pool-running*
+            (return)))
+        (setf task (pop *worker-queue*)))
+      (when task
+        (handler-case
+            (funcall task)
+          (error (e)
+            (format *error-output* "~&[Worker Error] ~A~%" e)
+            (force-output *error-output*)))))))
+
+(defun start-worker-pool (&optional (num-workers *default-worker-count*))
+  "Initialize and start the worker thread pool for parallel JSON-RPC request processing."
+  (setf *worker-queue* nil)
+  (setf *worker-pool-running* t)
+  (setf *worker-threads*
+        (loop repeat num-workers
+              collect (bt:make-thread
+                       (lambda () (worker-loop))
+                       :name "mcp-worker-thread"))))
+
+(defun stop-worker-pool ()
+  "Stop all worker threads in the worker pool."
+  (setf *worker-pool-running* nil)
+  (bt:with-lock-held (*worker-queue-lock*)
+    (loop repeat (* 2 (max 1 (length *worker-threads*)))
+          do (bt:condition-notify *worker-queue-cvar*)))
+  (dolist (th *worker-threads*)
+    (ignore-errors (bt:join-thread th)))
+  (setf *worker-threads* nil))
+
+(defun enqueue-task (task-thunk)
+  "Enqueue TASK-THUNK for processing by the worker pool."
+  (bt:with-lock-held (*worker-queue-lock*)
+    (setf *worker-queue* (append *worker-queue* (list task-thunk)))
+    (bt:condition-notify *worker-queue-cvar*)))
 
 ;;; Node Presentation & Discovery Helpers
 
@@ -128,6 +184,7 @@
            (children (structural-editing-mcp.tree:get-node-children node))
            (code (structural-editing-mcp.parser:sexp-to-string node)))
       (with-output-to-string (s)
+        (format s "Workspace Revision: ~D~%" structural-editing-mcp.workspace:*workspace-revision*)
         (format s "Path: ~A~%" (or path "()"))
         (format s "Tag: ~A~%" tag)
         (cond
@@ -344,6 +401,9 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 (defparameter +prop-dialect+
   (prop-string "Optional Lisp dialect override (:common-lisp, :clojure, :scheme, :emacs-lisp, :fennel). Inferred if omitted."))
 
+(defparameter +prop-agent-id+
+  (prop-string "Optional identifier for the calling agent (e.g. 'agent-1', 'refactorer'). Used for automatic multi-agent concurrency tracking."))
+
 (defun get-tools-list ()
   (list
     (make-tool
@@ -351,7 +411,8 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       "Inspect any node in the AST or workspace. Returns rendered code and a nested tree of child paths up to 'depth' levels. BEST PRACTICE: Always read parent forms (e.g. [0, 10]) to see the entire expression and its child paths at once—do NOT probe child indices one-by-one. Use 'ast_search' to find symbols/calls across the workspace."
       (dict "path" +prop-path+
             "depth" (prop-integer "Recursion depth for displaying nested children and their paths (default: 2). Use depth 1 for only immediate children, 2 or 3 to inspect deeper sub-expressions.")
-            "load_files" +prop-load-files+))
+            "load_files" +prop-load-files+
+            "agent_id" +prop-agent-id+))
 
     (make-tool
       "ast_modify"
@@ -360,14 +421,16 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
             "action" (prop-string "The modification action to perform." :enum (list "insert" "overwrite" "wrap"))
             "new_node" (prop-string "For insert/overwrite: the S-expression code string (e.g. '(defun foo () 42)'). For wrap: delimiter keyword (':paren', ':square', ':curly') or enclosing form string (e.g. '(when condition)').")
             "index" (prop-integer "Optional child index for insert. If omitted when inserting, uses the last element of path.")
-            "end_index" (prop-integer "Optional ending child index for range wrapping with action 'wrap'."))
+            "end_index" (prop-integer "Optional ending child index for range wrapping with action 'wrap'.")
+            "agent_id" +prop-agent-id+)
       (list "path" "action" "new_node"))
 
     (make-tool
       "ast_remove"
       "Remove or unwrap AST nodes. Actions: 'delete' (deletes the node at path), 'unwrap' (removes enclosing collection, spilling children into parent), 'promote' (replaces parent node with the node at path). NOTE: Automatically returns an updated preview."
       (dict "path" (prop-path "The AST path of the node to remove/unwrap/promote.")
-            "action" (prop-string "Removal action to perform." :enum (list "delete" "unwrap" "promote")))
+            "action" (prop-string "Removal action to perform." :enum (list "delete" "unwrap" "promote"))
+            "agent_id" +prop-agent-id+)
       (list "path" "action"))
 
     (make-tool
@@ -376,14 +439,16 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (dict "source_path" (prop-path "Path to source node (optional for split).")
             "target_path" (prop-path "Target path for move/copy/swap/merge/split (e.g. [0, 2] places before index 2 in file 0).")
             "action" (prop-string "Relocation action to perform." :enum (list "move" "copy" "swap" "merge" "split"))
-            "index" (prop-integer "Child index within target collection to split at (action 'split') or destination insertion index (actions 'move', 'copy')."))
+            "index" (prop-integer "Child index within target collection to split at (action 'split') or destination insertion index (actions 'move', 'copy').")
+            "agent_id" +prop-agent-id+)
       (list "target_path" "action"))
 
     (make-tool
       "ast_search"
       "Search the workspace or a subtree for symbols, identifiers, function calls, or literal values. Fast AST-aware token searching."
       (dict "query" (prop-string "Symbol or text to search for (case-insensitive substring/symbol match).")
-            "path" (prop-path "Optional AST path to constrain the search scope. If omitted, searches the entire workspace."))
+            "path" (prop-path "Optional AST path to constrain the search scope. If omitted, searches the entire workspace.")
+            "agent_id" +prop-agent-id+)
       (list "query"))
 
     (make-tool
@@ -391,21 +456,24 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       "Rename all occurrences of an identifier/symbol across the workspace or within a specific subtree. Operates strictly on symbol leaf nodes, preserving comments and string literals."
       (dict "old_name" (prop-string "The exact symbol/string to replace (e.g. 'make-api-call').")
             "new_name" (prop-string "The new symbol/string to replace it with (e.g. 'execute-api-call').")
-            "path" (prop-path "Optional AST path to constrain the bulk rename to a specific subtree. If omitted, renames globally across the workspace."))
+            "path" (prop-path "Optional AST path to constrain the bulk rename to a specific subtree. If omitted, renames globally across the workspace.")
+            "agent_id" +prop-agent-id+)
       (list "old_name" "new_name"))
 
     (make-tool
       "ast_replace_pattern"
       "Search the workspace for a structural Lisp pattern and replace it with a new pattern, preserving matched variables (e.g. pattern='(foo ?x ?y)', replacement='(bar ?y ?x)')."
       (dict "pattern" (prop-string "The pattern to match. Variables start with '?' (e.g. '(make-api-call ?method ?url ?headers ?body)').")
-            "replacement" (prop-string "The replacement template (e.g. '(make-api-call ?url ?method :headers ?headers :body ?body)')."))
+            "replacement" (prop-string "The replacement template (e.g. '(make-api-call ?url ?method :headers ?headers :body ?body)').")
+            "agent_id" +prop-agent-id+)
       (list "pattern" "replacement"))
 
     (make-tool
       "ast_extract_variable"
       "Extracts an AST node into a local `let` binding wrapped around its immediate parent."
       (dict "path" (prop-path "AST path of the node to extract.")
-            "variable_name" (prop-string "The name of the new variable to bind it to."))
+            "variable_name" (prop-string "The name of the new variable to bind it to.")
+            "agent_id" +prop-agent-id+)
       (list "path" "variable_name"))
 
     (make-tool
@@ -413,7 +481,8 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       "Extracts an AST node into a new top-level function definition and replaces the original node with a call to the new function."
       (dict "path" (prop-path "AST path of the node to extract into a function.")
             "function_name" (prop-string "The name of the new function.")
-            "params" (prop-string-array "Optional list of parameter names for the new function."))
+            "params" (prop-string-array "Optional list of parameter names for the new function.")
+            "agent_id" +prop-agent-id+)
       (list "path" "function_name"))
 
     (make-tool
@@ -421,7 +490,8 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       "Run static analysis and structural linting to identify code smells, anti-patterns, and opportunities for refactoring. Returns a list of findings with AST paths, messages, severity, and suggested quick-fixes."
       (dict "path" (prop-path "Optional AST path to lint a specific node or file. If omitted, lints the entire workspace.")
             "dialect" +prop-dialect+
-            "rules" (prop-string-array "Optional list of rule IDs to filter by (e.g. ['if-progn-to-when', 'single-clause-cond']).")))
+            "rules" (prop-string-array "Optional list of rule IDs to filter by (e.g. ['if-progn-to-when', 'single-clause-cond']).")
+            "agent_id" +prop-agent-id+))
 
     (make-tool
       "ast_complexity_metrics"
@@ -429,7 +499,8 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (dict "path" (prop-path "Optional AST path to evaluate a specific form, file, or subtree. If omitted, analyzes all forms across the workspace.")
             "min_complexity" (prop-integer "Optional minimum cyclomatic complexity threshold to filter results (default: 1).")
             "min_depth" (prop-integer "Optional minimum parenthetical nesting depth threshold to filter results (default: 1).")
-            "dialect" +prop-dialect+))
+            "dialect" +prop-dialect+
+            "agent_id" +prop-agent-id+))
 
     (make-tool
       "ast_find_duplicates"
@@ -437,7 +508,8 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (dict "path" (prop-path "Optional AST path to constrain the duplicate search to a specific file or subtree. If omitted, searches the entire workspace.")
             "min_nodes" (prop-integer "Optional minimum AST node count threshold for subtrees (default: 4).")
             "min_depth" (prop-integer "Optional minimum parenthetical nesting depth threshold for subtrees (default: 2).")
-            "exact" (prop-boolean "If true (default), matches exact identical code. If false, matches structural clones where variables/literals can vary.")))
+            "exact" (prop-boolean "If true (default), matches exact identical code. If false, matches structural clones where variables/literals can vary.")
+            "agent_id" +prop-agent-id+))
 
     (make-tool
       "ast_analyze_bindings"
@@ -445,7 +517,8 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (dict "path" (prop-path "Optional AST path to constrain analysis to a specific file or subtree. If omitted, analyzes all files in the workspace.")
             "include_unused" (prop-boolean "If true (default), reports variables defined but never used in their lexical scope.")
             "include_shadowed" (prop-boolean "If true (default), reports local variables that shadow outer bindings with the same name.")
-            "dialect" +prop-dialect+))
+            "dialect" +prop-dialect+
+            "agent_id" +prop-agent-id+))
 
     (make-tool
       "ast_suggest_refactorings"
@@ -453,12 +526,13 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (dict "path" (prop-path "Optional AST path to evaluate a specific form, file, or subtree. If omitted, audits the entire workspace.")
             "min_priority" (prop-string "Optional minimum priority filter ('high', 'medium', 'low', defaults to 'low').")
             "categories" (prop-string-array "Optional list of categories to include ('lint', 'complexity', 'duplicate', 'binding').")
-            "dialect" +prop-dialect+))
+            "dialect" +prop-dialect+
+            "agent_id" +prop-agent-id+))
 
     (make-tool
       "commit_workspace"
       "Persists all in-memory workspace modifications back to their respective files on disk."
-      (dict))))
+      (dict "agent_id" +prop-agent-id+))))
 
 ;;; Handlers
 
@@ -484,18 +558,20 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   (when (and dialect-str (plusp (length dialect-str)))
     (intern (string-upcase (string-left-trim ":" dialect-str)) :keyword)))
 
-(defun handle-tool-read-node (path args)
+(defun handle-tool-read-node (path args &optional (agent-id "default"))
   "Handle the read_node tool execution."
-  (let ((files-to-load (to-list (gethash "load_files" args))))
-    (when files-to-load
-      (structural-editing-mcp.workspace:load-into-workspace files-to-load)))
-  (unless structural-editing-mcp.workspace:*workspace-tree*
-    (structural-editing-mcp.workspace:init-workspace))
-  (let* ((depth (or (gethash "depth" args) 2))
-         (node (structural-editing-mcp.tree:resolve-tree-scope
-                 structural-editing-mcp.workspace:*workspace-tree*
-                 path)))
-    (format-node-preview node :depth depth)))
+  (bt:with-lock-held (structural-editing-mcp.workspace:*workspace-lock*)
+    (let ((files-to-load (to-list (gethash "load_files" args))))
+      (when files-to-load
+        (structural-editing-mcp.workspace:load-into-workspace files-to-load)))
+    (unless structural-editing-mcp.workspace:*workspace-tree*
+      (structural-editing-mcp.workspace:init-workspace))
+    (structural-editing-mcp.workspace:record-agent-read agent-id)
+    (let* ((depth (or (gethash "depth" args) 2))
+           (node (structural-editing-mcp.tree:resolve-tree-scope
+                   structural-editing-mcp.workspace:*workspace-tree*
+                   path)))
+      (format-node-preview node :depth depth))))
 
 (defun handle-tool-ast-modify (path args)
   "Handle the ast_modify tool execution."
@@ -666,11 +742,20 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       ((equal name "ast_suggest_refactorings")
         (run-tool-suggestions tree path eff-dialect args)))))
 
-(defun dispatch-tool-call (name path args dialect)
+(defparameter *mutation-tools*
+  '("ast_modify" "ast_remove" "ast_relocate" "ast_rename"
+    "ast_replace_pattern" "ast_extract_variable" "ast_extract_function")
+  "List of tool names that mutate the AST.")
+
+(defun mutation-tool-p (name)
+  "Return T if tool NAME mutates workspace AST state."
+  (member name *mutation-tools* :test #'string=))
+
+(defun dispatch-tool-call (name path args dialect &optional (agent-id "default"))
   "Dispatch tool invocation by tool NAME to appropriate handler."
   (cond
     ((equal name "read_node")
-      (handle-tool-read-node path args))
+      (handle-tool-read-node path args agent-id))
     ((equal name "ast_modify")
       (handle-tool-ast-modify path args))
     ((equal name "ast_remove")
@@ -693,10 +778,37 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   (let* ((name (href params "name"))
          (args (href params "arguments"))
          (path (to-list (href args "path")))
-         (dialect (parse-dialect-arg (href args "dialect"))))
+         (dialect (parse-dialect-arg (href args "dialect")))
+         (agent-id (or (href args "agent_id") (href args "agent") "default")))
     (handler-case
-        (let ((content (dispatch-tool-call name path args dialect)))
+        (let ((content
+                (if (mutation-tool-p name)
+                  (bt:with-lock-held (structural-editing-mcp.workspace:*workspace-lock*)
+                    (let ((target-path (if (equal name "ast_relocate")
+                                         (to-list (href args "target_path"))
+                                         path)))
+                      (structural-editing-mcp.workspace:validate-agent-edit
+                        :agent-id agent-id
+                        :target-path target-path)
+                      (let ((old-rev structural-editing-mcp.workspace:*workspace-revision*)
+                            (old-agent-rev (gethash agent-id structural-editing-mcp.workspace:*agent-views*)))
+                        (structural-editing-mcp.workspace:commit-agent-edit agent-id)
+                        (handler-case
+                            (dispatch-tool-call name path args dialect agent-id)
+                          (error (e)
+                            (setf structural-editing-mcp.workspace:*workspace-revision* old-rev)
+                            (if old-agent-rev
+                              (setf (gethash agent-id structural-editing-mcp.workspace:*agent-views*) old-agent-rev)
+                              (remhash agent-id structural-editing-mcp.workspace:*agent-views*))
+                            (error e))))))
+                  (if (equal name "commit_workspace")
+                    (bt:with-lock-held (structural-editing-mcp.workspace:*workspace-lock*)
+                      (dispatch-tool-call name path args dialect agent-id))
+                    (dispatch-tool-call name path args dialect agent-id)))))
           (send-result id (dict "content" (list (dict "type" "text" "text" content)))))
+      (structural-editing-mcp.conditions:occ-conflict-error (c)
+        (send-result id (dict "content" (list (dict "type" "text" "text" (format nil "~A" c)))
+                              "isError" t)))
       (error (e)
         (send-result id (dict "content" (list (dict "type" "text" "text" (fmt "Error: ~A" e)))
                               "isError" t))))))
@@ -718,19 +830,19 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (id (send-error id -32601 (fmt "Method not found: ~A" method))))))
 
 (defun start-server ()
-  "Start the MCP server loop over stdin/stdout."
+  "Start the MCP server loop over stdin/stdout with worker thread pool."
   (structural-editing-mcp.workspace:init-workspace)
-  (let
-      ((yason:*parse-json-arrays-as-vectors* nil))
-    (loop
-      (let
-          ((line (read-line *standard-input* nil :eof)))
-        (when (eq line :eof) (return))
-        (when
-            (plusp (length line))
-          (handler-case
-              (let ((msg (yason:parse line))) (handle-message msg))
-            (error
-                (e)
-              (format *error-output* "Parse error: ~A~%" e)
-              (force-output *error-output*))))))))
+  (start-worker-pool)
+  (unwind-protect
+      (let ((yason:*parse-json-arrays-as-vectors* nil))
+        (loop
+          (let ((line (read-line *standard-input* nil :eof)))
+            (when (eq line :eof) (return))
+            (when (plusp (length line))
+              (handler-case
+                  (let ((msg (yason:parse line)))
+                    (enqueue-task (lambda () (handle-message msg))))
+                (error (e)
+                  (format *error-output* "Parse error: ~A~%" e)
+                  (force-output *error-output*)))))))
+    (stop-worker-pool)))

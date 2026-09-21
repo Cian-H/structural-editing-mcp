@@ -337,3 +337,153 @@
                       (ok (stringp text))
                       (ok (or (search "Structural Refactoring Plan" text)
                               (search "No refactoring opportunities detected" text)))))))
+
+(deftest test-mcp-occ-concurrency
+  (testing "implicit agent session tracking OCC prevents race conditions and guides agents"
+    (structural-editing-mcp.workspace:init-workspace)
+    (with-open-file (f "/tmp/occ-test.lisp" :direction :output :if-exists :supersede)
+      (write-string "(defun foo () 1) (defun bar () 2)" f))
+
+    ;; 1. Agent A reads node [0, 0]
+    (let* ((read-a (structural-editing-mcp.mcp::dict
+                     "jsonrpc" "2.0"
+                     "id" 1001
+                     "method" "tools/call"
+                     "params" (structural-editing-mcp.mcp::dict
+                                "name" "read_node"
+                                "arguments" (structural-editing-mcp.mcp::dict
+                                              "path" '(0 0)
+                                              "load_files" #("/tmp/occ-test.lisp")
+                                              "agent_id" "agent-a"))))
+           (*standard-output* (make-string-output-stream))
+           (out-a (progn
+                    (structural-editing-mcp.mcp:handle-message read-a)
+                    (get-output-stream-string *standard-output*)))
+           (json-a (let ((yason:*parse-json-arrays-as-vectors* nil))
+                     (yason:parse out-a)))
+           (content-a (first (gethash "content" (gethash "result" json-a))))
+           (text-a (gethash "text" content-a)))
+      (ok (search "Workspace Revision: 1" text-a)))
+
+    ;; 2. Agent B also reads node [0, 0]
+    (let* ((read-b (structural-editing-mcp.mcp::dict
+                     "jsonrpc" "2.0"
+                     "id" 1002
+                     "method" "tools/call"
+                     "params" (structural-editing-mcp.mcp::dict
+                                "name" "read_node"
+                                "arguments" (structural-editing-mcp.mcp::dict
+                                              "path" '(0 0)
+                                              "agent_id" "agent-b"))))
+           (*standard-output* (make-string-output-stream))
+           (out-b (progn
+                    (structural-editing-mcp.mcp:handle-message read-b)
+                    (get-output-stream-string *standard-output*)))
+           (json-b (let ((yason:*parse-json-arrays-as-vectors* nil))
+                     (yason:parse out-b)))
+           (content-b (first (gethash "content" (gethash "result" json-b))))
+           (text-b (gethash "text" content-b)))
+      (ok (search "Workspace Revision: 1" text-b)))
+
+    ;; 3. Agent A modifies form at [0, 0, 1]
+    (let* ((mod-a (structural-editing-mcp.mcp::dict
+                    "jsonrpc" "2.0"
+                    "id" 1003
+                    "method" "tools/call"
+                    "params" (structural-editing-mcp.mcp::dict
+                               "name" "ast_modify"
+                               "arguments" (structural-editing-mcp.mcp::dict
+                                             "path" '(0 0 1)
+                                             "action" "insert"
+                                             "new_node" "(defun inserted () 42)"
+                                             "agent_id" "agent-a"))))
+           (*standard-output* (make-string-output-stream))
+           (out-mod-a (progn
+                        (structural-editing-mcp.mcp:handle-message mod-a)
+                        (get-output-stream-string *standard-output*)))
+           (json-mod-a (let ((yason:*parse-json-arrays-as-vectors* nil))
+                         (yason:parse out-mod-a)))
+           (res-a (gethash "result" json-mod-a))
+           (text-res-a (gethash "text" (first (gethash "content" res-a)))))
+      (ok (search "Workspace Revision: 2" text-res-a))
+      (ok (= structural-editing-mcp.workspace:*workspace-revision* 2)))
+
+    ;; 4. Agent B tries to mutate [0, 0, 1] without re-reading -> CONFLICT REJECTION!
+    (let* ((mod-b (structural-editing-mcp.mcp::dict
+                    "jsonrpc" "2.0"
+                    "id" 1004
+                    "method" "tools/call"
+                    "params" (structural-editing-mcp.mcp::dict
+                               "name" "ast_modify"
+                               "arguments" (structural-editing-mcp.mcp::dict
+                                             "path" '(0 0 1)
+                                             "action" "overwrite"
+                                             "new_node" "(defun bar () 99)"
+                                             "agent_id" "agent-b"))))
+           (*standard-output* (make-string-output-stream))
+           (out-mod-b (progn
+                        (structural-editing-mcp.mcp:handle-message mod-b)
+                        (get-output-stream-string *standard-output*)))
+           (json-mod-b (let ((yason:*parse-json-arrays-as-vectors* nil))
+                         (yason:parse out-mod-b)))
+           (res-b (gethash "result" json-mod-b))
+           (err-content (first (gethash "content" res-b)))
+           (err-text (gethash "text" err-content)))
+      (ok (gethash "isError" res-b))
+      (ok (search "Conflict: The workspace was modified by another agent since your last read" err-text))
+      (ok (search "Current revision is 2 (your view was at revision 1)" err-text))
+      (ok (search "Action required: Call read_node on [0, 0]" err-text)))
+
+    ;; 5. Agent B follows action required and calls read_node on [0, 0]
+    (let* ((read-b2 (structural-editing-mcp.mcp::dict
+                      "jsonrpc" "2.0"
+                      "id" 1005
+                      "method" "tools/call"
+                      "params" (structural-editing-mcp.mcp::dict
+                                 "name" "read_node"
+                                 "arguments" (structural-editing-mcp.mcp::dict
+                                               "path" '(0 0)
+                                               "agent_id" "agent-b"))))
+           (*standard-output* (make-string-output-stream)))
+      (structural-editing-mcp.mcp:handle-message read-b2)
+      (ok (= (gethash "agent-b" structural-editing-mcp.workspace:*agent-views*) 2)))
+
+    ;; 6. Agent B now re-submits its edit with updated target path [0, 0, 2] -> SUCCEEDS!
+    (let* ((mod-b2 (structural-editing-mcp.mcp::dict
+                     "jsonrpc" "2.0"
+                     "id" 1006
+                     "method" "tools/call"
+                     "params" (structural-editing-mcp.mcp::dict
+                                "name" "ast_modify"
+                                "arguments" (structural-editing-mcp.mcp::dict
+                                              "path" '(0 0 2)
+                                              "action" "overwrite"
+                                              "new_node" "(defun bar () 99)"
+                                              "agent_id" "agent-b"))))
+           (*standard-output* (make-string-output-stream))
+           (out-b2 (progn
+                     (structural-editing-mcp.mcp:handle-message mod-b2)
+                     (get-output-stream-string *standard-output*)))
+           (json-b2 (let ((yason:*parse-json-arrays-as-vectors* nil))
+                      (yason:parse out-b2)))
+           (res-b2 (gethash "result" json-b2)))
+      (ok (null (gethash "isError" res-b2)))
+      (ok (= structural-editing-mcp.workspace:*workspace-revision* 3)))))
+
+(deftest test-mcp-worker-pool
+  (testing "worker thread pool processes queued tasks safely and cleanly shuts down"
+    (structural-editing-mcp.mcp:start-worker-pool 2)
+    (let ((counter 0)
+          (lock (bt:make-lock "test-lock")))
+      (loop repeat 10
+            do (structural-editing-mcp.mcp::enqueue-task
+                 (lambda ()
+                   (bt:with-lock-held (lock)
+                     (incf counter)))))
+      ;; Allow worker threads to drain queue
+      (loop repeat 30
+            until (bt:with-lock-held (lock) (= counter 10))
+            do (sleep 0.05))
+      (ok (= counter 10)))
+    (structural-editing-mcp.mcp:stop-worker-pool)))
+
