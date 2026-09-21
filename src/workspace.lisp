@@ -30,7 +30,10 @@
            :compute-suggested-read-path
            :record-agent-read
            :validate-agent-edit
-           :commit-agent-edit)
+           :commit-agent-edit
+           :normalize-agent-id
+           :safe-truename
+           :ensure-workspace)
 
   (:documentation "Project-level multi-file workspace management, file tracking, and disk I/O."))
 
@@ -105,6 +108,19 @@
     (setf (workspace-context-agent-views ctx) (make-hash-table :test 'equal))
     (setf (workspace-context-tree ctx) '(:path () :workspace))))
 
+(defun normalize-agent-id (agent-id)
+  "Return AGENT-ID, defaulting to \"default\" if nil or empty string."
+  (if (or (null agent-id) (equal agent-id ""))
+    "default"
+    agent-id))
+
+(defun safe-truename (path)
+  "Return the truename of PATH as a namestring, or NIL on error."
+  (ignore-errors (namestring (truename path))))
+
+(defun ensure-workspace ()
+  "Initialize workspace if not already loaded."
+  (unless *workspace-tree* (init-workspace)))
 
 (defun compute-suggested-read-path (target-path)
   "Compute the parent file or dialect path from TARGET-PATH to inspect upon conflict."
@@ -115,13 +131,13 @@
 
 (defun record-agent-read (&optional (agent-id "default"))
   "Record that AGENT-ID has observed the current *WORKSPACE-REVISION*."
-  (let ((id (if (or (null agent-id) (equal agent-id "")) "default" agent-id)))
+  (let ((id (normalize-agent-id agent-id)))
     (setf (gethash id *agent-views*) *workspace-revision*)))
 
 (defun validate-agent-edit (&key (agent-id "default") target-path)
   "Validate that AGENT-ID is editing against the current *WORKSPACE-REVISION*.
 Signals OCC-CONFLICT-ERROR if the workspace has changed since the agent's last read or edit."
-  (let* ((id (if (or (null agent-id) (equal agent-id "")) "default" agent-id))
+  (let* ((id (normalize-agent-id agent-id))
          (agent-rev (gethash id *agent-views*)))
     (when (or (and agent-rev (/= agent-rev *workspace-revision*))
               (and (null agent-rev) (> *workspace-revision* 1)))
@@ -135,7 +151,7 @@ Signals OCC-CONFLICT-ERROR if the workspace has changed since the agent's last r
 
 (defun commit-agent-edit (&optional (agent-id "default"))
   "Advance *WORKSPACE-REVISION* and update AGENT-ID's view to the new revision."
-  (let ((id (if (or (null agent-id) (equal agent-id "")) "default" agent-id)))
+  (let ((id (normalize-agent-id agent-id)))
     (incf *workspace-revision*)
     (setf (gethash id *agent-views*) *workspace-revision*)
     *workspace-revision*))
@@ -194,12 +210,12 @@ Non-Lisp files, ignored directories, and non-existent paths return NIL."
 
 (defun file-loaded-p (filepath)
   "Return T if FILEPATH is already tracked in *FILE-REGISTRY*."
-  (let ((true-target (ignore-errors (namestring (truename filepath)))))
+  (let ((true-target (safe-truename filepath)))
     (some (lambda (path)
             (and (stringp path)
                  (or (string= filepath path)
                      (and true-target
-                          (let ((true-path (ignore-errors (namestring (truename path)))))
+                          (let ((true-path (safe-truename path)))
                             (and true-path (string= true-target true-path)))))))
           (hash-table-values *file-registry*))))
 
@@ -207,7 +223,7 @@ Non-Lisp files, ignored directories, and non-existent paths return NIL."
   "Return existing file ID for CANONICAL-PATH from *FILE-REGISTRY*, or NIL."
   (find-if (lambda (id)
              (let ((path (gethash id *file-registry*)))
-               (string= canonical-path (or (ignore-errors (namestring (truename path))) path))))
+               (string= canonical-path (or (safe-truename path) path))))
            (remove-if-not #'integerp (hash-table-keys *file-registry*))))
 
 (defun insert-file-into-workspace (parsed-file-node canonical-path dialect)
@@ -269,8 +285,8 @@ Returns the newly assigned numerical file ID."
 (defun read-workspace-file (filepath)
   "Read a file from disk, parse it, add it to the dialect partition in the workspace tree, and return its ID.
 If the file is already loaded, returns its existing ID. Gracefully returns NIL on parse/read failure."
-  (unless *workspace-tree* (init-workspace))
-  (let* ((canonical-path (or (ignore-errors (namestring (truename filepath))) filepath))
+  (ensure-workspace)
+  (let* ((canonical-path (or (safe-truename filepath) filepath))
          (dialect (or (file-dialect canonical-path) :common-lisp)))
     (or (find-loaded-file-id canonical-path)
         (try-load-file-text canonical-path filepath dialect))))
@@ -279,7 +295,7 @@ If the file is already loaded, returns its existing ID. Gracefully returns NIL o
   "Given a list of file/directory paths (or a single path), expand directories,
 filter for Lisp files, and load them into the workspace tree.
 Returns a list of loaded numerical file IDs."
-  (unless *workspace-tree* (init-workspace))
+  (ensure-workspace)
   (let ((files (remove-duplicates (mappend #'collect-lisp-files (ensure-list paths)) :test #'equal)))
     (filter-map #'read-workspace-file files)))
 

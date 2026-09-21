@@ -774,6 +774,49 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
     (t
       (error "Tool not found: ~A" name))))
 
+(defun send-tool-error-response (id message error-code error-type &optional extra-fields)
+  "Send a standardized JSON-RPC error response for tool execution."
+  (let ((payload (dict "content" (list (dict "type" "text" "text" message))
+                       "errorCode" error-code
+                       "errorType" error-type
+                       "isError" t)))
+    (when extra-fields
+      (loop for (k v) on extra-fields by #'cddr do
+        (setf (gethash k payload) v)))
+    (send-result id payload)))
+
+(defun execute-mutation-tool-locked (name path args dialect agent-id)
+  "Execute a mutation tool holding *WORKSPACE-LOCK* with OCC validation and rollback on error."
+  (bt:with-lock-held (structural-editing-mcp.workspace:*workspace-lock*)
+    (let ((target-path (if (equal name "ast_relocate")
+                         (to-list (href args "target_path"))
+                         path)))
+      (structural-editing-mcp.workspace:validate-agent-edit
+        :agent-id agent-id
+        :target-path target-path)
+      (let ((old-rev structural-editing-mcp.workspace:*workspace-revision*)
+            (old-agent-rev (gethash agent-id structural-editing-mcp.workspace:*agent-views*)))
+        (structural-editing-mcp.workspace:commit-agent-edit agent-id)
+        (handler-case
+            (dispatch-tool-call name path args dialect agent-id)
+          (error (e)
+            (setf structural-editing-mcp.workspace:*workspace-revision* old-rev)
+            (if old-agent-rev
+              (setf (gethash agent-id structural-editing-mcp.workspace:*agent-views*) old-agent-rev)
+              (remhash agent-id structural-editing-mcp.workspace:*agent-views*))
+            (error e)))))))
+
+(defun execute-tool-call (name path args dialect agent-id)
+  "Route tool execution based on whether it requires mutation locking or plain dispatch."
+  (cond
+    ((mutation-tool-p name)
+      (execute-mutation-tool-locked name path args dialect agent-id))
+    ((equal name "commit_workspace")
+      (bt:with-lock-held (structural-editing-mcp.workspace:*workspace-lock*)
+        (dispatch-tool-call name path args dialect agent-id)))
+    (t
+      (dispatch-tool-call name path args dialect agent-id))))
+
 (defun handle-tools-call (id params)
   (let* ((name (href params "name"))
          (args (href params "arguments"))
@@ -781,57 +824,39 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
          (dialect (parse-dialect-arg (href args "dialect")))
          (agent-id (or (href args "agent_id") (href args "agent") "default")))
     (handler-case
-        (let ((content
-                (if (mutation-tool-p name)
-                  (bt:with-lock-held (structural-editing-mcp.workspace:*workspace-lock*)
-                    (let ((target-path (if (equal name "ast_relocate")
-                                         (to-list (href args "target_path"))
-                                         path)))
-                      (structural-editing-mcp.workspace:validate-agent-edit
-                        :agent-id agent-id
-                        :target-path target-path)
-                      (let ((old-rev structural-editing-mcp.workspace:*workspace-revision*)
-                            (old-agent-rev (gethash agent-id structural-editing-mcp.workspace:*agent-views*)))
-                        (structural-editing-mcp.workspace:commit-agent-edit agent-id)
-                        (handler-case
-                            (dispatch-tool-call name path args dialect agent-id)
-                          (error (e)
-                            (setf structural-editing-mcp.workspace:*workspace-revision* old-rev)
-                            (if old-agent-rev
-                              (setf (gethash agent-id structural-editing-mcp.workspace:*agent-views*) old-agent-rev)
-                              (remhash agent-id structural-editing-mcp.workspace:*agent-views*))
-                            (error e))))))
-                  (if (equal name "commit_workspace")
-                    (bt:with-lock-held (structural-editing-mcp.workspace:*workspace-lock*)
-                      (dispatch-tool-call name path args dialect agent-id))
-                    (dispatch-tool-call name path args dialect agent-id)))))
+        (let ((content (execute-tool-call name path args dialect agent-id)))
           (send-result id (dict "content" (list (dict "type" "text" "text" content)))))
       (structural-editing-mcp.conditions:occ-conflict-error (c)
-        (send-result id (dict "content" (list (dict "type" "text" "text" (format nil "~A" c)))
-                              "errorCode" structural-editing-mcp.conditions:+error-code-occ-conflict+
-                              "errorType" "occ_conflict"
-                              "isError" t)))
+        (send-tool-error-response
+          id
+          (format nil "~A" c)
+          structural-editing-mcp.conditions:+error-code-occ-conflict+
+          "occ_conflict"))
       (structural-editing-mcp.conditions:invalid-path-error (c)
-        (send-result id (dict "content" (list (dict "type" "text" "text" (format nil "Invalid path error: ~A" c)))
-                              "errorCode" structural-editing-mcp.conditions:+error-code-invalid-params+
-                              "errorType" "invalid_path"
-                              "path" (structural-editing-mcp.conditions:invalid-path-error-path c)
-                              "isError" t)))
+        (send-tool-error-response
+          id
+          (format nil "Invalid path error: ~A" c)
+          structural-editing-mcp.conditions:+error-code-invalid-params+
+          "invalid_path"
+          (list "path" (structural-editing-mcp.conditions:invalid-path-error-path c))))
       (structural-editing-mcp.conditions:sexp-parse-error (c)
-        (send-result id (dict "content" (list (dict "type" "text" "text" (format nil "Parse error: ~A" c)))
-                              "errorCode" structural-editing-mcp.conditions:+error-code-parse-error+
-                              "errorType" "parse_error"
-                              "isError" t)))
+        (send-tool-error-response
+          id
+          (format nil "Parse error: ~A" c)
+          structural-editing-mcp.conditions:+error-code-parse-error+
+          "parse_error"))
       (structural-editing-mcp.conditions:workspace-error (c)
-        (send-result id (dict "content" (list (dict "type" "text" "text" (format nil "Workspace error: ~A" c)))
-                              "errorCode" structural-editing-mcp.conditions:+error-code-workspace-error+
-                              "errorType" "workspace_error"
-                              "isError" t)))
+        (send-tool-error-response
+          id
+          (format nil "Workspace error: ~A" c)
+          structural-editing-mcp.conditions:+error-code-workspace-error+
+          "workspace_error"))
       (error (e)
-        (send-result id (dict "content" (list (dict "type" "text" "text" (fmt "Error: ~A" e)))
-                              "errorCode" structural-editing-mcp.conditions:+error-code-internal-error+
-                              "errorType" "internal_error"
-                              "isError" t))))))
+        (send-tool-error-response
+          id
+          (fmt "Error: ~A" e)
+          structural-editing-mcp.conditions:+error-code-internal-error+
+          "internal_error")))))
 
 
 (defun handle-message (msg)

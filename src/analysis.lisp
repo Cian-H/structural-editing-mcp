@@ -296,13 +296,14 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
 
 (defun check-if-nil-to-when (node path dialect)
   "Detect (if <cond> <then> nil) where <then> is not progn, not boolean true, and <cond> is not (not ...)."
+  (declare (ignore dialect))
   (let ((children (get-node-children node)))
     (when (and (if-form-p node)
                (= (length children) 4)
                (leaf-nil-p (fourth children)))
       (let ((cond-node (second children))
             (then-node (third children)))
-        (unless (or (leaf-true-p then-node dialect)
+        (unless (or (leaf-true-p then-node)
                     (not-form-cond cond-node)
                     (nth-value 0 (progn-form-body-nodes then-node)))
           (let ((replacement (format nil "(when ~A ~A)"

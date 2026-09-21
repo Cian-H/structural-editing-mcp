@@ -1,5 +1,21 @@
 (in-package :structural-editing-mcp-tests)
 
+(defun parse-mcp-response (json-str)
+  "Parse a JSON-RPC response string into a hash table with list arrays."
+  (let ((yason:*parse-json-arrays-as-vectors* nil))
+    (yason:parse json-str)))
+
+(defun mcp-result-content (res)
+  "Extract the first content block from result hash table RES."
+  (first (gethash "content" res)))
+
+(defun call-mcp-msg (msg)
+  "Send MSG to handle-message capturing standard-output and returning parsed JSON."
+  (let ((capture (make-string-output-stream)))
+    (let ((*standard-output* capture))
+      (structural-editing-mcp.mcp:handle-message msg))
+    (parse-mcp-response (get-output-stream-string capture))))
+
 (deftest test-mcp-initialize
          (testing "handle-message parses initialize request"
                   (let* ((msg (structural-editing-mcp.mcp::dict
@@ -7,12 +23,7 @@
                                 "id" 1
                                 "method" "initialize"
                                 "params" (make-hash-table)))
-                         (*standard-output* (make-string-output-stream))
-                         (result-str (progn
-                                       (structural-editing-mcp.mcp:handle-message msg)
-                                       (get-output-stream-string *standard-output*)))
-                         (result-json (let ((yason:*parse-json-arrays-as-vectors* nil))
-                                        (yason:parse result-str))))
+                         (result-json (call-mcp-msg msg)))
                     (ok (equal (gethash "jsonrpc" result-json) "2.0"))
                     (ok (equal (gethash "id" result-json) 1))
                     (let ((res (gethash "result" result-json)))
@@ -27,12 +38,7 @@
                                 "id" 2
                                 "method" "tools/list"
                                 "params" (make-hash-table)))
-                         (*standard-output* (make-string-output-stream))
-                         (result-str (progn
-                                       (structural-editing-mcp.mcp:handle-message msg)
-                                       (get-output-stream-string *standard-output*)))
-                         (result-json (let ((yason:*parse-json-arrays-as-vectors* nil))
-                                        (yason:parse result-str))))
+                         (result-json (call-mcp-msg msg)))
                     (let* ((res (gethash "result" result-json))
                            (tools (gethash "tools" res)))
                       (ok (listp tools))
@@ -68,13 +74,8 @@
                                            "arguments" (structural-editing-mcp.mcp::dict
                                                          "path" #()
                                                          "load_files" #("/tmp/test.lisp")))))
-                         (*standard-output* (make-string-output-stream))
-                         (out-str (progn
-                                    (structural-editing-mcp.mcp:handle-message req)
-                                    (get-output-stream-string *standard-output*)))
-                         (json (let ((yason:*parse-json-arrays-as-vectors* nil))
-                                 (yason:parse out-str)))
-                         (content (first (gethash "content" (gethash "result" json)))))
+                         (json (call-mcp-msg req))
+                         (content (mcp-result-content (gethash "result" json))))
                     (ok (search "Tag: WORKSPACE" (gethash "text" content)))
                     (ok (search "Active Dialects (1):" (gethash "text" content)))
                     (ok (search "/tmp/test.lisp" (gethash "text" content))))
@@ -88,13 +89,8 @@
                                                 "name" "read_node"
                                                 "arguments" (structural-editing-mcp.mcp::dict
                                                               "path" '(0)))))
-                         (*standard-output* (make-string-output-stream))
-                         (out-str (progn
-                                    (structural-editing-mcp.mcp:handle-message read-msg)
-                                    (get-output-stream-string *standard-output*)))
-                         (json (let ((yason:*parse-json-arrays-as-vectors* nil))
-                                 (yason:parse out-str)))
-                         (content (first (gethash "content" (gethash "result" json)))))
+                         (json (call-mcp-msg read-msg))
+                         (content (mcp-result-content (gethash "result" json))))
                     (ok (search "Path: (0)" (gethash "text" content)))
                     (ok (search "Tag: COMMON-LISP" (gethash "text" content)))
                     (ok (search "Files Loaded (1):" (gethash "text" content))))
@@ -505,12 +501,7 @@
                                            "path" '(0 0 999)
                                            "action" "overwrite"
                                            "new_node" "42"))))
-           (capture (make-string-output-stream))
-           (out (let ((*standard-output* capture))
-                  (structural-editing-mcp.mcp:handle-message msg)
-                  (get-output-stream-string capture)))
-           (json (let ((yason:*parse-json-arrays-as-vectors* nil))
-                   (yason:parse out)))
+           (json (call-mcp-msg msg))
            (res (gethash "result" json)))
       (ok (gethash "isError" res) "invalid path: isError")
       (ok (= (gethash "errorCode" res) -32602) "invalid path: errorCode -32602")
@@ -527,12 +518,7 @@
                                             "path" '(0 0 0)
                                             "action" "overwrite"
                                             "new_node" ""))))
-           (capture2 (make-string-output-stream))
-           (out2 (let ((*standard-output* capture2))
-                   (structural-editing-mcp.mcp:handle-message msg2)
-                   (get-output-stream-string capture2)))
-           (json2 (let ((yason:*parse-json-arrays-as-vectors* nil))
-                    (yason:parse out2)))
+           (json2 (call-mcp-msg msg2))
            (res2 (gethash "result" json2)))
       (ok (gethash "isError" res2) "parse error: isError")
       (ok (= (gethash "errorCode" res2) -32700) "parse error: errorCode -32700")

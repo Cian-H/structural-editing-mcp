@@ -185,3 +185,16 @@
       (with-workspace-context (ctx-a)
         (ok (eq :common-lisp (get-node-tag (first (get-node-children *workspace-tree*)))))
         (ok (equal '(:path (0 0 0) :leaf a) (get-node-at-path *workspace-tree* '(0 0 0))))))))
+
+(deftest test-workspace-helpers
+  (testing "normalize-agent-id handles nil, empty string, and custom id"
+    (ok (equal (normalize-agent-id nil) "default"))
+    (ok (equal (normalize-agent-id "") "default"))
+    (ok (equal (normalize-agent-id "agent-42") "agent-42")))
+  (testing "safe-truename returns valid namestring or nil"
+    (ok (stringp (safe-truename "src/workspace.lisp")))
+    (ok (null (safe-truename "non-existent-path-abc-123.xyz"))))
+  (testing "ensure-workspace initializes if tree is nil"
+    (setf *workspace-tree* nil)
+    (ensure-workspace)
+    (ok (not (null *workspace-tree*)))))
