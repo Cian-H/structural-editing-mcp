@@ -1,25 +1,21 @@
 #!/usr/bin/env bash
 set -e
 
-# Pre-push hook for automatic CalVer synchronization and release tagging
+# Pre-push hook: verify working tree and version format before pushing
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT"
 
-echo "Running CalVer pre-push verification..."
-
-# Ensure version.txt is updated with the current CalVer
-./scripts/calver.lisp --update
-
-# If version.txt was modified, commit it
-if ! git diff --quiet version.txt; then
-    NEW_VER=$(cat version.txt | tr -d '[:space:]')
-    echo "CalVer: Staging and committing updated version.txt (${NEW_VER})..."
-    git add version.txt
-    # Do not use [skip ci]: the release workflow must run on CalVer bumps.
-    git commit -m "chore(release): bump CalVer to ${NEW_VER}"
+if [ ! -s version.txt ]; then
+    echo "Error: version.txt is missing or empty." >&2
+    exit 1
 fi
 
-# Ensure git tag exists for this release
-./scripts/calver.lisp --tag
+CURRENT_VER=$(tr -d '[:space:]' < version.txt)
 
-echo "CalVer: Ready to push version $(cat version.txt)"
+# Verify valid CalVer format
+if [[ ! "$CURRENT_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "Error: Invalid CalVer format in version.txt: '${CURRENT_VER}'" >&2
+    exit 1
+fi
+
+echo "CalVer pre-push verification passed: ${CURRENT_VER}"
