@@ -205,6 +205,15 @@
       (values (parse-token string start (1+ start)) (1+ start))
       (values (parse-token string start next-idx) next-idx))))
 
+(defun read-dispatch-macro-token (string index len dialect)
+  "Handle tokens starting with # (block comment, character literal, or set open)."
+  (let ((next-ch (peek-char-ahead string index len)))
+    (case next-ch
+      (#\| (read-block-comment-token string index len))
+      (#\\ (read-escaped-char-token string index len dialect))
+      (#\{ (values '(:delim . :set-open) (+ index 2)))
+      (otherwise nil))))
+
 (defun tokenize-next-token (string index len dialect)
   "Read the next token starting at INDEX in STRING. Return (values token next-index has-tok-p)."
   (let ((ch (char string index)))
@@ -214,14 +223,12 @@
       ((char= ch #\;)
         (multiple-value-bind (tok next) (read-line-comment-token string index len)
           (values tok next t)))
-      ((and (char= ch #\#) (eql (peek-char-ahead string index len) #\|))
-        (multiple-value-bind (tok next) (read-block-comment-token string index len)
-          (values tok next t)))
-      ((and (char= ch #\#) (eql (peek-char-ahead string index len) #\\))
-        (multiple-value-bind (tok next) (read-escaped-char-token string index len dialect)
-          (values tok next t)))
-      ((and (char= ch #\#) (eql (peek-char-ahead string index len) #\{))
-        (values '(:delim . :set-open) (+ index 2) t))
+      ((char= ch #\#)
+        (multiple-value-bind (tok next) (read-dispatch-macro-token string index len dialect)
+          (if next
+            (values tok next t)
+            (multiple-value-bind (atok anext) (read-default-atom-token string index len dialect)
+              (values atok anext t)))))
       ((delimiter-char-token ch)
         (values (cons :delim (delimiter-char-token ch)) (1+ index) t))
       ((char= ch #\")

@@ -461,9 +461,9 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
   (let ((children (get-node-children node)))
     (when (and (compound-node-p node)
                (= (length children) 3)
-               (or (leaf-symbol-p (first children) "EQUAL")
-                   (leaf-symbol-p (first children) "EQ")
-                   (leaf-symbol-p (first children) "EQL")))
+               (let ((head (first children)))
+                 (and (leaf-any-symbol-p head)
+                      (member (leaf-symbol-name head) '("equal" "eq" "eql") :test #'string=))))
       (cond
         ((leaf-nil-p (third children)) (values t (second children)))
         ((leaf-nil-p (second children)) (values t (third children)))
@@ -658,7 +658,8 @@ return (values is-def-p name-str kind-keyword)."
 (defun branch-form-complexity-increment (name children dialect)
   "Calculate McCabe complexity increment contributed by form NAME."
   (cond
-    ((member name '("IF" "WHEN" "UNLESS" "WHEN-NOT" "IF-NOT" "WHEN-LET" "IF-LET" "WHEN-FIRST")
+    ((member name '("IF" "WHEN" "UNLESS" "WHEN-NOT" "IF-NOT" "WHEN-LET" "IF-LET" "WHEN-FIRST"
+                    "LOOP" "DOLIST" "DOTIMES" "DO" "DO*" "DOSEQ" "RECUR")
              :test #'string=)
       1)
     ((string= name "COND")
@@ -667,10 +668,7 @@ return (values is-def-p name-str kind-keyword)."
              :test #'string=)
       (count-case-branch-clauses (nthcdr 2 children) dialect))
     ((member name '("AND" "OR") :test #'string=)
-      (if (> (length children) 2) (- (length children) 2) 0))
-    ((member name '("LOOP" "DOLIST" "DOTIMES" "DO" "DO*" "DOSEQ" "RECUR")
-             :test #'string=)
-      1)
+      (max 0 (- (length children) 2)))
     ((member name '("HANDLER-CASE" "RESTART-CASE") :test #'string=)
       (count-if #'compound-node-p (nthcdr 2 children)))
     (t 0)))
@@ -1142,22 +1140,31 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
     result))
 
 (defun extract-cl-declarations (body-nodes)
-  "Extract ignored/ignorable variable names from leading (declare ...) forms in BODY-NODES.
+  "Extract ignored/ignorable variable names from leading declarations and docstrings in BODY-NODES.
 Returns (values ignored-names remaining-body-nodes)."
   (let ((ignored '())
-        (remaining body-nodes))
+        (remaining body-nodes)
+        (seen-docstring nil))
     (loop while remaining
           for form = (first remaining)
           for tag = (get-node-tag form)
           for children = (get-node-children form)
-          while (and (eq tag :paren)
+          do (cond
+               ((and (not seen-docstring)
+                     (rest remaining)
+                     (eq tag :leaf)
+                     (stringp (third (parse-node form))))
+                 (setf seen-docstring t)
+                 (setf remaining (rest remaining)))
+               ((and (eq tag :paren)
                      children
                      (equal (leaf-symbol-name (first children)) "declare"))
-          do
-          (dolist (spec (rest children))
-            (dolist (var (extract-spec-ignored-vars spec))
-              (push var ignored)))
-          (setf remaining (rest remaining)))
+                 (dolist (spec (rest children))
+                   (dolist (var (extract-spec-ignored-vars spec))
+                     (push var ignored)))
+                 (setf remaining (rest remaining)))
+               (t
+                 (return))))
     (values ignored remaining)))
 
 (defun get-scope-declarations (body-nodes dialect)

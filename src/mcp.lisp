@@ -147,15 +147,17 @@
 ;;; AST Mutation Dispatchers
 
 
+(defparameter *delimiter-name-map*
+  (dict "paren" :paren "()" :paren "" :paren
+        "square" :square "bracket" :square "[]" :square
+        "curly" :curly "brace" :curly "{}" :curly)
+  "Map of wrapper aliases to AST delimiter keywords.")
+
 (defun parse-delimiter-type (wrapper-str)
   "Map WRAPPER-STR to :paren, :square, :curly, or NIL if it represents a custom wrapper form."
   (let* ((clean-str (string-trim '(#\Space #\Tab #\Newline #\:) (or wrapper-str "")))
          (lower (string-downcase clean-str)))
-    (cond
-      ((or (string= lower "paren") (string= lower "()") (string= lower "")) :paren)
-      ((or (string= lower "square") (string= lower "bracket") (string= lower "[]")) :square)
-      ((or (string= lower "curly") (string= lower "brace") (string= lower "{}")) :curly)
-      (t nil))))
+    (gethash lower *delimiter-name-map*)))
 
 (defun wrap-node-with-custom-form (tree path wrapper-str)
   "Wrap node at PATH using the custom form expression in WRAPPER-STR."
