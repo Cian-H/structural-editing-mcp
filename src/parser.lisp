@@ -496,20 +496,9 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
 (defun head-inline-count (op-cat)
   "Number of leading blocks kept with the head on the first line for OP-CAT."
   (case op-cat
-    (:def-fn      3)
-    (:def-var     3)
-    (:def-type    3)
-    (:def-package 2)
-    (:binding     2)
-    (:lambda      2)
-    (:if          2)
-    (:when        2)
-    (:iteration   2)
-    (:case        2)
-    (:mvb         2)
-    (:with        2)
-    (:cond        1)
-    (otherwise    2)))
+    ((:def-fn :def-var :def-type) 3)
+    (:cond 1)
+    (otherwise 2)))
 
 (defun binding-form-multiline-p (children)
   "Return T if binding form should be formatted across multiple lines."
