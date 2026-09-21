@@ -1,6 +1,6 @@
 (defpackage :structural-editing-mcp.conditions
   (:use :cl)
-  (:export :structural-editing-error
+   (:export :structural-editing-error
            :sexp-parse-error
            :parse-error-token
            :parse-error-message
@@ -16,8 +16,14 @@
            :occ-conflict-suggested-read-path
            :occ-conflict-current-revision
            :occ-conflict-agent-revision
-           :format-path-notation)
+           :format-path-notation
+           :+error-code-parse-error+
+           :+error-code-invalid-params+
+           :+error-code-workspace-error+
+           :+error-code-occ-conflict+
+           :+error-code-internal-error+)
   (:documentation "Condition hierarchy for the structural editing system."))
+
 
 (in-package :structural-editing-mcp.conditions)
 
@@ -77,3 +83,18 @@
                  (format stream "Conflict: The workspace was modified by another agent. Current revision is ~A. Your target path ~A may have shifted. Action required: Call read_node on ~A to inspect the updated file, re-evaluate your strategy, and submit your edit."
                          cur-rev target-str suggested-str)))))
   (:documentation "Signaled when an agent's edit conflicts with a concurrent workspace modification."))
+
+(defconstant +error-code-parse-error+ -32700
+  "JSON-RPC standard error code for syntax/parse errors.")
+
+(defconstant +error-code-invalid-params+ -32602
+  "JSON-RPC standard error code for invalid parameters or invalid AST paths.")
+
+(defconstant +error-code-workspace-error+ -32001
+  "JSON-RPC server error code for workspace lifecycle or file access failures.")
+
+(defconstant +error-code-occ-conflict+ -32002
+  "JSON-RPC server error code for optimistic concurrency control conflicts.")
+
+(defconstant +error-code-internal-error+ -32603
+  "JSON-RPC standard error code for internal server errors.")

@@ -5,7 +5,11 @@
         :structural-editing-mcp.tree
         :structural-editing-mcp.conditions)
   (:import-from :serapeum :filter-map :mappend :string-prefix-p)
-  (:export :*workspace-tree*
+   (:export :workspace-context
+           :make-workspace-context
+           :*current-workspace*
+           :with-workspace-context
+           :*workspace-tree*
            :*file-registry*
            :*file-clean-state*
            :*file-clean-sources*
@@ -27,6 +31,7 @@
            :record-agent-read
            :validate-agent-edit
            :commit-agent-edit)
+
   (:documentation "Project-level multi-file workspace management, file tracking, and disk I/O."))
 
 (in-package :structural-editing-mcp.workspace)
@@ -54,40 +59,52 @@
   structural-editing-mcp.parser:*supported-dialects*
   "List of supported Lisp dialect keywords.")
 
-(defvar *workspace-tree* nil
-                         "The global AST representing the entire loaded workspace.")
+(defstruct (workspace-context (:constructor make-workspace-context-internal))
+  "Encapsulated workspace context holding AST tree, file registry, and OCC state."
+  (tree '(:path () :workspace))
+  (file-registry (make-hash-table :test 'equal))
+  (clean-state (make-hash-table :test 'equal))
+  (clean-sources (make-hash-table :test 'equal))
+  (next-file-id 0 :type fixnum)
+  (revision 1 :type fixnum)
+  (lock (bt:make-lock "workspace-lock"))
+  (agent-views (make-hash-table :test 'equal)))
 
-(defvar *file-registry* (make-hash-table :test 'equal)
-                        "Maps numerical file IDs and tree paths to canonical file paths.")
+(defun make-workspace-context ()
+  "Create and return a freshly initialized independent workspace-context."
+  (make-workspace-context-internal))
 
-(defvar *file-clean-state* (make-hash-table :test 'equal)
-                           "Maps canonical filepaths to the clean (unmodified) parsed AST.")
+(defparameter *default-workspace* (make-workspace-context)
+  "The default root workspace-context.")
 
-(defvar *file-clean-sources* (make-hash-table :test 'equal)
-                             "Maps canonical filepaths to a vector of raw top-level source slices.")
+(defvar *current-workspace* *default-workspace*
+  "The active workspace-context for the current dynamic extent / thread.")
 
-(defvar *next-file-id* 0
-                       "Monotonically increasing counter for numerical file IDs.")
+(defmacro with-workspace-context ((context) &body body)
+  "Execute BODY with *CURRENT-WORKSPACE* bound dynamically to CONTEXT."
+  `(let ((*current-workspace* ,context))
+     ,@body))
 
-(defparameter *workspace-revision* 1
-  "Monotonically increasing integer tracking the global workspace revision for OCC.")
+(define-symbol-macro *workspace-tree* (workspace-context-tree *current-workspace*))
+(define-symbol-macro *file-registry* (workspace-context-file-registry *current-workspace*))
+(define-symbol-macro *file-clean-state* (workspace-context-clean-state *current-workspace*))
+(define-symbol-macro *file-clean-sources* (workspace-context-clean-sources *current-workspace*))
+(define-symbol-macro *next-file-id* (workspace-context-next-file-id *current-workspace*))
+(define-symbol-macro *workspace-revision* (workspace-context-revision *current-workspace*))
+(define-symbol-macro *workspace-lock* (workspace-context-lock *current-workspace*))
+(define-symbol-macro *agent-views* (workspace-context-agent-views *current-workspace*))
 
-(defvar *workspace-lock* (bt:make-lock "workspace-lock")
-  "Global mutex protecting the workspace tree, revisions, and agent views.")
+(defun init-workspace (&optional (ctx *current-workspace*))
+  "Initialize or reset CTX as an empty workspace."
+  (bt:with-lock-held ((workspace-context-lock ctx))
+    (setf (workspace-context-file-registry ctx) (make-hash-table :test 'equal))
+    (setf (workspace-context-clean-state ctx) (make-hash-table :test 'equal))
+    (setf (workspace-context-clean-sources ctx) (make-hash-table :test 'equal))
+    (setf (workspace-context-next-file-id ctx) 0)
+    (setf (workspace-context-revision ctx) 1)
+    (setf (workspace-context-agent-views ctx) (make-hash-table :test 'equal))
+    (setf (workspace-context-tree ctx) '(:path () :workspace))))
 
-(defvar *agent-views* (make-hash-table :test 'equal)
-  "Maps agent-id to the *workspace-revision* observed during the agent's last read or edit.")
-
-(defun init-workspace ()
-  "Initialize an empty workspace."
-  (bt:with-lock-held (*workspace-lock*)
-    (setf *file-registry* (make-hash-table :test 'equal))
-    (setf *file-clean-state* (make-hash-table :test 'equal))
-    (setf *file-clean-sources* (make-hash-table :test 'equal))
-    (setf *next-file-id* 0)
-    (setf *workspace-revision* 1)
-    (setf *agent-views* (make-hash-table :test 'equal))
-    (setf *workspace-tree* '(:path () :workspace))))
 
 (defun compute-suggested-read-path (target-path)
   "Compute the parent file or dialect path from TARGET-PATH to inspect upon conflict."

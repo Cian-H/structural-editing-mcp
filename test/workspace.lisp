@@ -157,3 +157,31 @@
                                                                               (ok (search "\"Documentation with    spaces.\"" mod-content))
                                                                               (ok (search "(defpackage :mod-pkg (:use :cl))" mod-content))))))))))
 
+(deftest test-workspace-isolated-contexts
+  (testing "with-workspace-context provides isolated multi-workspace sessions"
+    (let ((ctx-a (make-workspace-context))
+          (ctx-b (make-workspace-context)))
+      ;; Context A: initialize and add a CL form
+      (with-workspace-context (ctx-a)
+        (init-workspace)
+        (setf *workspace-tree* '(:path () :workspace
+                                 (:path (0) :common-lisp
+                                  (:path (0 0) :file
+                                   (:path (0 0 0) :leaf a)))))
+        (ok (= 1 (length (get-node-children *workspace-tree*))))
+        (ok (equal '(:path (0 0 0) :leaf a) (get-node-at-path *workspace-tree* '(0 0 0)))))
+
+      ;; Context B: should be independent, empty workspace
+      (with-workspace-context (ctx-b)
+        (init-workspace)
+        (ok (equal '(:path () :workspace) *workspace-tree*))
+        (setf *workspace-tree* '(:path () :workspace
+                                 (:path (0) :clojure
+                                  (:path (0 0) :file
+                                   (:path (0 0 0) :leaf b)))))
+        (ok (eq :clojure (get-node-tag (first (get-node-children *workspace-tree*))))))
+
+      ;; Back in Context A: verify state was preserved and isolated
+      (with-workspace-context (ctx-a)
+        (ok (eq :common-lisp (get-node-tag (first (get-node-children *workspace-tree*)))))
+        (ok (equal '(:path (0 0 0) :leaf a) (get-node-at-path *workspace-tree* '(0 0 0))))))))

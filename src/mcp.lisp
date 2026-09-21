@@ -808,10 +808,31 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
           (send-result id (dict "content" (list (dict "type" "text" "text" content)))))
       (structural-editing-mcp.conditions:occ-conflict-error (c)
         (send-result id (dict "content" (list (dict "type" "text" "text" (format nil "~A" c)))
+                              "errorCode" structural-editing-mcp.conditions:+error-code-occ-conflict+
+                              "errorType" "occ_conflict"
+                              "isError" t)))
+      (structural-editing-mcp.conditions:invalid-path-error (c)
+        (send-result id (dict "content" (list (dict "type" "text" "text" (format nil "Invalid path error: ~A" c)))
+                              "errorCode" structural-editing-mcp.conditions:+error-code-invalid-params+
+                              "errorType" "invalid_path"
+                              "path" (structural-editing-mcp.conditions:invalid-path-error-path c)
+                              "isError" t)))
+      (structural-editing-mcp.conditions:sexp-parse-error (c)
+        (send-result id (dict "content" (list (dict "type" "text" "text" (format nil "Parse error: ~A" c)))
+                              "errorCode" structural-editing-mcp.conditions:+error-code-parse-error+
+                              "errorType" "parse_error"
+                              "isError" t)))
+      (structural-editing-mcp.conditions:workspace-error (c)
+        (send-result id (dict "content" (list (dict "type" "text" "text" (format nil "Workspace error: ~A" c)))
+                              "errorCode" structural-editing-mcp.conditions:+error-code-workspace-error+
+                              "errorType" "workspace_error"
                               "isError" t)))
       (error (e)
         (send-result id (dict "content" (list (dict "type" "text" "text" (fmt "Error: ~A" e)))
+                              "errorCode" structural-editing-mcp.conditions:+error-code-internal-error+
+                              "errorType" "internal_error"
                               "isError" t))))))
+
 
 (defun handle-message (msg)
   "Dispatch a parsed JSON-RPC message."

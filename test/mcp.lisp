@@ -487,3 +487,53 @@
       (ok (= counter 10)))
     (structural-editing-mcp.mcp:stop-worker-pool)))
 
+(deftest test-mcp-granular-error-codes
+  (testing "handle-tools-call returns distinct error codes and structured error types"
+    (structural-editing-mcp.workspace:init-workspace)
+    (with-open-file (f "/tmp/err-test.lisp" :direction :output :if-exists :supersede)
+      (write-string "(defun foo () 1)" f))
+    (structural-editing-mcp.workspace:load-into-workspace '("/tmp/err-test.lisp"))
+
+    ;; 1. Invalid path error -> code -32602, errorType "invalid_path"
+    (let* ((msg (structural-editing-mcp.mcp::dict
+                  "jsonrpc" "2.0"
+                  "id" 2001
+                  "method" "tools/call"
+                  "params" (structural-editing-mcp.mcp::dict
+                             "name" "ast_modify"
+                             "arguments" (structural-editing-mcp.mcp::dict
+                                           "path" '(0 0 999)
+                                           "action" "overwrite"
+                                           "new_node" "42"))))
+           (capture (make-string-output-stream))
+           (out (let ((*standard-output* capture))
+                  (structural-editing-mcp.mcp:handle-message msg)
+                  (get-output-stream-string capture)))
+           (json (let ((yason:*parse-json-arrays-as-vectors* nil))
+                   (yason:parse out)))
+           (res (gethash "result" json)))
+      (ok (gethash "isError" res) "invalid path: isError")
+      (ok (= (gethash "errorCode" res) -32602) "invalid path: errorCode -32602")
+      (ok (equal (gethash "errorType" res) "invalid_path") "invalid path: errorType"))
+
+    ;; 2. Sexp parse error -> code -32700, errorType "parse_error"
+    (let* ((msg2 (structural-editing-mcp.mcp::dict
+                   "jsonrpc" "2.0"
+                   "id" 2002
+                   "method" "tools/call"
+                   "params" (structural-editing-mcp.mcp::dict
+                              "name" "ast_modify"
+                              "arguments" (structural-editing-mcp.mcp::dict
+                                            "path" '(0 0 0)
+                                            "action" "overwrite"
+                                            "new_node" ""))))
+           (capture2 (make-string-output-stream))
+           (out2 (let ((*standard-output* capture2))
+                   (structural-editing-mcp.mcp:handle-message msg2)
+                   (get-output-stream-string capture2)))
+           (json2 (let ((yason:*parse-json-arrays-as-vectors* nil))
+                    (yason:parse out2)))
+           (res2 (gethash "result" json2)))
+      (ok (gethash "isError" res2) "parse error: isError")
+      (ok (= (gethash "errorCode" res2) -32700) "parse error: errorCode -32700")
+      (ok (equal (gethash "errorType" res2) "parse_error") "parse error: errorType"))))

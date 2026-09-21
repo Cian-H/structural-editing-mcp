@@ -84,18 +84,20 @@
 (defun reindex-paths (tree &optional (current-path '()))
   "Recompute and update all :path metadata in TREE starting at CURRENT-PATH."
   (declare (type list current-path))
-  (match tree
-         ((leaf _ val)
-          (list :path current-path :leaf val))
-         ((comment _ text)
-          (list :path current-path :comment text))
-         ((node _ tag children)
-          (list* :path current-path tag
-                 (loop for child in children
-                       for idx of-type fixnum from 0
-                       for child-path = (append current-path (list idx))
-                       collect (reindex-paths child child-path))))
-         (_ tree)))
+  (labels ((reindex-aux (node rev-path)
+             (let ((full-path (reverse rev-path)))
+               (match node
+                      ((leaf _ val)
+                       (list :path full-path :leaf val))
+                      ((comment _ text)
+                       (list :path full-path :comment text))
+                      ((node _ tag children)
+                       (list* :path full-path tag
+                              (loop for child in children
+                                    for idx of-type fixnum from 0
+                                    collect (reindex-aux child (cons idx rev-path)))))
+                      (_ node)))))
+    (reindex-aux tree (reverse current-path))))
 
 (defun update-node-at-path (tree path fn)
   "Navigate to PATH in TREE, apply FN to the node at PATH, and reconstruct the tree.
