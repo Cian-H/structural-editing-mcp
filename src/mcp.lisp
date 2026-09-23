@@ -795,11 +795,13 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
         :agent-id agent-id
         :target-path target-path)
       (let ((old-rev structural-editing-mcp.workspace:*workspace-revision*)
+            (old-tree structural-editing-mcp.workspace:*workspace-tree*)
             (old-agent-rev (gethash agent-id structural-editing-mcp.workspace:*agent-views*)))
         (structural-editing-mcp.workspace:commit-agent-edit agent-id)
         (handler-case
             (dispatch-tool-call name path args dialect agent-id)
           (error (e)
+            (setf structural-editing-mcp.workspace:*workspace-tree* old-tree)
             (setf structural-editing-mcp.workspace:*workspace-revision* old-rev)
             (if old-agent-rev
               (setf (gethash agent-id structural-editing-mcp.workspace:*agent-views*) old-agent-rev)

@@ -7,6 +7,7 @@
            :get-node-path
            :get-node-tag
            :get-node-children
+           :get-node-leaf-value
            :compound-node-p
            :resolve-tree-scope
            :parse-node
@@ -47,6 +48,12 @@
   (match node
          ((or (leaf _ _) (comment _ _)) nil)
          ((node _ _ children) children)
+         (_ nil)))
+
+(defun get-node-leaf-value (node)
+  "Return the value of leaf NODE, or NIL if it is not a leaf."
+  (match node
+         ((leaf _ val) val)
          (_ nil)))
 
 (defun compound-node-p (node)

@@ -58,10 +58,12 @@
     (when (< target len)
       (char string target))))
 
-(defun read-string-literal (string index len)
-  "Read an escaped string literal starting after the opening quote."
+(defun read-string-literal (string index len &optional (delimiter #\") (dialect *current-dialect*))
+  "Read an escaped string literal starting after the opening delimiter."
   (declare (type string string)
-           (type fixnum index len))
+           (type fixnum index len)
+           (type character delimiter)
+           (ignore dialect))
   (let ((out (make-string-output-stream)))
     (incf index)
     (loop while (< index len)
@@ -69,10 +71,102 @@
           do (cond
                ((char= ch #\\)
                  (incf index)
-                 (when (< index len)
-                   (write-char (char string index) out)
-                   (incf index)))
-               ((char= ch #\")
+                 (if (>= index len)
+                     (error 'sexp-parse-error
+                            :token (get-output-stream-string out)
+                            :message "Unterminated escape sequence in string literal")
+                     (let ((esc (char string index)))
+                       (cond
+                         ((char= esc #\n)
+                          (write-char #\Newline out)
+                          (incf index))
+                         ((char= esc #\t)
+                          (write-char #\Tab out)
+                          (incf index))
+                         ((char= esc #\r)
+                          (write-char #\Return out)
+                          (incf index))
+                         ((char= esc #\b)
+                          (write-char (code-char 8) out)
+                          (incf index))
+                         ((char= esc #\f)
+                          (write-char (code-char 12) out)
+                          (incf index))
+                         ((char= esc #\0)
+                          (write-char (code-char 0) out)
+                          (incf index))
+                         ((char= esc #\\)
+                          (write-char #\\ out)
+                          (incf index))
+                         ((char= esc #\")
+                          (write-char #\" out)
+                          (incf index))
+                         ((char= esc #\')
+                          (write-char #\' out)
+                          (incf index))
+                         ((char= esc #\u)
+                          ;; Unicode escape: \u{HEX...} or \uXXXX
+                          (cond
+                            ((and (< (1+ index) len)
+                                  (char= (char string (1+ index)) #\{))
+                             (let ((close-pos (position #\} string :start (+ index 2) :end (min len (+ index 10)))))
+                               (if (and close-pos (> close-pos (+ index 2))
+                                        (every (lambda (c) (digit-char-p c 16))
+                                               (subseq string (+ index 2) close-pos)))
+                                   (let ((code (parse-integer string :start (+ index 2) :end close-pos :radix 16)))
+                                     (write-char (or (code-char code) #\?) out)
+                                     (setf index (1+ close-pos)))
+                                   (progn
+                                     (write-char esc out)
+                                     (incf index)))))
+                            ((and (<= (+ index 5) len)
+                                  (every (lambda (c) (digit-char-p c 16))
+                                         (subseq string (1+ index) (+ index 5))))
+                             (let ((code (parse-integer string :start (1+ index) :end (+ index 5) :radix 16)))
+                               (write-char (or (code-char code) #\?) out)
+                               (incf index 5)))
+                            (t
+                             (write-char esc out)
+                             (incf index))))
+                         ((char= esc #\U)
+                          ;; 8-hex digit Unicode escape: \UXXXXXXXX
+                          (if (and (<= (+ index 9) len)
+                                   (every (lambda (c) (digit-char-p c 16))
+                                          (subseq string (1+ index) (+ index 9))))
+                              (let ((code (parse-integer string :start (1+ index) :end (+ index 9) :radix 16)))
+                                (write-char (or (code-char code) #\?) out)
+                                (incf index 9))
+                              (progn
+                                (write-char esc out)
+                                (incf index))))
+                         ((char= esc #\x)
+                          ;; Hex escape: \x{HEX...} or \xXX
+                          (cond
+                            ((and (< (1+ index) len)
+                                  (char= (char string (1+ index)) #\{))
+                             (let ((close-pos (position #\} string :start (+ index 2) :end (min len (+ index 6)))))
+                               (if (and close-pos (> close-pos (+ index 2))
+                                        (every (lambda (c) (digit-char-p c 16))
+                                               (subseq string (+ index 2) close-pos)))
+                                   (let ((code (parse-integer string :start (+ index 2) :end close-pos :radix 16)))
+                                     (write-char (or (code-char code) #\?) out)
+                                     (setf index (1+ close-pos)))
+                                   (progn
+                                     (write-char esc out)
+                                     (incf index)))))
+                            ((and (<= (+ index 3) len)
+                                  (every (lambda (c) (digit-char-p c 16))
+                                         (subseq string (1+ index) (+ index 3))))
+                             (let ((code (parse-integer string :start (1+ index) :end (+ index 3) :radix 16)))
+                               (write-char (or (code-char code) #\?) out)
+                               (incf index 3)))
+                            (t
+                             (write-char esc out)
+                             (incf index))))
+                         (t
+                          (write-char esc out)
+                          (incf index))))))
+               ((char= ch delimiter)
                  (incf index)
                  (return (values (get-output-stream-string out) index)))
                (t
@@ -229,10 +323,19 @@
             (values tok next t)
             (multiple-value-bind (atok anext) (read-default-atom-token string index len dialect)
               (values atok anext t)))))
+      ((and (eq dialect :fennel)
+            (char= ch #\[)
+            (eql (peek-char-ahead string index len) #\[))
+        (let ((close-pos (search "]]" string :start2 (+ index 2))))
+          (if close-pos
+            (values (subseq string (+ index 2) close-pos) (+ close-pos 2) t)
+            (error 'sexp-parse-error
+                   :token (subseq string index)
+                   :message "Unterminated Fennel multiline string [[...]]"))))
       ((delimiter-char-token ch)
         (values (cons :delim (delimiter-char-token ch)) (1+ index) t))
       ((char= ch #\")
-        (multiple-value-bind (tok next) (read-string-literal string index len)
+        (multiple-value-bind (tok next) (read-string-literal string index len #\" dialect)
           (values tok next t)))
       (t
         (multiple-value-bind (tok next) (read-default-atom-token string index len dialect)
@@ -428,8 +531,16 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
     (walk node)))
 
 (defun flat-collection-string (open blocks close)
-  "Join BLOCKS with single spaces into a single-line collection string."
-  (fmt "~A~{~A~^ ~}~A" open blocks close))
+  "Join BLOCKS with single spaces into a single-line collection string, respecting reader macro gluing."
+  (with-output-to-string (s)
+    (write-string open s)
+    (loop for (b . rest) on blocks
+          do (write-string b s)
+          when rest
+          do (let ((next-b (car rest)))
+               (unless (member b '("#" "'") :test #'string=)
+                 (write-string " " s))))
+    (write-string close s)))
 
 (defparameter *operator-category-table*
   (dict

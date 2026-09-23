@@ -53,6 +53,11 @@
       ((target-node (get-node-at-path tree target-path))
        (parent-path (butlast target-path))
        (child-idx (lastcar target-path)))
+    (unless target-node
+      (error 'invalid-path-error
+             :path target-path
+             :tree tree
+             :message (format nil "Target node not found at path ~A" target-path)))
     (update-node-at-path
       tree
       parent-path

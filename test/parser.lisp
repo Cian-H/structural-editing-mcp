@@ -83,7 +83,27 @@
          (testing "unclosed string and block comment error handling"
                   (ok (signals (string-to-sexp "\"unclosed string") 'sexp-parse-error))
                   (ok (signals (string-to-sexp "#| unclosed block comment")
-                               'sexp-parse-error))))
+                               'sexp-parse-error)))
+
+         (testing "escaped strings and unicode handling"
+                  (let* ((code "\"hello\\nworld\\t\\\"quoted\\\"\"")
+                         (ast (string-to-sexp code))
+                         (val (get-node-leaf-value (first (get-node-children ast)))))
+                    (ok (equal (format nil "hello~Cworld~C\"quoted\"" #\Newline #\Tab) val)))
+                  (let* ((code "\"unicode \\u0041 and \\x42\"")
+                         (ast (string-to-sexp code))
+                         (val (get-node-leaf-value (first (get-node-children ast)))))
+                    (ok (equal "unicode A and B" val)))
+                  (let* ((code "\"braced \\u{0043}\"")
+                         (ast (string-to-sexp code))
+                         (val (get-node-leaf-value (first (get-node-children ast)))))
+                    (ok (equal "braced C" val))))
+
+         (testing "fennel multiline string literals"
+                  (let* ((code "[[hello world]]")
+                         (ast (string-to-sexp code :dialect :fennel))
+                         (val (get-node-leaf-value (first (get-node-children ast)))))
+                    (ok (equal "hello world" val)))))
 
 (deftest test-dialect-parsing-and-printing
          (testing "clojure comma as whitespace"

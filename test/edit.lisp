@@ -46,7 +46,19 @@
 
 (deftest test-swap-nodes
          (let ((ast (string-to-sexp "(a b c)")))
-           (ok (equal (string-to-sexp "(a c b)") (swap-nodes ast '(0 1) '(0 2))))))
+           (ok (equal (string-to-sexp "(a c b)") (swap-nodes ast '(0 1) '(0 2))))
+           ;; Identity swap returns same tree
+           (ok (equal ast (swap-nodes ast '(0 1) '(0 1))))
+           ;; Ancestor/descendant swap rejected
+           (ok (signals (swap-nodes ast '(0) '(0 1)) 'invalid-path-error))
+           (ok (signals (swap-nodes ast '(0 1) '(0)) 'invalid-path-error)))
+         ;; Swapping compound subtrees updates descendant paths accurately
+         (let* ((ast (string-to-sexp "((+ 1 2) (- 3 4))"))
+                (swapped (swap-nodes ast '(0 0) '(0 1))))
+           (ok (equal (string-to-sexp "((- 3 4) (+ 1 2))") swapped))
+           (ok (equal '(0 0) (get-node-path (get-node-at-path swapped '(0 0)))))
+           (ok (equal '(0 0 1) (get-node-path (get-node-at-path swapped '(0 0 1)))))
+           (ok (equal 3 (get-node-leaf-value (get-node-at-path swapped '(0 0 1)))))))
 
 (deftest test-wrap-node
          (let ((ast (string-to-sexp "(a b c)")))
@@ -57,8 +69,19 @@
            (ok (equal (string-to-sexp "(a [b c] d)") (wrap-range ast '(0) 1 2 :square)))))
 
 (deftest test-unwrap-node
-         (let ((ast (string-to-sexp "(a (b c) d)")))
-           (ok (equal (string-to-sexp "(a b c d)") (unwrap-node ast '(0 1))))))
+         (let* ((ast (string-to-sexp "(a (b c) d)"))
+                (res (unwrap-node ast '(0 1))))
+           (ok (equal (string-to-sexp "(a b c d)") res))
+           ;; Verify exact re-indexed paths of spilled children and subsequent siblings
+           (ok (equal '(0 1) (get-node-path (get-node-at-path res '(0 1)))))
+           (ok (equal 'b (get-node-leaf-value (get-node-at-path res '(0 1)))))
+           (ok (equal '(0 2) (get-node-path (get-node-at-path res '(0 2)))))
+           (ok (equal 'c (get-node-leaf-value (get-node-at-path res '(0 2)))))
+           (ok (equal '(0 3) (get-node-path (get-node-at-path res '(0 3)))))
+           (ok (equal 'd (get-node-leaf-value (get-node-at-path res '(0 3))))))
+         ;; Unwrapping with out-of-bounds child index must signal invalid-path-error
+         (ok (signals (unwrap-node (string-to-sexp "(a (b c) d)") '(0 99))
+                      'invalid-path-error)))
 
 (deftest test-promote-node
          (let ((ast (string-to-sexp "(a (b c) d)")))

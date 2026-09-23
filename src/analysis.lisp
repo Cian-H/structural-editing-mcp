@@ -837,24 +837,39 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
   depth
   recommendation)
 
+(defun combine-hashes (h1 h2)
+  "Combine two 64-bit integer hashes."
+  (declare (type (unsigned-byte 64) h1 h2))
+  (logand #xFFFFFFFFFFFFFFFF
+          (logxor h1
+                  (+ h2
+                     #x9e3779b97f4a7c15
+                     (ash (logand h1 #x03FFFFFFFFFFFFFF) 6)
+                     (ash (logand h1 #xFFFFFFFFFFFFFFFF) -2)))))
+
+(defun compute-structural-hash (node &key (exact t) (is-head t))
+  "Compute a Merkle-style 64-bit integer structural hash of NODE."
+  (match node
+    ((leaf _ val)
+     (if (or exact is-head)
+         (let ((base-hash (sxhash val)))
+           (combine-hashes (sxhash (type-of val)) (logand base-hash #xFFFFFFFFFFFFFFFF)))
+         (combine-hashes (sxhash :anonymized-leaf) (sxhash '?_))))
+    ((comment _ text)
+     (if exact
+         (combine-hashes (sxhash :comment) (logand (sxhash text) #xFFFFFFFFFFFFFFFF))
+         (sxhash :comment)))
+    ((node _ tag children)
+     (let ((h (combine-hashes (sxhash :node) (sxhash tag))))
+       (loop for c in children
+             for idx of-type fixnum from 0
+             do (setf h (combine-hashes h (compute-structural-hash c :exact exact :is-head (zerop idx)))))
+       h))
+    (_ (sxhash node))))
+
 (defun canonicalize-subtree (node &key (exact t))
-  "Produce a canonical string fingerprint of NODE for equality/clone matching."
-  (if exact
-    (trim-whitespace (sexp-to-string node))
-    (labels ((anonymize (curr is-head)
-               (match curr
-                      ((leaf path val)
-                       (declare (ignore path))
-                       (if is-head
-                         curr
-                         (list :path nil :leaf '?_)))
-                      ((node path tag children)
-                       (list* :path path tag
-                              (loop for c in children
-                                    for i from 0
-                                    collect (anonymize c (zerop i)))))
-                      (_ curr))))
-      (sexp-to-string (anonymize node t)))))
+  "Produce a canonical string fingerprint of NODE for equality/clone matching via structural Merkle hashing."
+  (format nil "~16,'0X" (compute-structural-hash node :exact exact :is-head t)))
 
 (defun path-prefix-p (prefix path)
   "Return T if PREFIX is a strict prefix of PATH."

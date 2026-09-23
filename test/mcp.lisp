@@ -575,3 +575,38 @@
 
     ;; The file on disk now reflects the edit
     (ok (search "renamed" (uiop:read-file-string "/tmp/commit-test.lisp"))))))
+
+(deftest test-mcp-mutation-rollback
+  (testing "execute-mutation-tool-locked rolls back *workspace-tree* and revision on failure"
+    (structural-editing-mcp.workspace:init-workspace)
+    (with-open-file (f "/tmp/rollback-test.lisp" :direction :output :if-exists :supersede)
+      (write-string "(defun test () 123)" f))
+    (let* ((read-msg (structural-editing-mcp.mcp::dict
+                       "jsonrpc" "2.0"
+                       "id" 4000
+                       "method" "tools/call"
+                       "params" (structural-editing-mcp.mcp::dict
+                                  "name" "read_node"
+                                  "arguments" (structural-editing-mcp.mcp::dict
+                                                "path" #()
+                                                "load_files" #("/tmp/rollback-test.lisp")))))
+           (*standard-output* (make-string-output-stream)))
+      (structural-editing-mcp.mcp:handle-message read-msg))
+    (let ((init-tree (copy-tree structural-editing-mcp.workspace:*workspace-tree*))
+          (orig-rev structural-editing-mcp.workspace:*workspace-revision*))
+      ;; Attempt a mutation that fails with invalid-path-error
+      (let* ((failing-msg (structural-editing-mcp.mcp::dict
+                            "jsonrpc" "2.0"
+                            "id" 4001
+                            "method" "tools/call"
+                            "params" (structural-editing-mcp.mcp::dict
+                                       "name" "ast_modify"
+                                       "arguments" (structural-editing-mcp.mcp::dict
+                                                     "path" '(0 0 999 999)
+                                                     "action" "overwrite"
+                                                     "new_node" "boom"))))
+             (json (call-mcp-msg failing-msg))
+             (res (gethash "result" json)))
+        (ok (gethash "isError" res))
+        (ok (= structural-editing-mcp.workspace:*workspace-revision* orig-rev))
+        (ok (equal structural-editing-mcp.workspace:*workspace-tree* init-tree))))))
