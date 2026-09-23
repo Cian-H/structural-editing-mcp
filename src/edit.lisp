@@ -106,6 +106,15 @@
 
 (defun swap-nodes (tree path1 path2)
   "Swap the nodes at PATH1 and PATH2."
+  (when (equal path1 path2) (return-from swap-nodes tree))
+  (when (or (and (<= (length path1) (length path2))
+                 (equal path1 (subseq path2 0 (length path1))))
+            (and (<= (length path2) (length path1))
+                 (equal path2 (subseq path1 0 (length path2)))))
+    (error 'invalid-path-error
+           :path (list path1 path2)
+           :tree tree
+           :message "Cannot swap ancestor and descendant nodes"))
   (let
       ((parent1 (butlast path1)) (parent2 (butlast path2)))
     (if
@@ -122,26 +131,34 @@
               ((node p tag children)
                (let
                    ((child1 (nth idx1 children)) (child2 (nth idx2 children)))
-                 `
-                 (:path
-                   ,p
-                   ,tag
-                   ,@
-                   (loop
-                     for
-                     c
-                     in
-                     children
-                     for
-                     i
-                     from
-                     0
-                     collect
-                     (cond ((= i idx1) child2) ((= i idx2) child1) (t c))))))
+                  `
+                  (:path
+                    ,p
+                    ,tag
+                    ,@
+                    (loop
+                      for
+                      c
+                      in
+                      children
+                      for
+                      i
+                      from
+                      0
+                      collect
+                      (cond ((= i idx1) child2) ((= i idx2) child1) (t c))))))
               (_ parent)))))
       (let
           ((node1 (get-node-at-path tree path1)) (node2 (get-node-at-path tree path2)))
-        (overwrite-node (overwrite-node tree path1 node2) path2 node1)))))
+        (unless node1
+          (error 'invalid-path-error :path path1 :tree tree :message (fmt "Node not found at path ~A" path1)))
+        (unless node2
+          (error 'invalid-path-error :path path2 :tree tree :message (fmt "Node not found at path ~A" path2)))
+        ;; deeper path first avoids invalidation; ancestor case already rejected
+        (let ((first-path path1) (first-node node2) (second-path path2) (second-node node1))
+          (when (< (length path1) (length path2))
+            (setf first-path path2 first-node node1 second-path path1 second-node node2))
+          (overwrite-node (overwrite-node tree first-path first-node) second-path second-node))))))
 
 (defun wrap-node (tree path tag)
   "Wrap the node at PATH in a new collection node with TAG (e.g. :paren)."

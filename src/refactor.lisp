@@ -45,7 +45,10 @@
   "Extract the node at TARGET-PATH into a let binding around its parent."
   (when
       (or (null target-path) (null (cdr target-path)))
-    (error "Cannot extract a top-level form."))
+    (error 'invalid-path-error
+           :path target-path
+           :tree tree
+           :message "Cannot extract a top-level form."))
   (let*
       ((target-node (get-node-at-path tree target-path))
        (parent-path (butlast target-path))
@@ -87,10 +90,16 @@
 (defun extract-function (tree target-path function-name &key params)
   "Extract the node at TARGET-PATH into a new top-level function definition named FUNCTION-NAME."
   (when (null target-path)
-    (error "Cannot extract root workspace/file node."))
+    (error 'invalid-path-error
+           :path target-path
+           :tree tree
+           :message "Cannot extract root workspace/file node."))
   (let ((target-node (get-node-at-path tree target-path)))
     (unless target-node
-      (error "Target node not found at path ~A" target-path))
+      (error 'invalid-path-error
+             :path target-path
+             :tree tree
+             :message (format nil "Target node not found at path ~A" target-path)))
     (multiple-value-bind (file-path top-idx) (find-file-path-and-top-index tree target-path)
       (let* ((param-list (mapcar (lambda (p) (if (symbolp p) (symbol-name p) p)) (ensure-list params)))
              (call-str (if param-list
