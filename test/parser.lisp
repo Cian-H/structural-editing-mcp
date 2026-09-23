@@ -81,8 +81,9 @@
                                (string-to-sexp code)))))
 
          (testing "unclosed string and block comment error handling"
-                  (signals (string-to-sexp "\"unclosed string") 'sexp-parse-error)
-                  (signals (string-to-sexp "#| unclosed block comment") 'sexp-parse-error)))
+                  (ok (signals (string-to-sexp "\"unclosed string") 'sexp-parse-error))
+                  (ok (signals (string-to-sexp "#| unclosed block comment")
+                               'sexp-parse-error))))
 
 (deftest test-dialect-parsing-and-printing
          (testing "clojure comma as whitespace"
@@ -197,5 +198,13 @@
                     (let ((output (with-output-to-string (s)
                                     (structural-editing-mcp.parser:print-file-with-clean-sources ast ast slices s))))
                       (ok (string= code output))))))
+
+(deftest test-reader-macro-roundtrip
+         (testing "clojure reader macros round-trip exactly"
+                  ;; #(...) anonymous functions and ' quote must print back as
+                  ;; glued tokens (#(...) and '(...), not "# (" / "' (").
+                  (let* ((code "(map #(inc %1) '(1 2 3))")
+                         (ast (string-to-sexp code :dialect :clojure)))
+                    (ok (string= code (sexp-to-string ast :dialect :clojure))))))
 
 

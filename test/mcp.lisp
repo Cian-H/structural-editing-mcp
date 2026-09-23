@@ -523,3 +523,55 @@
       (ok (gethash "isError" res2) "parse error: isError")
       (ok (= (gethash "errorCode" res2) -32700) "parse error: errorCode -32700")
       (ok (equal (gethash "errorType" res2) "parse_error") "parse error: errorType"))))
+
+(deftest test-mcp-commit-workspace
+  (testing "commit_workspace persists an in-memory edit to disk"
+    (structural-editing-mcp.workspace:init-workspace)
+    (with-open-file (f "/tmp/commit-test.lisp" :direction :output :if-exists :supersede)
+      (write-string "(defun original () 1)" f))
+
+    ;; Load the file into the workspace through read_node
+    (let* ((read-msg (structural-editing-mcp.mcp::dict
+                      "jsonrpc" "2.0"
+                      "id" 3001
+                      "method" "tools/call"
+                      "params" (structural-editing-mcp.mcp::dict
+                                 "name" "read_node"
+                                 "arguments" (structural-editing-mcp.mcp::dict
+                                               "path" #()
+                                               "load_files" #("/tmp/commit-test.lisp")))))
+           (*standard-output* (make-string-output-stream)))
+      (structural-editing-mcp.mcp:handle-message read-msg))
+
+    ;; Mutate a leaf in memory using ast_modify
+    (let* ((mod-msg (structural-editing-mcp.mcp::dict
+                     "jsonrpc" "2.0"
+                     "id" 3002
+                     "method" "tools/call"
+                     "params" (structural-editing-mcp.mcp::dict
+                                "name" "ast_modify"
+                                "arguments" (structural-editing-mcp.mcp::dict
+                                              "path" '(0 0 0 0)
+                                              "action" "overwrite"
+                                              "new_node" "renamed"))))
+           (*standard-output* (make-string-output-stream)))
+      (structural-editing-mcp.mcp:handle-message mod-msg))
+
+    ;; Nothing was written to disk before commit
+    (ok (not (search "renamed" (uiop:read-file-string "/tmp/commit-test.lisp"))))
+
+    ;; Commit through the MCP tool itself
+    (let* ((commit-msg (structural-editing-mcp.mcp::dict
+                        "jsonrpc" "2.0"
+                        "id" 3003
+                        "method" "tools/call"
+                        "params" (structural-editing-mcp.mcp::dict
+                                   "name" "commit_workspace"
+                                   "arguments" (make-hash-table))))
+           (json (call-mcp-msg commit-msg))
+           (res (gethash "result" json)))
+      (ok (null (gethash "isError" res)))
+      (ok (search "committed" (gethash "text" (first (gethash "content" res)))))
+
+    ;; The file on disk now reflects the edit
+    (ok (search "renamed" (uiop:read-file-string "/tmp/commit-test.lisp"))))))
