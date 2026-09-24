@@ -15,7 +15,12 @@ This skill explains how to run the Rove test suite, target specific test suites,
 ```bash
 ./scripts/run-tests.lisp
 ```
-This script loads the ASDF system `structural-editing-mcp/tests` and executes all defined tests across all test modules. It exits with code `0` on success and `1` on failure.
+This script loads the ASDF system `structural-editing-mcp/tests` and executes all defined tests across all test modules in compact dot mode (`:dot`) by default. It exits with code `0` on success and `1` on failure.
+
+To view verbose assertion output, pass `--spec`:
+```bash
+./scripts/run-tests.lisp --spec
+```
 
 ### Run Targeted Tests
 You can specify one or more test symbol names as command-line arguments to run only those suites:
@@ -25,6 +30,9 @@ You can specify one or more test symbol names as command-line arguments to run o
 
 # Run multiple test suites
 ./scripts/run-tests.lisp test-tree test-edit test-parser
+
+# Run in verbose spec mode
+./scripts/run-tests.lisp test-tree --spec
 ```
 
 Available test suites (defined in `test/*.lisp` under packages `:structural-editing-mcp-tests/<module>`):

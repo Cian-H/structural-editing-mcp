@@ -33,7 +33,13 @@
                         (let ((sym (find-symbol upname p)))
                           (and sym (cons :test sym))))))))
 
-(let ((test-names (uiop:command-line-arguments)))
+(let* ((args (uiop:command-line-arguments))
+       (style (cond
+                ((member "--spec" args :test #'string-equal) :spec)
+                ((member "--dot" args :test #'string-equal) :dot)
+                (t :dot)))
+       (test-names (remove-if (lambda (arg) (member arg '("--spec" "--dot") :test #'string-equal)) args)))
+  (setf rove:*default-reporter* style)
   (if test-names
     (let ((all-passed t))
       (dolist (name test-names)
@@ -41,18 +47,18 @@
           (cond
             ((and target (eq :suite (car target)))
              (let ((*package* (cdr target)))
-               (unless (rove:run (cdr target))
+               (unless (rove:run (cdr target) :style style)
                  (setf all-passed nil))))
             ((and target (eq :test (car target)))
              (let* ((sym (cdr target))
                     (*package* (symbol-package sym)))
-               (unless (rove:run-test sym)
+               (unless (rove:run-test sym :style style)
                  (setf all-passed nil))))
             (t
              (format *error-output* "~&Error: Test or suite '~A' not found.~%" name)
              (setf all-passed nil)))))
       (unless all-passed
         (uiop:quit 1)))
-    (unless (rove:run :structural-editing-mcp/tests)
+    (unless (rove:run :structural-editing-mcp/tests :style style)
       (uiop:quit 1))))
 
