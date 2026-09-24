@@ -13,7 +13,7 @@
 AI code editing on Lisp codebases often fails due to unbalanced parentheses, corrupted reader macros, and fragile whitespace diffs. This project provides:
 1. **Tree-Structured Manipulations**: Mutations (`insert`, `wrap`, `overwrite`, `unwrap`, `promote`, `move`, `swap`, `split`, `merge`) operate strictly on AST nodes.
 2. **Multi-Dialect Support**: Common Lisp (`.lisp`, `.cl`, `.asd`), Clojure (`.clj`, `.cljs`, `.edn`), Scheme/Racket (`.scm`, `.rkt`), Emacs Lisp (`.el`), and Fennel (`.fnl`).
-3. **In-Memory Staging**: Modifications stage safely in memory (`*workspace-tree*`) with instant previews and are persisted to disk only when explicitly committed via `commit_workspace`.
+3. **In-Memory Multi-Workspace Staging**: Modifications stage safely in memory (`*workspace-tree*`) with instant previews, isolated parallel agent branches (`*workspace-registry*`), fast diffing/merging, and are persisted to disk only when explicitly committed via `commit_workspace`.
 4. **Static Analysis & Refactoring**: Linting, cyclomatic complexity metrics, code duplicate detection, lexical binding/shadowing analysis, and pattern replacement.
 
 ---
