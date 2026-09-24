@@ -824,9 +824,12 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
          (args (href params "arguments"))
          (path (to-list (href args "path")))
          (dialect (parse-dialect-arg (href args "dialect")))
-         (agent-id (or (href args "agent_id") (href args "agent") "default")))
+         (agent-id (or (href args "agent_id") (href args "agent") "default"))
+         (ws-id (or (href args "workspace_id") (href args "workspace") "default")))
     (handler-case
-        (let ((content (execute-tool-call name path args dialect agent-id)))
+        (let* ((ws (structural-editing-mcp.workspace:get-workspace ws-id))
+               (content (structural-editing-mcp.workspace:with-workspace-context (ws)
+                          (execute-tool-call name path args dialect agent-id))))
           (send-result id (dict "content" (list (dict "type" "text" "text" content)))))
       (structural-editing-mcp.conditions:occ-conflict-error (c)
         (send-tool-error-response

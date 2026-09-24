@@ -610,3 +610,43 @@
         (ok (gethash "isError" res))
         (ok (= structural-editing-mcp.workspace:*workspace-revision* orig-rev))
         (ok (equal structural-editing-mcp.workspace:*workspace-tree* init-tree))))))
+
+(deftest test-mcp-workspace-routing
+  (testing "tools route through workspace_id isolating independent workspaces"
+    (structural-editing-mcp.workspace:create-workspace "isolated-ws")
+    (with-open-file (f "/tmp/iso-test.lisp" :direction :output :if-exists :supersede)
+      (write-string "(defun iso () 1)" f))
+    ;; Load file into isolated-ws
+    (let* ((load-msg (structural-editing-mcp.mcp::dict
+                       "jsonrpc" "2.0"
+                       "id" 5001
+                       "method" "tools/call"
+                       "params" (structural-editing-mcp.mcp::dict
+                                  "name" "read_node"
+                                  "arguments" (structural-editing-mcp.mcp::dict
+                                                "workspace_id" "isolated-ws"
+                                                "path" #()
+                                                "load_files" #("/tmp/iso-test.lisp")))))
+           (*standard-output* (make-string-output-stream)))
+      (structural-editing-mcp.mcp:handle-message load-msg))
+    ;; Verify default workspace did NOT load this file
+    (let* ((default-ws (structural-editing-mcp.workspace:get-workspace "default"))
+           (iso-ws (structural-editing-mcp.workspace:get-workspace "isolated-ws")))
+      (ok (not (equal (structural-editing-mcp.workspace:workspace-context-tree default-ws)
+                      (structural-editing-mcp.workspace:workspace-context-tree iso-ws))))
+      (ok (= 1 (hash-table-count (structural-editing-mcp.workspace:workspace-context-clean-state iso-ws))))
+      ;; Non-existent workspace_id yields workspace_error in response
+      (let* ((bad-msg (structural-editing-mcp.mcp::dict
+                        "jsonrpc" "2.0"
+                        "id" 5002
+                        "method" "tools/call"
+                        "params" (structural-editing-mcp.mcp::dict
+                                   "name" "read_node"
+                                   "arguments" (structural-editing-mcp.mcp::dict
+                                                 "workspace_id" "non-existent-xyz"
+                                                 "path" #()))))
+             (json (call-mcp-msg bad-msg))
+             (res (gethash "result" json)))
+        (ok (gethash "isError" res))
+        (ok (equal "workspace_error" (gethash "errorType" res)))))
+    (structural-editing-mcp.workspace:delete-workspace "isolated-ws")))

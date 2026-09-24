@@ -198,3 +198,35 @@
     (setf *workspace-tree* nil)
     (ensure-workspace)
     (ok (not (null *workspace-tree*)))))
+
+(deftest test-workspace-registry
+  (testing "workspace creation, retrieval, and listing"
+    (let ((ws1 (create-workspace "test-ws-1"))
+          (ws2 (create-workspace "test-ws-2" :parent-id "test-ws-1" :base-revision 5)))
+      (ok (equal "test-ws-1" (workspace-context-id ws1)))
+      (ok (equal "test-ws-2" (workspace-context-id ws2)))
+      (ok (equal "test-ws-1" (workspace-context-parent-id ws2)))
+      (ok (= 5 (workspace-context-base-revision ws2)))
+      (ok (eq ws1 (get-workspace "test-ws-1")))
+      (ok (eq ws2 (get-workspace "test-ws-2")))
+      (let ((listed (list-workspaces)))
+        (ok (find "test-ws-1" listed :key (lambda (p) (getf p :id)) :test #'equal))
+        (ok (find "test-ws-2" listed :key (lambda (p) (getf p :id)) :test #'equal)))
+      ;; Duplicate creation error
+      (ok (signals (create-workspace "test-ws-1") 'workspace-error))
+      ;; Deletion
+      (delete-workspace "test-ws-1")
+      (delete-workspace "test-ws-2")
+      (ok (signals (get-workspace "test-ws-1") 'workspace-not-found-error))
+      ;; Deleting default workspace is forbidden
+      (ok (signals (delete-workspace "default") 'workspace-error))))
+
+  (testing "copy-workspace-context creates independent deep copy"
+    (let* ((orig (create-workspace "orig-ws"))
+           (copy (copy-workspace-context orig :new-id "copy-ws")))
+      (ok (equal "copy-ws" (workspace-context-id copy)))
+      (ok (equal "orig-ws" (workspace-context-parent-id copy)))
+      ;; Mutating copy tree does not mutate orig tree
+      (setf (workspace-context-tree copy) '(:path () :workspace (:path (0) :leaf mutated)))
+      (ok (not (equal (workspace-context-tree orig) (workspace-context-tree copy))))
+      (delete-workspace "orig-ws"))))

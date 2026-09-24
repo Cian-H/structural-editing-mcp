@@ -19,11 +19,33 @@
            :init-workspace
            :file-dialect
            :read-workspace-file
+           :load-into-workspace
            :write-workspace
            :get-filepath
            :lisp-file-p
            :collect-lisp-files
-           :load-into-workspace
+           :workspace-context-id
+           :workspace-context-parent-id
+           :workspace-context-base-revision
+           :workspace-context-tree
+           :workspace-context-file-registry
+           :workspace-context-clean-state
+           :workspace-context-clean-sources
+           :workspace-context-next-file-id
+           :workspace-context-revision
+           :workspace-context-file-revisions
+           :workspace-context-lock
+           :workspace-context-agent-views
+           :workspace-context-snapshots
+           :copy-workspace-context
+           :*workspace-registry*
+           :*workspace-registry-lock*
+           :normalize-workspace-id
+           :get-workspace
+           :create-workspace
+           :delete-workspace
+           :list-workspaces
+           :workspace-dirty-files-list
            :*workspace-lock*
            :*workspace-revision*
            :*agent-views*
@@ -62,23 +84,70 @@
   structural-editing-mcp.parser:*supported-dialects*
   "List of supported Lisp dialect keywords.")
 
-(defstruct (workspace-context (:constructor make-workspace-context-internal))
+(defstruct (workspace-context (:constructor make-workspace-context-internal)
+                                (:copier nil))
   "Encapsulated workspace context holding AST tree, file registry, and OCC state."
+  (id "default" :type string)
+  (parent-id nil)
+  (base-revision 1 :type fixnum)
   (tree '(:path () :workspace))
   (file-registry (make-hash-table :test 'equal))
   (clean-state (make-hash-table :test 'equal))
   (clean-sources (make-hash-table :test 'equal))
   (next-file-id 0 :type fixnum)
   (revision 1 :type fixnum)
+  (file-revisions (make-hash-table :test 'equal))
   (lock (bt:make-lock "workspace-lock"))
-  (agent-views (make-hash-table :test 'equal)))
+  (agent-views (make-hash-table :test 'equal))
+  (snapshots (make-hash-table :test 'equal)))
 
-(defun make-workspace-context ()
+(defun copy-workspace-context (ctx &key (new-id (workspace-context-id ctx)) parent-id base-revision)
+  "Create a deep copy of CTX with a new ID."
+  (bt:with-lock-held ((workspace-context-lock ctx))
+    (make-workspace-context-internal
+      :id new-id
+      :parent-id (or parent-id (workspace-context-id ctx))
+      :base-revision (or base-revision (workspace-context-revision ctx))
+      :tree (copy-tree (workspace-context-tree ctx))
+      :file-registry (copy-hash-table (workspace-context-file-registry ctx))
+      :clean-state (copy-hash-table (workspace-context-clean-state ctx) :test 'equal)
+      :clean-sources (copy-hash-table (workspace-context-clean-sources ctx) :test 'equal)
+      :next-file-id (workspace-context-next-file-id ctx)
+      :revision (workspace-context-revision ctx)
+      :file-revisions (copy-hash-table (workspace-context-file-revisions ctx) :test 'equal)
+      :lock (bt:make-lock (format nil "workspace-lock-~A" new-id))
+      :agent-views (copy-hash-table (workspace-context-agent-views ctx) :test 'equal)
+      :snapshots (copy-hash-table (workspace-context-snapshots ctx) :test 'equal))))
+
+(defun make-workspace-context (&key (id "default") parent-id (base-revision 1))
   "Create and return a freshly initialized independent workspace-context."
-  (make-workspace-context-internal))
+  (make-workspace-context-internal
+    :id id
+    :parent-id parent-id
+    :base-revision base-revision
+    :lock (bt:make-lock (format nil "workspace-lock-~A" id))))
 
-(defparameter *default-workspace* (make-workspace-context)
+(defvar *workspace-registry-lock* (bt:make-lock "workspace-registry-lock")
+  "Lock protecting the global workspace registry.")
+
+(defvar *workspace-registry* (make-hash-table :test 'equal)
+  "Global registry mapping workspace IDs (strings) to workspace-context instances.")
+
+(defun normalize-workspace-id (id)
+  "Normalize ID to string, defaulting to \"default\" if nil or empty."
+  (if (or (null id) (equal id ""))
+    "default"
+    (string-downcase (string id))))
+
+(defun register-workspace (ctx)
+  "Register CTX in *WORKSPACE-REGISTRY* under its ID."
+  (bt:with-lock-held (*workspace-registry-lock*)
+    (setf (gethash (workspace-context-id ctx) *workspace-registry*) ctx)))
+
+(defparameter *default-workspace* (make-workspace-context :id "default")
   "The default root workspace-context.")
+
+(register-workspace *default-workspace*)
 
 (defvar *current-workspace* *default-workspace*
   "The active workspace-context for the current dynamic extent / thread.")
@@ -96,6 +165,62 @@
 (define-symbol-macro *workspace-revision* (workspace-context-revision *current-workspace*))
 (define-symbol-macro *workspace-lock* (workspace-context-lock *current-workspace*))
 (define-symbol-macro *agent-views* (workspace-context-agent-views *current-workspace*))
+
+(defun get-workspace (&optional (id "default") &key (error-p t))
+  "Retrieve workspace-context by ID from registry, optionally signaling workspace-not-found-error."
+  (let* ((norm-id (normalize-workspace-id id))
+         (ctx (bt:with-lock-held (*workspace-registry-lock*)
+                (gethash norm-id *workspace-registry*))))
+    (cond
+      (ctx ctx)
+      (error-p (error 'workspace-not-found-error :workspace-id norm-id))
+      (t nil))))
+
+(defun create-workspace (id &key parent-id base-revision (switch-p nil))
+  "Create and register a new workspace with ID. If SWITCH-P is true, sets *CURRENT-WORKSPACE*."
+  (let ((norm-id (normalize-workspace-id id)))
+    (bt:with-lock-held (*workspace-registry-lock*)
+      (when (gethash norm-id *workspace-registry*)
+        (error 'workspace-error :message (format nil "Workspace ~S already exists" norm-id)))
+      (let ((ctx (make-workspace-context :id norm-id
+                                         :parent-id parent-id
+                                         :base-revision (or base-revision 1))))
+        (setf (gethash norm-id *workspace-registry*) ctx)
+        (when switch-p
+          (setf *current-workspace* ctx))
+        ctx))))
+
+(defun delete-workspace (id)
+  "Delete workspace by ID from registry. Cannot delete \"default\" workspace."
+  (let ((norm-id (normalize-workspace-id id)))
+    (when (equal norm-id "default")
+      (error 'workspace-error :message "Cannot delete the default workspace"))
+    (bt:with-lock-held (*workspace-registry-lock*)
+      (unless (gethash norm-id *workspace-registry*)
+        (error 'workspace-not-found-error :workspace-id norm-id))
+      (remhash norm-id *workspace-registry*))))
+
+(defun workspace-dirty-files-list (&optional (ctx *current-workspace*))
+  "Return a list of file paths in CTX that have uncommitted in-memory changes."
+  (let ((dirty '()))
+    (maphash (lambda (path-or-id filepath)
+               (when (and (listp path-or-id) filepath)
+                 (let ((file-node (get-node-at-path (workspace-context-tree ctx) path-or-id)))
+                   (when (and file-node (not (equal file-node (gethash filepath (workspace-context-clean-state ctx)))))
+                     (pushnew filepath dirty :test #'equal)))))
+             (workspace-context-file-registry ctx))
+    dirty))
+
+(defun list-workspaces ()
+  "Return a list of plists describing all registered workspaces."
+  (bt:with-lock-held (*workspace-registry-lock*)
+    (loop for id being the hash-keys of *workspace-registry*
+          using (hash-value ctx)
+          collect (list :id id
+                        :parent-id (workspace-context-parent-id ctx)
+                        :revision (workspace-context-revision ctx)
+                        :file-count (hash-table-count (workspace-context-clean-state ctx))
+                        :dirty-p (not (null (workspace-dirty-files-list ctx)))))))
 
 (defun init-workspace (&optional (ctx *current-workspace*))
   "Initialize or reset CTX as an empty workspace."

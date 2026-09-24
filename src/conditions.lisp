@@ -10,6 +10,15 @@
            :invalid-path-error-message
            :workspace-error
            :workspace-error-message
+           :workspace-not-found-error
+           :workspace-not-found-id
+           :workspace-merge-conflict-error
+           :merge-conflict-source-id
+           :merge-conflict-target-id
+           :merge-conflicting-files
+           :workspace-dirty-error
+           :workspace-dirty-id
+           :workspace-dirty-files
            :occ-conflict-error
            :occ-conflict-agent-id
            :occ-conflict-target-path
@@ -57,6 +66,33 @@
   (:report (lambda (condition stream)
              (format stream "Workspace error: ~A" (workspace-error-message condition))))
   (:documentation "Signaled when a workspace operation fails (e.g. uninitialized workspace or missing file)."))
+
+(define-condition workspace-not-found-error (workspace-error)
+  ((workspace-id :initarg :workspace-id :reader workspace-not-found-id :initform nil))
+  (:report (lambda (condition stream)
+             (format stream "Workspace not found: ~S" (workspace-not-found-id condition))))
+  (:documentation "Signaled when attempting to access a workspace ID that does not exist."))
+
+(define-condition workspace-merge-conflict-error (workspace-error)
+  ((source-id :initarg :source-id :reader merge-conflict-source-id :initform nil)
+   (target-id :initarg :target-id :reader merge-conflict-target-id :initform nil)
+   (conflicting-files :initarg :conflicting-files :reader merge-conflicting-files :initform nil))
+  (:report (lambda (condition stream)
+             (format stream "Merge conflict between workspace ~S and ~S: overlapping changes in files: ~{~A~^, ~}"
+                     (merge-conflict-source-id condition)
+                     (merge-conflict-target-id condition)
+                     (merge-conflicting-files condition))))
+  (:documentation "Signaled when merging two workspaces encounters conflicting modifications to the same file."))
+
+(define-condition workspace-dirty-error (workspace-error)
+  ((workspace-id :initarg :workspace-id :reader workspace-dirty-id :initform nil)
+   (dirty-files :initarg :dirty-files :reader workspace-dirty-files :initform nil))
+  (:report (lambda (condition stream)
+             (format stream "Workspace ~S has uncommitted in-memory changes in ~D file(s): ~{~A~^, ~}. Use force to override."
+                     (workspace-dirty-id condition)
+                     (length (workspace-dirty-files condition))
+                     (workspace-dirty-files condition))))
+  (:documentation "Signaled when an operation would overwrite uncommitted in-memory modifications without force."))
 
 (defun format-path-notation (path)
   "Format an AST path into JSON-style bracketed notation e.g. [0, 0, 2] or []."
