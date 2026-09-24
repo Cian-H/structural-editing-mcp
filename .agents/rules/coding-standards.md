@@ -109,3 +109,12 @@ Update the workspace reference atomically at the top level:
 - Always use explicit `in-package` after `defpackage`.
 - Leverage `:use` or package nicknames cleanly.
 - Export all public APIs in `defpackage` so other modules and the test suite can access them cleanly.
+
+---
+
+## 8. Structural Editing & Dogfooding Directive
+
+- **Dogfood Our Own MCP**: When the `structural-editing` MCP tools are available in the agent's tool environment, always use them to read, inspect, modify, and refactor Lisp files (`.lisp`, `.cl`, `.asd`).
+- **No Text Diffs on Lisp Code**: Do not perform direct string replacements or text diffs on Lisp source files when the MCP server is available.
+- **Exceptions**: Non-Lisp files (Markdown, JSON, Nix, Shell) and emergency fallbacks when the MCP server is offline.
+
