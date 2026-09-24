@@ -16,6 +16,7 @@
            :merge-conflict-source-id
            :merge-conflict-target-id
            :merge-conflicting-files
+           :merge-conflicting-details
            :workspace-dirty-error
            :workspace-dirty-id
            :workspace-dirty-files
@@ -75,12 +76,14 @@
 (define-condition workspace-merge-conflict-error (workspace-error)
   ((source-id :initarg :source-id :reader merge-conflict-source-id :initform nil)
    (target-id :initarg :target-id :reader merge-conflict-target-id :initform nil)
-   (conflicting-files :initarg :conflicting-files :reader merge-conflicting-files :initform nil))
+   (conflicting-files :initarg :conflicting-files :reader merge-conflicting-files :initform nil)
+   (conflicting-details :initarg :conflicting-details :reader merge-conflicting-details :initform nil))
   (:report (lambda (condition stream)
-             (format stream "Merge conflict between workspace ~S and ~S: overlapping changes in files: ~{~A~^, ~}"
+             (format stream "Merge conflict between workspace ~S and ~S: overlapping changes in files: ~{~A~^, ~}~@[ (details: ~S)~]"
                      (merge-conflict-source-id condition)
                      (merge-conflict-target-id condition)
-                     (merge-conflicting-files condition))))
+                     (merge-conflicting-files condition)
+                     (slot-value condition 'conflicting-details))))
   (:documentation "Signaled when merging two workspaces encounters conflicting modifications to the same file."))
 
 (define-condition workspace-dirty-error (workspace-error)

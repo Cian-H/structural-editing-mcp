@@ -32,7 +32,7 @@
                         (ok (equal (gethash "name" info) "structural-editing-mcp")))))))
 
 (deftest test-mcp-tools-list
-         (testing "handle-message parses tools/list and exposes 5 unified tools"
+         (testing "handle-message parses tools/list and exposes all registered tools"
                   (let* ((msg (structural-editing-mcp.mcp::dict
                                 "jsonrpc" "2.0"
                                 "id" 2
@@ -42,20 +42,26 @@
                     (let* ((res (gethash "result" result-json))
                            (tools (gethash "tools" res)))
                       (ok (listp tools))
-                      (ok (= (length tools) 19))
+                      (ok (= (length tools) 21))
                       (let ((names (mapcar (lambda (x) (gethash "name" x)) tools)))
                         (ok (member "read_node" names :test #'equal))
                         (ok (not (member "read_workspace" names :test #'equal)))
                         (ok (member "ast_modify" names :test #'equal))
                         (ok (member "ast_remove" names :test #'equal))
                         (ok (member "ast_relocate" names :test #'equal))
+                        (ok (member "ast_search" names :test #'equal))
+                        (ok (member "ast_rename" names :test #'equal))
+                        (ok (member "ast_replace_pattern" names :test #'equal))
+                        (ok (member "ast_extract_variable" names :test #'equal))
+                        (ok (member "ast_extract_function" names :test #'equal))
                         (ok (member "ast_lint" names :test #'equal))
                         (ok (member "ast_complexity_metrics" names :test #'equal))
                         (ok (member "ast_find_duplicates" names :test #'equal))
                         (ok (member "ast_analyze_bindings" names :test #'equal))
                         (ok (member "ast_suggest_refactorings" names :test #'equal))
-                        (ok (member "ast_extract_function" names :test #'equal))
                         (ok (member "workspace_manage" names :test #'equal))
+                        (ok (member "workspace_create_file" names :test #'equal))
+                        (ok (member "workspace_rebase" names :test #'equal))
                         (ok (member "workspace_status" names :test #'equal))
                         (ok (member "workspace_diff" names :test #'equal))
                         (ok (member "workspace_merge" names :test #'equal))
@@ -732,3 +738,56 @@
                     (ok (search "Successfully merged" (gethash "text" (first (gethash "content" (gethash "result" merge-res)))))))
                   (structural-editing-mcp.workspace:delete-workspace "mcp-merge-src")
                   (structural-editing-mcp.workspace:delete-workspace "mcp-merge-tgt")))
+
+(deftest test-mcp-create-file-rebase-and-pagination
+         (testing "workspace_create_file, workspace_rebase, and read_node pagination via MCP"
+                  (structural-editing-mcp.workspace:create-workspace "mcp-cf-base")
+                  (let* ((cf-msg (structural-editing-mcp.mcp::dict
+                                   "jsonrpc" "2.0"
+                                   "id" 8001
+                                   "method" "tools/call"
+                                   "params" (structural-editing-mcp.mcp::dict
+                                              "name" "workspace_create_file"
+                                              "arguments" (structural-editing-mcp.mcp::dict
+                                                            "workspace_id" "mcp-cf-base"
+                                                            "filepath" "/tmp/test-mcp-cf.lisp"
+                                                            "content" "(defun f0 () 0) (defun f1 () 1) (defun f2 () 2)"))))
+                         (cf-res (call-mcp-msg cf-msg)))
+                    (ok (null (gethash "isError" (gethash "result" cf-res))))
+                    (ok (search "created successfully" (gethash "text" (first (gethash "content" (gethash "result" cf-res)))))))
+
+                  ;; Test pagination in read_node
+                  (let* ((read-msg (structural-editing-mcp.mcp::dict
+                                     "jsonrpc" "2.0"
+                                     "id" 8002
+                                     "method" "tools/call"
+                                     "params" (structural-editing-mcp.mcp::dict
+                                                "name" "read_node"
+                                                "arguments" (structural-editing-mcp.mcp::dict
+                                                              "workspace_id" "mcp-cf-base"
+                                                              "path" (list 0 0)
+                                                              "limit" 2
+                                                              "offset" 0))))
+                         (read-res (call-mcp-msg read-msg))
+                         (text (gethash "text" (first (gethash "content" (gethash "result" read-res))))))
+                    (ok (null (gethash "isError" (gethash "result" read-res))))
+                    (ok (search "showing 1-2" text))
+                    (ok (search "more child items" text)))
+
+                  ;; Fork branch and test rebase
+                  (structural-editing-mcp.workspace:fork-workspace "mcp-cf-base" "mcp-cf-branch")
+                  (let* ((rebase-msg (structural-editing-mcp.mcp::dict
+                                       "jsonrpc" "2.0"
+                                       "id" 8003
+                                       "method" "tools/call"
+                                       "params" (structural-editing-mcp.mcp::dict
+                                                  "name" "workspace_rebase"
+                                                  "arguments" (structural-editing-mcp.mcp::dict
+                                                                "source_workspace_id" "mcp-cf-branch"
+                                                                "target_workspace_id" "mcp-cf-base"))))
+                         (rebase-res (call-mcp-msg rebase-msg)))
+                    (ok (null (gethash "isError" (gethash "result" rebase-res))))
+                    (ok (search "successfully rebased" (gethash "text" (first (gethash "content" (gethash "result" rebase-res)))))))
+
+                  (structural-editing-mcp.workspace:delete-workspace "mcp-cf-branch")
+                  (structural-editing-mcp.workspace:delete-workspace "mcp-cf-base")))

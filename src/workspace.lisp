@@ -5,6 +5,7 @@
         :structural-editing-mcp.tree
         :structural-editing-mcp.conditions)
   (:import-from :serapeum :filter-map :mappend :string-prefix-p)
+  (:import-from :structural-editing-mcp.edit :overwrite-node)
   (:export :workspace-context
            :make-workspace-context
            :*current-workspace*
@@ -53,8 +54,12 @@
            :reload-workspace
            :diff-workspaces
            :merge-workspaces
+           :merge-file-ast
+           :rebase-workspace
+           :add-file-to-workspace
            :workspace-status
            :workspace-dirty-files-list
+           :workspace-all-files-list
            :*workspace-lock*
            :*workspace-revision*
            :*agent-views*
@@ -254,6 +259,32 @@ If CTX1 and CTX2 share the same lock, acquires the lock only once."
              (workspace-context-file-registry ctx))
     dirty))
 
+(defun workspace-all-files-list (&optional (ctx *current-workspace*))
+  "Return a list of all file paths tracked in CTX (both clean and uncommitted)."
+  (let ((files '()))
+    (maphash (lambda (path-or-id filepath)
+               (when (and (listp path-or-id) filepath)
+                 (pushnew filepath files :test #'equal)))
+             (workspace-context-file-registry ctx))
+    files))
+
+(defun add-file-to-workspace (filepath &key (content "") dialect (ctx *current-workspace*))
+  "Add a new file FILEPATH with initial CONTENT and optional DIALECT to CTX in memory without touching disk.
+The file is immediately marked as uncommitted (dirty) until committed."
+  (let* ((canonical-path (or (safe-truename filepath) filepath))
+         (eff-dialect (or dialect (file-dialect canonical-path) :common-lisp)))
+    (with-workspace-context (ctx)
+      (bt:with-lock-held ((workspace-context-lock ctx))
+        (when (find-file-path-coords canonical-path)
+          (error 'workspace-error :message (format nil "File ~A already exists in workspace ~A"
+                                                  filepath (workspace-context-id ctx))))
+        (multiple-value-bind (parsed-file-node sources)
+            (string-to-sexp content :dialect eff-dialect)
+          (setf (gethash canonical-path *file-clean-sources*) sources)
+          (let ((id (insert-file-into-workspace parsed-file-node canonical-path eff-dialect)))
+            (incf (workspace-context-revision ctx))
+            (values id (find-file-path-coords canonical-path))))))))
+
 (defun list-workspaces ()
   "Return a list of plists describing all registered workspaces."
   (let ((workspaces
@@ -265,7 +296,7 @@ If CTX1 and CTX2 share the same lock, acquires the lock only once."
                                      (list :id (workspace-context-id ctx)
                                            :parent-id (workspace-context-parent-id ctx)
                                            :revision (workspace-context-revision ctx)
-                                           :file-count (hash-table-count (workspace-context-clean-state ctx))
+                                           :file-count (length (workspace-all-files-list ctx))
                                            :dirty-p (not (null (workspace-dirty-files-list ctx))))))))
 
 (defun init-workspace (&optional (ctx *current-workspace*))
@@ -394,31 +425,88 @@ If FORCE is nil and uncommitted dirty files would be overwritten, signals WORKSP
     (when coords
       (get-node-at-path (workspace-context-tree ctx) coords))))
 
+(defun merge-file-ast (base-file src-file tgt-file)
+  "Perform a 3-way AST merge of SRC-FILE and TGT-FILE against BASE-FILE at the top-level form level.
+Returns (values merged-file-node conflict-p conflicting-indices)."
+  (cond
+    ((equal src-file tgt-file)
+     (values (copy-tree src-file) nil nil))
+    ((null base-file)
+     (values nil t '(:no-base)))
+    (t
+     (let* ((base-forms (get-node-children base-file))
+            (src-forms (get-node-children src-file))
+            (tgt-forms (get-node-children tgt-file))
+            (path (or (get-node-path tgt-file) (get-node-path src-file) '()))
+            (tag (or (get-node-tag tgt-file) (get-node-tag src-file) :file))
+            (max-len (max (length base-forms) (length src-forms) (length tgt-forms)))
+            (merged-forms '())
+            (conflicts '())
+            (conflict-p nil))
+       (dotimes (i max-len)
+         (let ((b (nth i base-forms))
+               (s (nth i src-forms))
+               (tg (nth i tgt-forms)))
+           (cond
+             ((and (equal s b) (equal tg b))
+              (when b (push (copy-tree b) merged-forms)))
+             ((and (not (equal s b)) (equal tg b))
+              (when s (push (copy-tree s) merged-forms)))
+             ((and (equal s b) (not (equal tg b)))
+              (when tg (push (copy-tree tg) merged-forms)))
+             ((equal s tg)
+              (when s (push (copy-tree s) merged-forms)))
+             (t
+              (setf conflict-p t)
+              (push i conflicts)))))
+       (if conflict-p
+           (values nil t (nreverse conflicts))
+           (let ((merged-node (list* :path path tag (nreverse merged-forms))))
+             (values (reindex-paths merged-node path) nil nil)))))))
+
 (defun diff-workspaces-unlocked (src tgt)
   "Compare workspaces SRC and TGT without acquiring locks (caller must hold locks). Returns a plist summarizing discrepancies."
-  (let* ((src-files (loop for k being the hash-keys of (workspace-context-clean-state src) collect k))
-         (tgt-files (loop for k being the hash-keys of (workspace-context-clean-state tgt) collect k))
+  (let* ((src-files (workspace-all-files-list src))
+         (tgt-files (workspace-all-files-list tgt))
          (src-dirty (workspace-dirty-files-list src))
          (tgt-dirty (workspace-dirty-files-list tgt))
          (source-only (set-difference src-files tgt-files :test #'equal))
          (target-only (set-difference tgt-files src-files :test #'equal))
          (common-files (intersection src-files tgt-files :test #'equal))
-         (modified-in-both (intersection src-dirty tgt-dirty :test #'equal))
+         (both-dirty (intersection src-dirty tgt-dirty :test #'equal))
          (source-modified-only (intersection src-dirty (set-difference common-files tgt-dirty :test #'equal) :test #'equal))
          (target-modified-only (intersection tgt-dirty (set-difference common-files src-dirty :test #'equal) :test #'equal))
-         (ast-differing '()))
+         (ast-differing '())
+         (ast-mergeable '())
+         (colliding '())
+         (conflict-details '()))
     (dolist (f common-files)
       (let ((node-src (get-file-node-in-workspace src f))
             (node-tgt (get-file-node-in-workspace tgt f)))
         (when (and node-src node-tgt (not (equal node-src node-tgt)))
           (push f ast-differing))))
+    (dolist (f both-dirty)
+      (let ((base-node (or (gethash f (workspace-context-clean-state tgt))
+                           (gethash f (workspace-context-clean-state src))))
+            (src-node (get-file-node-in-workspace src f))
+            (tgt-node (get-file-node-in-workspace tgt f)))
+        (multiple-value-bind (merged-node conflict-p conflict-indices)
+            (merge-file-ast base-node src-node tgt-node)
+          (declare (ignore merged-node))
+          (if conflict-p
+              (progn
+                (push f colliding)
+                (push (list :file f :conflicts conflict-indices) conflict-details))
+              (push f ast-mergeable)))))
     (list :source-id (workspace-context-id src)
           :target-id (workspace-context-id tgt)
           :source-only source-only
           :target-only target-only
           :source-modified-only source-modified-only
           :target-modified-only target-modified-only
-          :modified-in-both modified-in-both
+          :ast-mergeable ast-mergeable
+          :modified-in-both colliding
+          :conflict-details conflict-details
           :ast-differing-files ast-differing)))
 
 (defun diff-workspaces (source-id target-id)
@@ -432,7 +520,8 @@ If FORCE is nil and uncommitted dirty files would be overwritten, signals WORKSP
   "Transfer file FILEPATH from SRC-CTX into TGT-CTX."
   (let ((node (get-file-node-in-workspace src-ctx filepath))
         (dialect (or (file-dialect filepath) :common-lisp))
-        (clean-sources (gethash filepath (workspace-context-clean-sources src-ctx))))
+        (clean-sources (gethash filepath (workspace-context-clean-sources src-ctx)))
+        (clean-state (gethash filepath (workspace-context-clean-state src-ctx))))
     (unless node
       (error 'workspace-error :message (format nil "File ~A not found in workspace ~A" filepath (workspace-context-id src-ctx))))
     (with-workspace-context (tgt-ctx)
@@ -446,13 +535,15 @@ If FORCE is nil and uncommitted dirty files would be overwritten, signals WORKSP
                                   (declare (ignore parsed-node))
                                   (setf (gethash filepath *file-clean-sources*) sources)
                                   (insert-file-into-workspace (copy-tree node) filepath dialect)))
-                              (setf (gethash filepath *file-clean-state*) (copy-tree node)))
+                              (if clean-state
+                                (setf (gethash filepath *file-clean-state*) (copy-tree clean-state))
+                                (remhash filepath *file-clean-state*)))
                             (setf *workspace-tree* (reindex-paths *workspace-tree*)))))
 
 (defun merge-workspaces (source-id target-id &key files (strategy :fast-forward-or-disjoint))
   "Merge SOURCE-ID into TARGET-ID.
 If FILES is provided, transfers only those files.
-Otherwise performs fast-forward or disjoint merge, signaling WORKSPACE-MERGE-CONFLICT-ERROR on conflicting modifications."
+Otherwise performs fast-forward or disjoint/AST-level merge, signaling WORKSPACE-MERGE-CONFLICT-ERROR on conflicting modifications."
   (let* ((src (get-workspace source-id))
          (tgt (get-workspace target-id)))
     (when (equal (workspace-context-id src) (workspace-context-id tgt))
@@ -479,18 +570,89 @@ Otherwise performs fast-forward or disjoint merge, signaling WORKSPACE-MERGE-CON
                                   (setf (workspace-context-next-file-id tgt) (workspace-context-next-file-id src))
                                   (setf (workspace-context-revision tgt) (workspace-context-revision src))
                                   (list :action "fast-forward" :merged-files (or (getf diff :source-modified-only) (getf diff :source-only))))
-                                ;; Disjoint files: verify no overlapping modified files
+                                ;; Disjoint files and AST-mergeable files
                                 (t
                                   (when (getf diff :modified-in-both)
                                     (error 'workspace-merge-conflict-error
                                            :source-id (workspace-context-id src)
                                            :target-id (workspace-context-id tgt)
-                                           :conflicting-files (getf diff :modified-in-both)))
-                                  (let ((files-to-merge (append (getf diff :source-only) (getf diff :source-modified-only))))
+                                           :conflicting-files (getf diff :modified-in-both)
+                                           :conflicting-details (getf diff :conflict-details)))
+                                  (let ((files-to-merge (append (getf diff :source-only) (getf diff :source-modified-only)))
+                                        (ast-merge-files (getf diff :ast-mergeable)))
                                     (dolist (f files-to-merge)
                                       (copy-file-between-workspaces src tgt f))
+                                    (dolist (f ast-merge-files)
+                                      (let* ((base-node (or (gethash f (workspace-context-clean-state tgt))
+                                                            (gethash f (workspace-context-clean-state src))))
+                                             (src-node (get-file-node-in-workspace src f))
+                                             (tgt-node (get-file-node-in-workspace tgt f))
+                                             (merged-node (merge-file-ast base-node src-node tgt-node)))
+                                        (with-workspace-context (tgt)
+                                          (let ((coords (find-file-path-coords f)))
+                                            (when coords
+                                              (setf *workspace-tree* (overwrite-node *workspace-tree* coords merged-node))
+                                              (setf *workspace-tree* (reindex-paths *workspace-tree*)))))))
                                     (incf (workspace-context-revision tgt))
-                                    (list :action "disjoint" :merged-files files-to-merge))))))))
+                                    (list :action (if ast-merge-files "disjoint-and-ast-merge" "disjoint")
+                                          :merged-files (append files-to-merge ast-merge-files)))))))))
+
+(defun rebase-workspace (source-id &key (onto-id "default") (strategy :error))
+  "Rebase SOURCE-ID workspace onto ONTO-ID workspace.
+Transfers upstream files, applies non-conflicting upstream changes, and performs 3-way AST merges on modified files.
+STRATEGY can be :error (signal on collision), :theirs (accept onto version), or :ours (keep source version)."
+  (let* ((src (get-workspace source-id))
+         (onto (get-workspace onto-id))
+         (norm-strategy (if (stringp strategy) (intern (string-upcase strategy) :keyword) strategy)))
+    (when (equal (workspace-context-id src) (workspace-context-id onto))
+      (error 'workspace-error :message (format nil "Cannot rebase workspace ~S onto itself" (workspace-context-id src))))
+    (with-workspaces-locked (src onto)
+      (let* ((diff (diff-workspaces-unlocked src onto))
+             (onto-only (getf diff :target-only))
+             (onto-modified (getf diff :target-modified-only))
+             (both-modified (append (getf diff :ast-mergeable) (getf diff :modified-in-both)))
+             (conflicts (getf diff :modified-in-both))
+             (conflict-details (getf diff :conflict-details))
+             (updated-files '()))
+        (when (and conflicts (eq norm-strategy :error))
+          (error 'workspace-merge-conflict-error
+                 :source-id (workspace-context-id src)
+                 :target-id (workspace-context-id onto)
+                 :conflicting-files conflicts
+                 :conflicting-details conflict-details))
+        (dolist (f onto-only)
+          (copy-file-between-workspaces onto src f)
+          (push f updated-files))
+        (dolist (f onto-modified)
+          (copy-file-between-workspaces onto src f)
+          (push f updated-files))
+        (dolist (f both-modified)
+          (let* ((base-node (or (gethash f (workspace-context-clean-state onto))
+                                (gethash f (workspace-context-clean-state src))))
+                 (src-node (get-file-node-in-workspace src f))
+                 (onto-node (get-file-node-in-workspace onto f)))
+            (multiple-value-bind (merged-node conflict-p)
+                (merge-file-ast base-node src-node onto-node)
+              (let ((chosen-node
+                      (cond
+                        ((not conflict-p) merged-node)
+                        ((eq norm-strategy :theirs) (copy-tree onto-node))
+                        ((eq norm-strategy :ours) (copy-tree src-node))
+                        (t (copy-tree onto-node)))))
+                (with-workspace-context (src)
+                  (let ((coords (find-file-path-coords f)))
+                    (when coords
+                      (setf *workspace-tree* (overwrite-node *workspace-tree* coords chosen-node))
+                      (setf *workspace-tree* (reindex-paths *workspace-tree*))))
+                  (push f updated-files))))))
+        (setf (workspace-context-parent-id src) (workspace-context-id onto))
+        (setf (workspace-context-base-revision src) (workspace-context-revision onto))
+        (incf (workspace-context-revision src))
+        (list :action "rebase"
+              :source-id (workspace-context-id src)
+              :onto-id (workspace-context-id onto)
+              :updated-files (remove-duplicates updated-files :test #'equal)
+              :strategy norm-strategy)))))
 
 (defun normalize-agent-id (agent-id)
   "Return AGENT-ID, defaulting to \"default\" if nil or empty string."

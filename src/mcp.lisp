@@ -115,40 +115,59 @@
               (format s "~A[~{~A~^, ~}] ~A: ~A~%" indent cpath ctag snippet)
               (print-children-tree s child (1+ current-depth) max-depth cpath))))))
 
-(defun format-children-preview (s children path depth &optional (label-suffix ""))
-  "Format child nodes with paths, tags, and preview snippets up to DEPTH."
+(defun format-children-preview (s children path depth &optional (label-suffix "") &key (limit 50) (offset 0))
+  "Format child nodes with paths, tags, and preview snippets up to DEPTH with optional pagination."
   (when children
-    (format s "~%Children (~A~A):~%" (length children) label-suffix)
-    (loop for child in children
-          for idx from 0
-          for cpath = (or (structural-editing-mcp.tree:get-node-path child)
-                          (append path (list idx)))
-          for ctag = (structural-editing-mcp.tree:get-node-tag child)
-          for snippet = (truncate-preview-string
-                          (structural-editing-mcp.parser:sexp-to-string child))
-          do
-          (format s "  [~{~A~^, ~}] ~A: ~A~%" cpath ctag snippet)
-          (when (> depth 1)
-            (print-children-tree s child 1 depth cpath)))))
+    (let* ((total (length children))
+           (start (min (max 0 (or offset 0)) total))
+           (effective-limit (or limit 50))
+           (end (min (+ start effective-limit) total))
+           (slice (subseq children start end)))
+      (if (or (plusp start) (< end total))
+        (format s "~%Children (~A~A, showing ~A-~A):~%" total label-suffix (1+ start) end)
+        (format s "~%Children (~A~A):~%" total label-suffix))
+      (loop for child in slice
+            for idx from start
+            for cpath = (or (structural-editing-mcp.tree:get-node-path child)
+                            (append path (list idx)))
+            for ctag = (structural-editing-mcp.tree:get-node-tag child)
+            for snippet = (truncate-preview-string
+                            (structural-editing-mcp.parser:sexp-to-string child))
+            do
+            (format s "  [~{~A~^, ~}] ~A: ~A~%" cpath ctag snippet)
+            (when (> depth 1)
+              (print-children-tree s child 1 depth cpath)))
+      (when (< end total)
+        (format s "  ... (~A more child items; use limit and offset in read_node to paginate)~%" (- total end))))))
 
-(defun format-dialect-node-preview (s dialect-node d-path)
-  "Format preview for a single DIALECT-NODE under D-PATH to stream S."
+(defun format-dialect-node-preview (s dialect-node d-path &key (limit 50) (offset 0))
+  "Format preview for a single DIALECT-NODE under D-PATH to stream S with optional pagination."
   (let* ((d-tag (structural-editing-mcp.tree:get-node-tag dialect-node))
-         (file-nodes (structural-editing-mcp.tree:get-node-children dialect-node)))
-    (format s "  [~{~A~^, ~}] ~A (~A file~:P):~%"
-            d-path d-tag (length file-nodes))
-    (loop for file-node in file-nodes
-          for f-idx from 0
+         (file-nodes (structural-editing-mcp.tree:get-node-children dialect-node))
+         (total (length file-nodes))
+         (start (min (max 0 (or offset 0)) total))
+         (effective-limit (or limit 50))
+         (end (min (+ start effective-limit) total))
+         (slice (subseq file-nodes start end)))
+    (if (or (plusp start) (< end total))
+      (format s "  [~{~A~^, ~}] ~A (~A file~:P, showing ~A-~A):~%"
+              d-path d-tag total (1+ start) end)
+      (format s "  [~{~A~^, ~}] ~A (~A file~:P):~%"
+              d-path d-tag total))
+    (loop for file-node in slice
+          for f-idx from start
           for f-path = (or (structural-editing-mcp.tree:get-node-path file-node)
                            (append d-path (list f-idx)))
           for filepath = (structural-editing-mcp.workspace:get-filepath f-path)
           for form-count = (length (structural-editing-mcp.tree:get-node-children file-node))
           do
           (format s "    [~{~A~^, ~}] :FILE (~A) — ~A top-level forms~%"
-                  f-path (or filepath "unknown") form-count))))
+                  f-path (or filepath "unknown") form-count))
+    (when (< end total)
+      (format s "    ... (~A more files; use limit and offset in read_node to paginate)~%" (- total end)))))
 
-(defun format-workspace-preview (s children)
-  "Format preview for workspace root to stream S."
+(defun format-workspace-preview (s children &key (limit 50) (offset 0))
+  "Format preview for workspace root to stream S with pagination."
   (if (null children)
     (format s "Workspace is empty. Provide load_files in read_node to load files into the workspace.~%")
     (progn
@@ -156,27 +175,35 @@
       (loop for dialect-node in children
             for d-idx from 0
             for d-path = (or (structural-editing-mcp.tree:get-node-path dialect-node) (list d-idx))
-            do (format-dialect-node-preview s dialect-node d-path)))))
+            do (format-dialect-node-preview s dialect-node d-path :limit limit :offset offset)))))
 
-(defun format-dialect-preview (s children path tag)
-  "Format preview for a dialect partition node to stream S."
+(defun format-dialect-preview (s children path tag &key (limit 50) (offset 0))
+  "Format preview for a dialect partition node to stream S with optional pagination."
   (format s "Dialect: ~A~%" tag)
   (if (null children)
     (format s "No files loaded for this dialect.~%")
-    (progn
-      (format s "Files Loaded (~A):~%" (length children))
-      (loop for file-node in children
-            for idx from 0
+    (let* ((total (length children))
+           (start (min (max 0 (or offset 0)) total))
+           (effective-limit (or limit 50))
+           (end (min (+ start effective-limit) total))
+           (slice (subseq children start end)))
+      (if (or (plusp start) (< end total))
+        (format s "Files Loaded (~A, showing ~A-~A):~%" total (1+ start) end)
+        (format s "Files Loaded (~A):~%" total))
+      (loop for file-node in slice
+            for idx from start
             for f-path = (or (structural-editing-mcp.tree:get-node-path file-node)
                              (append path (list idx)))
             for filepath = (structural-editing-mcp.workspace:get-filepath f-path)
             for form-count = (length (structural-editing-mcp.tree:get-node-children file-node))
             do
             (format s "  [~{~A~^, ~}] :FILE (~A) — ~A top-level forms~%"
-                    f-path (or filepath "unknown") form-count)))))
+                    f-path (or filepath "unknown") form-count))
+      (when (< end total)
+        (format s "  ... (~A more files; use limit and offset in read_node to paginate)~%" (- total end))))))
 
-(defun format-node-preview (node &key (depth 2))
-  "Format a node with its path, tag, rendered code, and summary of children up to DEPTH."
+(defun format-node-preview (node &key (depth 2) (limit 50) (offset 0))
+  "Format a node with its path, tag, rendered code, and summary of children up to DEPTH with pagination."
   (if (null node)
     "Node not found at given path."
     (let* ((path (structural-editing-mcp.tree:get-node-path node))
@@ -189,17 +216,17 @@
         (format s "Tag: ~A~%" tag)
         (cond
           ((eq tag :workspace)
-            (format-workspace-preview s children))
+            (format-workspace-preview s children :limit limit :offset offset))
           ((member tag structural-editing-mcp.workspace:*known-dialects*)
-            (format-dialect-preview s children path tag))
+            (format-dialect-preview s children path tag :limit limit :offset offset))
           ((eq tag :file)
             (let ((filepath (structural-editing-mcp.workspace:get-filepath path)))
               (when filepath (format s "File: ~A~%" filepath)))
             (format s "Code:~%~A~%" code)
-            (format-children-preview s children path depth " top-level forms"))
+            (format-children-preview s children path depth " top-level forms" :limit limit :offset offset))
           (t
             (format s "Code:~%~A~%" code)
-            (format-children-preview s children path depth)))))))
+            (format-children-preview s children path depth "" :limit limit :offset offset)))))))
 
 ;;; AST Mutation Dispatchers
 
@@ -408,6 +435,8 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       "Inspect any node in the AST or workspace. Returns rendered code and a nested tree of child paths up to 'depth' levels. BEST PRACTICE: Always read parent forms (e.g. [0, 10]) to see the entire expression and its child paths at once—do NOT probe child indices one-by-one. Use 'ast_search' to find symbols/calls across the workspace. Pass 'load_files' on initial call to populate the workspace from disk."
       (dict "path" +prop-path+
             "depth" (prop-integer "Recursion depth for displaying nested children and their paths (default: 2). Use depth 1 for only immediate children, 2 or 3 to inspect deeper sub-expressions.")
+            "limit" (prop-integer "Optional maximum number of child nodes or files to display in preview (default: 50). Use to paginate large collections.")
+            "offset" (prop-integer "Optional 0-indexed child offset to start displaying from (default: 0).")
             "load_files" +prop-load-files+
             "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+))
@@ -541,20 +570,45 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
             "agent_id" +prop-agent-id+))
 
     (make-tool
+      "workspace_create_file"
+      "Create a new file in memory within the specified workspace without writing to disk immediately. Staged in memory as dirty/uncommitted until committed with commit_workspace."
+      (dict "filepath" (prop-string "Path of the new file (e.g. 'src/foo.lisp').")
+            "content" (prop-string "Initial S-expression or code content (default: empty).")
+            "dialect" +prop-dialect+
+            "workspace_id" +prop-workspace-id+
+            "agent_id" +prop-agent-id+)
+      (list "filepath"))
+
+    (make-tool
+      "workspace_rebase"
+      "Rebase a branch workspace onto an updated upstream workspace (e.g. 'default'). Transfers newly added upstream files, applies non-conflicting upstream changes, and performs 3-way AST-level form merges on modified files. Supports optional conflict resolution strategies: 'error' (default), 'theirs' (accept upstream), or 'ours' (keep branch changes)."
+      (dict "source_workspace_id" (prop-string "The branch workspace to rebase (e.g. 'agent-1').")
+            "target_workspace_id" (prop-string "The upstream workspace to rebase onto (default: 'default').")
+            "strategy" (prop-string "Conflict resolution strategy if AST collisions occur: 'error', 'theirs', or 'ours' (default: 'error')."
+                                    :enum (list "error" "theirs" "ours"))
+            "agent_id" +prop-agent-id+)
+      (list "source_workspace_id"))
+
+    (make-tool
       "workspace_manage"
       "Manage isolated multi-agent workspace lifecycle. Actions:
 - 'create': Create an empty named workspace (requires target_id).
+- 'create_file': Create a new file in memory in workspace_id (requires filepath, optional content/dialect).
 - 'list': List all active workspace IDs and their parent/revision metadata.
 - 'delete': Delete a named workspace (requires workspace_id, cannot delete 'default').
 - 'clear': Reset a workspace to empty state (requires force: true if dirty).
-- 'fork': Branch source_id into new target_id for isolated parallel editing.
+- 'fork': Branch source_id into new target_id for isolated parallel editing (recommended checkpoint mechanism).
+- 'rebase': Rebase workspace_id onto source_id (incorporates upstream changes).
 - 'snapshot': Save an in-memory named checkpoint of workspace_id (requires snapshot_name).
 - 'restore': Roll back workspace_id to a previously saved checkpoint (requires snapshot_name).
 - 'reload': Re-read files from disk into memory (requires force: true if dirty)."
-      (dict "action" (dict "type" "string" "description" "Action to perform: 'create', 'list', 'delete', 'clear', 'fork', 'snapshot', 'restore', or 'reload'.")
+      (dict "action" (dict "type" "string" "description" "Action to perform: 'create', 'create_file', 'list', 'delete', 'clear', 'fork', 'rebase', 'snapshot', 'restore', or 'reload'.")
             "workspace_id" (prop-string "Target workspace identifier for the action.")
-            "source_id" (prop-string "Source workspace identifier (required for 'fork').")
-            "target_id" (prop-string "New workspace identifier (required for 'fork' or 'create').")
+            "source_id" (prop-string "Source workspace identifier (for 'fork' or 'rebase').")
+            "target_id" (prop-string "New workspace identifier (for 'fork' or 'create').")
+            "filepath" (prop-string "File path for 'create_file'.")
+            "content" (prop-string "Initial file content for 'create_file'.")
+            "strategy" (prop-string "Conflict resolution strategy for 'rebase': 'error', 'theirs', or 'ours' (default: 'error').")
             "snapshot_name" (prop-string "Snapshot name for 'snapshot' or 'restore'.")
             "files" (prop-string-array "Optional subset of file paths to reload (for 'reload').")
             "force" (prop-boolean "If true, discards uncommitted in-memory edits when clearing or reloading.")
@@ -575,7 +629,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 
     (make-tool
       "workspace_merge"
-      "Merge changes from source workspace into target workspace. Automatically performs fast-forward or disjoint file merging. If colliding edits exist, signals an error unless specific non-conflicting files are passed in 'files'. Run workspace_diff first to verify safety."
+      "Merge changes from source workspace into target workspace. Automatically performs fast-forward, disjoint file merging, and 3-way AST-level form merging for files modified in both workspaces. If unresolvable AST collisions exist, signals an error unless specific non-conflicting files are passed in 'files', or use workspace_rebase to reconcile. Run workspace_diff first to verify safety."
       (dict "source_workspace_id" (dict "type" "string" "description" "Source workspace identifier containing changes to merge.")
             "target_workspace_id" (prop-string "Target workspace identifier receiving changes (default: 'default').")
             "files" (prop-string-array "Optional list of specific files to transfer instead of merging all modified files.")
@@ -621,10 +675,12 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                        (structural-editing-mcp.workspace:init-workspace))
                      (structural-editing-mcp.workspace:record-agent-read agent-id)
                      (let* ((depth (or (gethash "depth" args) 2))
+                            (limit (gethash "limit" args))
+                            (offset (or (gethash "offset" args) 0))
                             (node (structural-editing-mcp.tree:resolve-tree-scope
                                     structural-editing-mcp.workspace:*workspace-tree*
                                     path)))
-                       (format-node-preview node :depth depth))))
+                       (format-node-preview node :depth depth :limit limit :offset offset))))
 
 (defun handle-tool-ast-modify (path args)
   "Handle the ast_modify tool execution."
@@ -852,6 +908,19 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
         (let ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
           (structural-editing-mcp.workspace:restore-workspace snap-name ws)
           (fmt "Workspace ~S restored from snapshot ~S." ws-id snap-name)))
+      ((or (equal action "create_file") (equal action "add_file"))
+        (let* ((filepath (or (href args "filepath") (href args "file_path") (href args "file")))
+               (content (or (href args "content") ""))
+               (ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+          (unless filepath (error "filepath is required for create_file"))
+          (structural-editing-mcp.workspace:add-file-to-workspace filepath :content content :dialect (or (href args "dialect") (structural-editing-mcp.workspace:file-dialect filepath)) :ctx ws)
+          (fmt "File ~S created successfully in workspace ~S (staged in memory)." filepath ws-id)))
+      ((equal action "rebase")
+        (let* ((onto-id (or (href args "source_id") (href args "target_id") (href args "target_workspace_id") (href args "onto") "default"))
+               (strategy (or (href args "strategy") "error"))
+               (res (structural-editing-mcp.workspace:rebase-workspace ws-id :onto-id onto-id :strategy strategy)))
+          (fmt "Workspace ~S successfully rebased onto ~S (~A file(s) updated)."
+               ws-id onto-id (length (getf res :updated-files)))))
       ((equal action "reload")
         (let* ((ws (structural-editing-mcp.workspace:get-workspace ws-id))
                (reloaded (structural-editing-mcp.workspace:reload-workspace :ctx ws :files files :force force)))
@@ -880,15 +949,22 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
           (to (getf df :target-only))
           (smo (getf df :source-modified-only))
           (tmo (getf df :target-modified-only))
+          (ast-merge (getf df :ast-mergeable))
           (both (getf df :modified-in-both))
+          (details (getf df :conflict-details))
           (ast-diff (getf df :ast-differing-files)))
       (when so (format s "  Files only in source (~A):~%~{    + ~A~%~}" (length so) so))
       (when to (format s "  Files only in target (~A):~%~{    - ~A~%~}" (length to) to))
       (when smo (format s "  Source modified only (~A):~%~{    * ~A~%~}" (length smo) smo))
       (when tmo (format s "  Target modified only (~A):~%~{    * ~A~%~}" (length tmo) tmo))
-      (when both (format s "  COLLIDING MODIFICATIONS in both (~A):~%~{    ! ~A~%~}" (length both) both))
+      (when ast-merge (format s "  AST-mergeable disjoint files (safe to auto-merge) (~A):~%~{    ~A~%~}" (length ast-merge) ast-merge))
+      (when both
+        (format s "  COLLIDING MODIFICATIONS in both (~A):~%~{    ! ~A~%~}" (length both) both)
+        (when details
+          (dolist (d details)
+            (format s "      File: ~A (conflicting form indices: ~{~A~^, ~})~%" (getf d :file) (getf d :conflicts)))))
       (when ast-diff (format s "  AST differing files (~A):~%~{    ~A~%~}" (length ast-diff) ast-diff))
-      (when (and (null so) (null to) (null smo) (null tmo) (null both) (null ast-diff))
+      (when (and (null so) (null to) (null smo) (null tmo) (null ast-merge) (null both) (null ast-diff))
         (format s "  No differences detected.~%")))))
 
 (defun handle-tool-workspace-status (args)
@@ -914,6 +990,26 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (fmt "Successfully merged workspace ~S into ~S (~A merge, ~A file(s) transferred)."
            src-id tgt-id (getf res :action) (length (getf res :merged-files))))))
 
+(defun handle-tool-workspace-create-file (args dialect)
+  "Handle workspace_create_file tool call."
+  (let* ((ws-id (or (href args "workspace_id") (href args "workspace") "default"))
+         (filepath (or (href args "filepath") (href args "file_path") (href args "file")))
+         (content (or (href args "content") ""))
+         (ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+    (unless filepath (error "filepath is required for workspace_create_file"))
+    (structural-editing-mcp.workspace:add-file-to-workspace filepath :content content :dialect dialect :ctx ws)
+    (fmt "File ~S created successfully in workspace ~S (staged in memory; uncommitted)." filepath ws-id)))
+
+(defun handle-tool-workspace-rebase (args)
+  "Handle workspace_rebase tool call."
+  (let* ((src-id (or (href args "source_workspace_id") (href args "source_id") (href args "workspace_id")))
+         (onto-id (or (href args "target_workspace_id") (href args "target_id") (href args "onto") "default"))
+         (strategy (or (href args "strategy") "error")))
+    (unless src-id (error "source_workspace_id is required for workspace_rebase"))
+    (let ((res (structural-editing-mcp.workspace:rebase-workspace src-id :onto-id onto-id :strategy strategy)))
+      (fmt "Workspace ~S successfully rebased onto ~S (~A file(s) updated)."
+           src-id onto-id (length (getf res :updated-files))))))
+
 (defun dispatch-tool-call (name path args dialect &optional (agent-id "default"))
   "Dispatch tool invocation by tool NAME to appropriate handler."
   (cond
@@ -933,6 +1029,10 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (handle-tool-ast-analysis name path args dialect))
     ((equal name "workspace_manage")
       (handle-tool-workspace-manage args))
+    ((or (equal name "workspace_create_file") (equal name "workspace_add_file"))
+      (handle-tool-workspace-create-file args dialect))
+    ((equal name "workspace_rebase")
+      (handle-tool-workspace-rebase args))
     ((equal name "workspace_status")
       (handle-tool-workspace-status args))
     ((equal name "workspace_diff")
