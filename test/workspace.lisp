@@ -230,3 +230,27 @@
       (setf (workspace-context-tree copy) '(:path () :workspace (:path (0) :leaf mutated)))
       (ok (not (equal (workspace-context-tree orig) (workspace-context-tree copy))))
       (delete-workspace "orig-ws"))))
+
+(deftest test-workspace-lifecycle
+  (testing "fork, snapshot, restore, and clear"
+    (let* ((ws (create-workspace "life-ws"))
+           (cl-node '(:path () :workspace (:path (0) :common-lisp (:path (0 0) :file (:path (0 0 0) :leaf initial))))))
+      (setf (workspace-context-tree ws) cl-node)
+      ;; Snapshot
+      (snapshot-workspace "snap1" ws)
+      ;; Mutate tree
+      (setf (workspace-context-tree ws) '(:path () :workspace (:path (0) :common-lisp (:path (0 0) :file (:path (0 0 0) :leaf modified)))))
+      (ok (not (equal cl-node (workspace-context-tree ws))))
+      ;; Restore
+      (restore-workspace "snap1" ws)
+      (ok (equal cl-node (workspace-context-tree ws)))
+      ;; Fork
+      (let ((forked (fork-workspace "life-ws" "forked-life-ws")))
+        (ok (equal "forked-life-ws" (workspace-context-id forked)))
+        (ok (equal "life-ws" (workspace-context-parent-id forked)))
+        (ok (equal cl-node (workspace-context-tree forked)))
+        (delete-workspace "forked-life-ws"))
+      ;; Clear
+      (clear-workspace ws)
+      (ok (equal '(:path () :workspace) (workspace-context-tree ws)))
+      (delete-workspace "life-ws"))))

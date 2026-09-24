@@ -42,7 +42,7 @@
                     (let* ((res (gethash "result" result-json))
                            (tools (gethash "tools" res)))
                       (ok (listp tools))
-                      (ok (= (length tools) 15))
+                      (ok (= (length tools) 16))
                       (let ((names (mapcar (lambda (x) (gethash "name" x)) tools)))
                         (ok (member "read_node" names :test #'equal))
                         (ok (not (member "read_workspace" names :test #'equal)))
@@ -55,6 +55,7 @@
                         (ok (member "ast_analyze_bindings" names :test #'equal))
                         (ok (member "ast_suggest_refactorings" names :test #'equal))
                         (ok (member "ast_extract_function" names :test #'equal))
+                        (ok (member "workspace_manage" names :test #'equal))
                         (ok (member "commit_workspace" names :test #'equal)))))))
 
 (deftest test-mcp-ast-operations
@@ -650,3 +651,39 @@
         (ok (gethash "isError" res))
         (ok (equal "workspace_error" (gethash "errorType" res)))))
     (structural-editing-mcp.workspace:delete-workspace "isolated-ws")))
+
+(deftest test-mcp-workspace-manage
+  (testing "workspace_manage tool actions create, list, fork, snapshot, restore, delete"
+    (let* ((create-msg (structural-editing-mcp.mcp::dict
+                         "jsonrpc" "2.0"
+                         "id" 6001
+                         "method" "tools/call"
+                         "params" (structural-editing-mcp.mcp::dict
+                                    "name" "workspace_manage"
+                                    "arguments" (structural-editing-mcp.mcp::dict
+                                                  "action" "create"
+                                                  "target_id" "ws-tool-test"))))
+           (create-res (call-mcp-msg create-msg))
+           (list-msg (structural-editing-mcp.mcp::dict
+                       "jsonrpc" "2.0"
+                       "id" 6002
+                       "method" "tools/call"
+                       "params" (structural-editing-mcp.mcp::dict
+                                  "name" "workspace_manage"
+                                  "arguments" (structural-editing-mcp.mcp::dict
+                                                "action" "list"))))
+           (list-res (call-mcp-msg list-msg))
+           (delete-msg (structural-editing-mcp.mcp::dict
+                         "jsonrpc" "2.0"
+                         "id" 6003
+                         "method" "tools/call"
+                         "params" (structural-editing-mcp.mcp::dict
+                                    "name" "workspace_manage"
+                                    "arguments" (structural-editing-mcp.mcp::dict
+                                                  "action" "delete"
+                                                  "workspace_id" "ws-tool-test"))))
+           (delete-res (call-mcp-msg delete-msg)))
+      (ok (null (gethash "isError" (gethash "result" create-res))))
+      (ok (search "Workspaces" (gethash "text" (first (gethash "content" (gethash "result" list-res))))))
+      (ok (search "ws-tool-test" (gethash "text" (first (gethash "content" (gethash "result" list-res))))))
+      (ok (null (gethash "isError" (gethash "result" delete-res)))))))

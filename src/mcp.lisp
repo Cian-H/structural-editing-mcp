@@ -530,6 +530,18 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
             "agent_id" +prop-agent-id+))
 
     (make-tool
+      "workspace_manage"
+      "Manage isolated multi-agent workspace lifecycle: 'create', 'list', 'delete', 'clear', 'fork', 'snapshot', 'restore', or 'reload'."
+      (dict "action" (dict "type" "string" "description" "Action to perform: 'create', 'list', 'delete', 'clear', 'fork', 'snapshot', 'restore', or 'reload'.")
+            "workspace_id" (prop-string "Target workspace identifier for the action.")
+            "source_id" (prop-string "Source workspace identifier (required for 'fork').")
+            "target_id" (prop-string "New workspace identifier (required for 'fork' or 'create').")
+            "snapshot_name" (prop-string "Snapshot name for 'snapshot' or 'restore'.")
+            "files" (prop-string-array "Optional subset of file paths to reload (for 'reload').")
+            "force" (prop-boolean "If true, discards uncommitted in-memory edits when clearing or reloading.")
+            "agent_id" +prop-agent-id+))
+
+    (make-tool
       "commit_workspace"
       "Persists all in-memory workspace modifications back to their respective files on disk."
       (dict "agent_id" +prop-agent-id+))))
@@ -751,6 +763,60 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   "Return T if tool NAME mutates workspace AST state."
   (member name *mutation-tools* :test #'string=))
 
+(defun format-workspaces-list (list)
+  "Format list of workspace plists into readable string summary."
+  (with-output-to-string (s)
+    (format s "Workspaces (~A):~%" (length list))
+    (dolist (w list)
+      (format s "  - [~A] (parent: ~A, revision: ~A, files: ~A, dirty: ~A)~%"
+              (getf w :id)
+              (or (getf w :parent-id) "none")
+              (getf w :revision)
+              (getf w :file-count)
+              (if (getf w :dirty-p) "YES" "no")))))
+
+(defun handle-tool-workspace-manage (args)
+  "Handle workspace_manage lifecycle actions: create, list, delete, clear, fork, snapshot, restore, reload."
+  (let* ((action (string-downcase (or (href args "action") "list")))
+         (ws-id (or (href args "workspace_id") (href args "workspace") "default"))
+         (source-id (or (href args "source_id") "default"))
+         (target-id (or (href args "target_id") (href args "workspace_id")))
+         (snap-name (or (href args "snapshot_name") "checkpoint"))
+         (force (href args "force"))
+         (files (to-list (href args "files"))))
+    (cond
+      ((equal action "list")
+        (format-workspaces-list (structural-editing-mcp.workspace:list-workspaces)))
+      ((equal action "create")
+        (unless target-id (error "target_id or workspace_id required for create"))
+        (structural-editing-mcp.workspace:create-workspace target-id)
+        (fmt "Workspace ~S created successfully." target-id))
+      ((equal action "delete")
+        (structural-editing-mcp.workspace:delete-workspace ws-id)
+        (fmt "Workspace ~S deleted successfully." ws-id))
+      ((equal action "clear")
+        (let ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+          (structural-editing-mcp.workspace:clear-workspace ws :force force)
+          (fmt "Workspace ~S cleared successfully." ws-id)))
+      ((equal action "fork")
+        (unless target-id (error "target_id required for fork"))
+        (structural-editing-mcp.workspace:fork-workspace source-id target-id)
+        (fmt "Workspace ~S successfully forked into ~S." source-id target-id))
+      ((equal action "snapshot")
+        (let ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+          (structural-editing-mcp.workspace:snapshot-workspace snap-name ws)
+          (fmt "Snapshot ~S created for workspace ~S." snap-name ws-id)))
+      ((equal action "restore")
+        (let ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+          (structural-editing-mcp.workspace:restore-workspace snap-name ws)
+          (fmt "Workspace ~S restored from snapshot ~S." ws-id snap-name)))
+      ((equal action "reload")
+        (let* ((ws (structural-editing-mcp.workspace:get-workspace ws-id))
+               (reloaded (structural-editing-mcp.workspace:reload-workspace :ctx ws :files files :force force)))
+          (fmt "Workspace ~S reloaded ~A file(s) from disk." ws-id (length reloaded))))
+      (t
+        (error "Unknown workspace_manage action: ~A" action)))))
+
 (defun dispatch-tool-call (name path args dialect &optional (agent-id "default"))
   "Dispatch tool invocation by tool NAME to appropriate handler."
   (cond
@@ -768,6 +834,8 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
     ((member name '("ast_lint" "ast_complexity_metrics" "ast_find_duplicates"
                     "ast_analyze_bindings" "ast_suggest_refactorings") :test #'string=)
       (handle-tool-ast-analysis name path args dialect))
+    ((equal name "workspace_manage")
+      (handle-tool-workspace-manage args))
     ((equal name "commit_workspace")
       (structural-editing-mcp.workspace:write-workspace)
       (fmt "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))

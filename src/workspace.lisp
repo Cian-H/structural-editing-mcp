@@ -45,6 +45,11 @@
            :create-workspace
            :delete-workspace
            :list-workspaces
+           :clear-workspace
+           :fork-workspace
+           :snapshot-workspace
+           :restore-workspace
+           :reload-workspace
            :workspace-dirty-files-list
            :*workspace-lock*
            :*workspace-revision*
@@ -101,23 +106,27 @@
   (agent-views (make-hash-table :test 'equal))
   (snapshots (make-hash-table :test 'equal)))
 
+(defun copy-workspace-context-unlocked (ctx &key (new-id (workspace-context-id ctx)) parent-id base-revision)
+  "Create a deep copy of CTX without acquiring lock (caller must hold lock or ensure exclusivity)."
+  (make-workspace-context-internal
+    :id new-id
+    :parent-id (or parent-id (workspace-context-id ctx))
+    :base-revision (or base-revision (workspace-context-revision ctx))
+    :tree (copy-tree (workspace-context-tree ctx))
+    :file-registry (copy-hash-table (workspace-context-file-registry ctx))
+    :clean-state (copy-hash-table (workspace-context-clean-state ctx) :test 'equal)
+    :clean-sources (copy-hash-table (workspace-context-clean-sources ctx) :test 'equal)
+    :next-file-id (workspace-context-next-file-id ctx)
+    :revision (workspace-context-revision ctx)
+    :file-revisions (copy-hash-table (workspace-context-file-revisions ctx) :test 'equal)
+    :lock (bt:make-lock (format nil "workspace-lock-~A" new-id))
+    :agent-views (copy-hash-table (workspace-context-agent-views ctx) :test 'equal)
+    :snapshots (copy-hash-table (workspace-context-snapshots ctx) :test 'equal)))
+
 (defun copy-workspace-context (ctx &key (new-id (workspace-context-id ctx)) parent-id base-revision)
-  "Create a deep copy of CTX with a new ID."
+  "Create a deep copy of CTX with a new ID, acquiring CTX's lock."
   (bt:with-lock-held ((workspace-context-lock ctx))
-    (make-workspace-context-internal
-      :id new-id
-      :parent-id (or parent-id (workspace-context-id ctx))
-      :base-revision (or base-revision (workspace-context-revision ctx))
-      :tree (copy-tree (workspace-context-tree ctx))
-      :file-registry (copy-hash-table (workspace-context-file-registry ctx))
-      :clean-state (copy-hash-table (workspace-context-clean-state ctx) :test 'equal)
-      :clean-sources (copy-hash-table (workspace-context-clean-sources ctx) :test 'equal)
-      :next-file-id (workspace-context-next-file-id ctx)
-      :revision (workspace-context-revision ctx)
-      :file-revisions (copy-hash-table (workspace-context-file-revisions ctx) :test 'equal)
-      :lock (bt:make-lock (format nil "workspace-lock-~A" new-id))
-      :agent-views (copy-hash-table (workspace-context-agent-views ctx) :test 'equal)
-      :snapshots (copy-hash-table (workspace-context-snapshots ctx) :test 'equal))))
+    (copy-workspace-context-unlocked ctx :new-id new-id :parent-id parent-id :base-revision base-revision)))
 
 (defun make-workspace-context (&key (id "default") parent-id (base-revision 1))
   "Create and return a freshly initialized independent workspace-context."
@@ -231,7 +240,102 @@
     (setf (workspace-context-next-file-id ctx) 0)
     (setf (workspace-context-revision ctx) 1)
     (setf (workspace-context-agent-views ctx) (make-hash-table :test 'equal))
+    (setf (workspace-context-snapshots ctx) (make-hash-table :test 'equal))
     (setf (workspace-context-tree ctx) '(:path () :workspace))))
+
+(defun clear-workspace (&optional (ctx *current-workspace*) &key force)
+  "Reset CTX to an empty workspace. If FORCE is nil and uncommitted changes exist, signals WORKSPACE-DIRTY-ERROR."
+  (bt:with-lock-held ((workspace-context-lock ctx))
+    (let ((dirty (workspace-dirty-files-list ctx)))
+      (when (and dirty (not force))
+        (error 'workspace-dirty-error
+               :workspace-id (workspace-context-id ctx)
+               :dirty-files dirty
+               :message (format nil "Cannot clear workspace ~S: has uncommitted modifications in ~S. Pass force: true to discard."
+                                (workspace-context-id ctx) dirty))))
+    (setf (workspace-context-file-registry ctx) (make-hash-table :test 'equal))
+    (setf (workspace-context-clean-state ctx) (make-hash-table :test 'equal))
+    (setf (workspace-context-clean-sources ctx) (make-hash-table :test 'equal))
+    (setf (workspace-context-next-file-id ctx) 0)
+    (setf (workspace-context-revision ctx) 1)
+    (setf (workspace-context-agent-views ctx) (make-hash-table :test 'equal))
+    (setf (workspace-context-snapshots ctx) (make-hash-table :test 'equal))
+    (setf (workspace-context-tree ctx) '(:path () :workspace))
+    t))
+
+(defun fork-workspace (source-id target-id)
+  "Fork SOURCE-ID workspace into a newly created independent TARGET-ID workspace."
+  (let* ((src (get-workspace source-id))
+         (norm-target (normalize-workspace-id target-id)))
+    (bt:with-lock-held (*workspace-registry-lock*)
+      (when (gethash norm-target *workspace-registry*)
+        (error 'workspace-error :message (format nil "Workspace ~S already exists" norm-target)))
+      (let ((forked (copy-workspace-context src
+                                           :new-id norm-target
+                                           :parent-id (workspace-context-id src)
+                                           :base-revision (workspace-context-revision src))))
+        (setf (gethash norm-target *workspace-registry*) forked)
+        forked))))
+
+(defun snapshot-workspace (snapshot-name &optional (ctx *current-workspace*))
+  "Save an in-memory deep copy snapshot of CTX under SNAPSHOT-NAME."
+  (let ((name (string snapshot-name)))
+    (bt:with-lock-held ((workspace-context-lock ctx))
+      (let ((snap (copy-workspace-context-unlocked ctx :new-id (format nil "~A-snapshot-~A" (workspace-context-id ctx) name))))
+        (setf (gethash name (workspace-context-snapshots ctx)) snap)
+        name))))
+
+(defun restore-workspace (snapshot-name &optional (ctx *current-workspace*))
+  "Restore workspace state of CTX from the saved in-memory snapshot SNAPSHOT-NAME."
+  (let ((name (string snapshot-name)))
+    (bt:with-lock-held ((workspace-context-lock ctx))
+      (let ((snap (gethash name (workspace-context-snapshots ctx))))
+        (unless snap
+          (error 'workspace-error :message (format nil "Snapshot ~S not found in workspace ~S"
+                                                   name (workspace-context-id ctx))))
+        (setf (workspace-context-tree ctx) (copy-tree (workspace-context-tree snap)))
+        (setf (workspace-context-file-registry ctx) (copy-hash-table (workspace-context-file-registry snap)))
+        (setf (workspace-context-clean-state ctx) (copy-hash-table (workspace-context-clean-state snap) :test 'equal))
+        (setf (workspace-context-clean-sources ctx) (copy-hash-table (workspace-context-clean-sources snap) :test 'equal))
+        (setf (workspace-context-next-file-id ctx) (workspace-context-next-file-id snap))
+        (setf (workspace-context-revision ctx) (workspace-context-revision snap))
+        (setf (workspace-context-file-revisions ctx) (copy-hash-table (workspace-context-file-revisions snap) :test 'equal))
+        (setf (workspace-context-agent-views ctx) (copy-hash-table (workspace-context-agent-views snap) :test 'equal))
+        name))))
+
+(defun reload-workspace (&key (ctx *current-workspace*) files force)
+  "Reload files from disk into CTX. If FILES is nil, reloads all files currently in CTX.
+If FORCE is nil and uncommitted dirty files would be overwritten, signals WORKSPACE-DIRTY-ERROR."
+  (bt:with-lock-held ((workspace-context-lock ctx))
+    (let* ((dirty (workspace-dirty-files-list ctx))
+           (all-loaded (loop for k being the hash-keys of (workspace-context-clean-state ctx) collect k))
+           (target-files (if files
+                           (mapcar (lambda (f) (or (safe-truename f) f)) (ensure-list files))
+                           all-loaded))
+           (conflicting-dirty (intersection dirty target-files :test #'equal)))
+      (when (and conflicting-dirty (not force))
+        (error 'workspace-dirty-error
+               :workspace-id (workspace-context-id ctx)
+               :dirty-files conflicting-dirty
+               :message (format nil "Cannot reload: uncommitted changes in files ~S. Pass force: true to discard."
+                                conflicting-dirty)))
+      ;; Reload with dynamic binding of *current-workspace* to ctx
+      (with-workspace-context (ctx)
+        (dolist (f target-files)
+          (when (probe-file f)
+            (let ((dialect (or (file-dialect f) :common-lisp))
+                  (text (uiop:read-file-string f))
+                  (coords (find-file-path-coords f)))
+              (multiple-value-bind (parsed-node sources)
+                                   (string-to-sexp text :dialect dialect)
+                (setf (gethash f *file-clean-sources*) sources)
+                (if coords
+                  (progn
+                    (setf *workspace-tree* (overwrite-node *workspace-tree* coords parsed-node))
+                    (register-clean-file-state f parsed-node))
+                  (parse-and-register-file f text dialect)))))))
+      (incf (workspace-context-revision ctx))
+      target-files)))
 
 (defun normalize-agent-id (agent-id)
   "Return AGENT-ID, defaulting to \"default\" if nil or empty string."
