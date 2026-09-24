@@ -49,21 +49,22 @@
 (defparameter *default-worker-count* 4)
 
 (defun worker-loop ()
-  (loop
-    (let ((task nil))
-      (bt:with-lock-held (*worker-queue-lock*)
-                         (loop while (and *worker-pool-running* (null *worker-queue*))
-                               do (bt:condition-wait *worker-queue-cvar* *worker-queue-lock*))
-                         (when (null *worker-queue*)
-                           (unless *worker-pool-running*
-                             (return)))
-                         (setf task (pop *worker-queue*)))
-      (when task
-        (handler-case
-            (funcall task)
-          (error (e)
-            (format *error-output* "~&[Worker Error] ~A~%" e)
-            (force-output *error-output*)))))))
+  (let ((yason:*parse-json-arrays-as-vectors* nil))
+    (loop
+      (let ((task nil))
+        (bt:with-lock-held (*worker-queue-lock*)
+                           (loop while (and *worker-pool-running* (null *worker-queue*))
+                                 do (bt:condition-wait *worker-queue-cvar* *worker-queue-lock*))
+                           (when (null *worker-queue*)
+                             (unless *worker-pool-running*
+                               (return)))
+                           (setf task (pop *worker-queue*)))
+        (when task
+          (handler-case
+              (funcall task)
+            (error (e)
+              (format *error-output* "~&[Worker Error] ~A~%" e)
+              (force-output *error-output*))))))))
 
 (defun start-worker-pool (&optional (num-workers *default-worker-count*))
   "Initialize and start the worker thread pool for parallel JSON-RPC request processing."
@@ -247,13 +248,11 @@
   (let* ((parsed (structural-editing-mcp.parser:string-to-sexp wrapper-str))
          (expr (first (structural-editing-mcp.tree:get-node-children parsed))))
     (if (and expr (structural-editing-mcp.tree:get-node-children expr))
-      (let ((target-node (structural-editing-mcp.tree:get-node-at-path tree path)))
-        (structural-editing-mcp.tree:update-node-at-path
-          tree
-          path
-          (lambda (node)
-            (declare (ignore node))
-            (match expr ((node p tag children) `(:path ,p ,tag ,@children ,target-node))))))
+      (structural-editing-mcp.tree:update-node-at-path
+        tree
+        path
+        (lambda (node)
+          (match expr ((node p tag children) `(:path ,p ,tag ,@children ,node)))))
       (structural-editing-mcp.edit:wrap-node tree path :paren))))
 
 (defun wrap-range-with-custom-form (tree parent-path start-idx end-index wrapper-str)
@@ -267,12 +266,12 @@
         (lambda (parent)
           (match parent
                  ((node p ptag children)
-                  (let ((before (subseq children 0 start-idx))
-                        (slice (subseq children start-idx (1+ end-index)))
-                        (after (subseq children (1+ end-index))))
-                    (match expr
-                           ((node _ tag expr-children)
-                            `(:path ,p ,ptag ,@before (:path ,p ,tag ,@expr-children ,@slice) ,@after)))))
+                  (match expr
+                         ((node _ tag expr-children)
+                          `(:path ,p ,ptag
+                                  ,@(subseq children 0 start-idx)
+                                  (:path ,p ,tag ,@expr-children ,@(subseq children start-idx (1+ end-index)))
+                                  ,@(subseq children (1+ end-index))))))
                  (_ parent))))
       (structural-editing-mcp.edit:wrap-range tree parent-path start-idx end-index :paren))))
 

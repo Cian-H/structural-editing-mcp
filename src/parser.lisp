@@ -58,7 +58,7 @@
     (when (< target len)
       (char string target))))
 
-(defun read-string-literal (string index len &optional (delimiter #\") (dialect *current-dialect*))
+(defun read-string-literal (string index len &optional (delimiter #\") dialect)
   "Read an escaped string literal starting after the opening delimiter."
   (declare (type string string)
            (type fixnum index len)
@@ -178,8 +178,9 @@
 
 (defun parse-read-literal (tok predicate-fn)
   "Attempt reading TOK with read-eval disabled; return parsed object if satisfying PREDICATE-FN."
-  (let* ((*read-eval* nil)
-         (parsed (ignore-errors (read-from-string tok))))
+  (let ((parsed (ignore-errors
+                  (let ((*read-eval* nil))
+                    (read-from-string tok)))))
     (when (and parsed (funcall predicate-fn parsed))
       parsed)))
 

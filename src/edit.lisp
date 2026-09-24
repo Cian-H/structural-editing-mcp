@@ -174,10 +174,10 @@
                          :path parent-path
                          :tree tree
                          :message (fmt "wrap-range indices ~D-~D out of bounds (size ~D) at ~A" start-index end-index n parent-path)))
-                (let ((before (take start-index children))
-                      (slice (take (1+ (- end-index start-index)) (drop start-index children)))
-                      (after (drop (1+ end-index) children)))
-                  `(:path ,p ,ptag ,@before (:path ,p ,tag ,@slice) ,@after))))
+                `(:path ,p ,ptag
+                        ,@(take start-index children)
+                        (:path ,p ,tag ,@(take (1+ (- end-index start-index)) (drop start-index children)))
+                        ,@(drop (1+ end-index) children))))
              (_ parent)))))
 
 (defun unwrap-node (tree path)
@@ -232,9 +232,7 @@
                          :path path
                          :tree tree
                          :message (fmt "split index ~D out of bounds (size ~D) at ~A" child-index n path)))
-                (let ((left (take child-index children))
-                      (right (drop child-index children)))
-                  `(:path ,p ,tag (:path ,p ,tag ,@left) (:path ,p ,tag ,@right)))))
+                `(:path ,p ,tag (:path ,p ,tag ,@(take child-index children)) (:path ,p ,tag ,@(drop child-index children)))))
              (_ node)))))
 
 (defun merge-nodes (tree path1 path2)
