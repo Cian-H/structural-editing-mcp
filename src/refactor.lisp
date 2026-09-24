@@ -41,7 +41,7 @@
                      node)))))))
       (reindex-paths (walk tree)))))
 
-(defun extract-variable (tree target-path var-name)
+(defun extract-variable (tree target-path var-name &key (dialect :common-lisp))
   "Extract the node at TARGET-PATH into a let binding around its parent."
   (when
       (or (null target-path) (null (cdr target-path)))
@@ -72,14 +72,11 @@
                                    (list :path nil :leaf (intern (string-upcase var-name)))
                                    child)))
                  (new-parent `(:path nil ,p-tag ,@new-children))
-                 (let-ast (string-to-sexp (fmt "(let ((~A )))" var-name)))
-                 (let-node (first (get-node-children let-ast)))
-                 (bindings-list (second (get-node-children let-node)))
-                 (first-binding (first (get-node-children bindings-list)))
-                 (completed-binding
-                   `(:path nil :paren ,@(get-node-children first-binding) ,target-node))
-                 (completed-bindings-list `(:path nil :paren ,completed-binding)))
-            `(:path nil :paren (:path nil :leaf let) ,completed-bindings-list ,new-parent)))))))
+                 (let-str (if (member dialect '(:clojure :fennel))
+                            (fmt "(let [~A ~A])" var-name (sexp-to-string target-node :dialect dialect))
+                            (fmt "(let ((~A ~A)))" var-name (sexp-to-string target-node :dialect dialect))))
+                 (let-ast (first (get-node-children (string-to-sexp let-str :dialect dialect)))))
+            `(:path nil :paren ,@(get-node-children let-ast) ,new-parent)))))))
 
 (defun find-file-path-and-top-index (tree target-path)
   "Find the file node path and top-level form index in that file for TARGET-PATH."
@@ -92,7 +89,7 @@
     (t
       (values (butlast target-path) (lastcar target-path)))))
 
-(defun extract-function (tree target-path function-name &key params)
+(defun extract-function (tree target-path function-name &key params (dialect :common-lisp))
   "Extract the node at TARGET-PATH into a new top-level function definition named FUNCTION-NAME."
   (when (null target-path)
     (error 'invalid-path-error
@@ -110,9 +107,17 @@
              (call-str (if param-list
                          (fmt "(~A ~A)" function-name (string-join param-list " "))
                          (fmt "(~A)" function-name)))
-             (call-ast (first (get-node-children (string-to-sexp call-str))))
-             (def-str (fmt "(defun ~A (~A))" function-name (string-join param-list " ")))
-             (def-ast-base (first (get-node-children (string-to-sexp def-str))))
+             (call-ast (first (get-node-children (string-to-sexp call-str :dialect dialect))))
+             (def-str (cond
+                        ((eq dialect :scheme)
+                          (fmt "(define (~A~{ ~A~}))" function-name param-list))
+                        ((eq dialect :clojure)
+                          (fmt "(defn ~A [~{~A~^ ~}])" function-name param-list))
+                        ((eq dialect :fennel)
+                          (fmt "(fn ~A [~{~A~^ ~}])" function-name param-list))
+                        (t
+                          (fmt "(defun ~A (~{~A~^ ~}))" function-name param-list))))
+             (def-ast-base (first (get-node-children (string-to-sexp def-str :dialect dialect))))
              (def-ast `(:path nil :paren ,@(get-node-children def-ast-base) ,target-node))
              (tree-with-call (overwrite-node tree target-path call-ast))
              (final-tree (insert-node tree-with-call file-path top-idx def-ast)))

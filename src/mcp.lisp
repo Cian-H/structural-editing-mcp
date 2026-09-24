@@ -699,9 +699,10 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       tgt
       structural-editing-mcp.workspace:*workspace-tree*)))
 
-(defun handle-tool-ast-refactor (name path args)
+(defun handle-tool-ast-refactor (name path args dialect)
   "Handle ast_search, ast_rename, ast_replace_pattern, ast_extract_variable, ast_extract_function."
-  (let ((tree structural-editing-mcp.workspace:*workspace-tree*))
+  (let ((tree structural-editing-mcp.workspace:*workspace-tree*)
+        (eff-dialect (or dialect structural-editing-mcp.parser:*current-dialect*)))
     (cond
       ((equal name "ast_search")
         (let* ((query (gethash "query" args))
@@ -724,13 +725,13 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       ((equal name "ast_extract_variable")
         (let ((var-name (gethash "variable_name" args)))
           (setf structural-editing-mcp.workspace:*workspace-tree*
-                (structural-editing-mcp.refactor:extract-variable tree path var-name))
+                (structural-editing-mcp.refactor:extract-variable tree path var-name :dialect eff-dialect))
           (fmt "Successfully extracted node at ~A into variable '~A'." path var-name)))
       ((equal name "ast_extract_function")
         (let ((func-name (gethash "function_name" args))
               (fn-params (to-list (gethash "params" args))))
           (setf structural-editing-mcp.workspace:*workspace-tree*
-                (structural-editing-mcp.refactor:extract-function tree path func-name :params fn-params))
+                (structural-editing-mcp.refactor:extract-function tree path func-name :params fn-params :dialect eff-dialect))
           (fmt "Successfully extracted node at ~A into function '~A'." path func-name))))))
 
 (defun run-tool-lint (tree path dialect args)
@@ -926,7 +927,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (handle-tool-ast-relocate args))
     ((member name '("ast_search" "ast_rename" "ast_replace_pattern"
                     "ast_extract_variable" "ast_extract_function") :test #'string=)
-      (handle-tool-ast-refactor name path args))
+      (handle-tool-ast-refactor name path args dialect))
     ((member name '("ast_lint" "ast_complexity_metrics" "ast_find_duplicates"
                     "ast_analyze_bindings" "ast_suggest_refactorings") :test #'string=)
       (handle-tool-ast-analysis name path args dialect))

@@ -282,7 +282,8 @@
                     (let ((merge-res (merge-workspaces "merge-ws-b" "merge-ws-a")))
                       (ok (equal "disjoint" (getf merge-res :action)))
                       (ok (= 1 (length (getf merge-res :merged-files))))
-                      ;; Verify ws-a now has both files in its clean state
                       (ok (= 2 (hash-table-count (workspace-context-clean-state ws-a)))))
+                    ;; Verify self-merge is rejected
+                    (ok (signals (merge-workspaces "merge-ws-a" "merge-ws-a") 'workspace-error))
                     (delete-workspace "merge-ws-a")
                     (delete-workspace "merge-ws-b"))))
