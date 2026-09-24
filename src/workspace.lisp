@@ -322,7 +322,6 @@ If FORCE is nil and uncommitted dirty files would be overwritten, signals WORKSP
                :dirty-files conflicting-dirty
                :message (format nil "Cannot reload: uncommitted changes in files ~S. Pass force: true to discard."
                                 conflicting-dirty)))
-      ;; Reload with dynamic binding of *current-workspace* to ctx
       (with-workspace-context (ctx)
         (dolist (f target-files)
           (when (probe-file f)

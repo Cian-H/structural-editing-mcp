@@ -33,7 +33,6 @@
            :+error-code-internal-error+)
   (:documentation "Condition hierarchy for the structural editing system."))
 
-
 (in-package :structural-editing-mcp.conditions)
 
 (define-condition structural-editing-error (error)

@@ -203,7 +203,6 @@
 
 ;;; AST Mutation Dispatchers
 
-
 (defparameter *delimiter-name-map*
   (dict "paren" :paren "()" :paren "" :paren
         "square" :square "bracket" :square "[]" :square
@@ -341,8 +340,6 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                    (lower-str (string-downcase str)))
                 (if
                     (string= lower-old lower-str)
-                  ;; Replace with the new parsed leaf/node
-
                   (match
                     parsed-new
                     ((node _ tag children) ` (:path ,path ,tag ,@children))
@@ -355,9 +352,6 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
           target-path
         (structural-editing-mcp.tree:update-node-at-path tree target-path #'walk)
         (walk tree)))))
-
-;;; Tool Definitions
-
 
 ;;; Tool Schema Builders & Definitions
 
@@ -595,7 +589,6 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
             "agent_id" +prop-agent-id+))))
 
 ;;; Handlers
-
 
 (defun handle-initialize (id params)
   (declare (ignore params))
@@ -1043,7 +1036,6 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
           structural-editing-mcp.conditions:+error-code-internal-error+
           "internal_error")))))
 
-
 (defun handle-message (msg)
   "Dispatch a parsed JSON-RPC message."
   (let ((jsonrpc (href msg "jsonrpc"))
@@ -1053,9 +1045,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
     (unless (equal jsonrpc "2.0") (return-from handle-message nil))
     (cond
       ((equal method "initialize") (handle-initialize id params))
-      ((equal method "notifications/initialized")
-        ;; No response needed
-        nil)
+      ((equal method "notifications/initialized") nil)
       ((equal method "tools/list") (handle-tools-list id params))
       ((equal method "tools/call") (handle-tools-call id params))
       (id (send-error id -32601 (fmt "Method not found: ~A" method))))))

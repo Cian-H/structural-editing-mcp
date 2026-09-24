@@ -204,13 +204,10 @@
   (let ((len (- end start)))
     (declare (type fixnum len))
     (cond
-      ;; Keyword (:foo)
       ((and (>= len 2) (char= (char string start) #\:))
         (intern (string-upcase (subseq string (1+ start) end)) :keyword))
-      ;; Character literal (#\...)
       ((and (char= (char string start) (code-char 35)) (eql (peek-char-ahead string start end) #\\))
         (parse-character-token string start end))
-      ;; Number or symbol
       (t
         (or (parse-numeric-token string start end)
             (intern (string-upcase (subseq string start end))))))))
