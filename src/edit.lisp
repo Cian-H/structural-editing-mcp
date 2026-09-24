@@ -79,25 +79,25 @@
 (defun pop-node (tree target-path)
   "Remove the node at TARGET-PATH from the tree and return both the new tree and the removed node."
   (if (null target-path)
-      (values nil tree)
-      (let* ((idx (lastcar target-path))
-             popped-node
-             (new-tree
-               (update-node-at-path
-                 tree
-                 (butlast target-path)
-                 (lambda (parent)
-                   (match parent
-                          ((node p tag children)
-                           (unless (and (>= idx 0) (< idx (length children)))
-                             (error 'invalid-path-error
-                                    :path target-path
-                                    :tree tree
-                                    :message (fmt "Child index ~D out of bounds for node at path ~A" idx p)))
-                           (setf popped-node (nth idx children))
-                           `(:path ,p ,tag ,@(take idx children) ,@(drop (1+ idx) children)))
-                          (_ parent))))))
-        (values new-tree popped-node))))
+    (values nil tree)
+    (let* ((idx (lastcar target-path))
+           popped-node
+           (new-tree
+             (update-node-at-path
+               tree
+               (butlast target-path)
+               (lambda (parent)
+                 (match parent
+                        ((node p tag children)
+                         (unless (and (>= idx 0) (< idx (length children)))
+                           (error 'invalid-path-error
+                                  :path target-path
+                                  :tree tree
+                                  :message (fmt "Child index ~D out of bounds for node at path ~A" idx p)))
+                         (setf popped-node (nth idx children))
+                         `(:path ,p ,tag ,@(take idx children) ,@(drop (1+ idx) children)))
+                        (_ parent))))))
+      (values new-tree popped-node))))
 
 (defun move-node (tree source-path target-parent-path target-index)
   "Move the node at SOURCE-PATH to TARGET-INDEX under TARGET-PARENT-PATH."
@@ -139,21 +139,21 @@
     (labels ((walk (node curr-path)
                (cond
                  ((equal curr-path path1)
-                  (reindex-paths node2 curr-path))
+                   (reindex-paths node2 curr-path))
                  ((equal curr-path path2)
-                  (reindex-paths node1 curr-path))
+                   (reindex-paths node1 curr-path))
                  (t
-                  (match node
-                    ((node p tag children)
-                     (list* :path p tag
-                            (loop for child in children
-                                  for i of-type fixnum from 0
-                                  for child-path = (append curr-path (list i))
-                                  collect (if (or (prefix-of-p child-path path1)
-                                                  (prefix-of-p child-path path2))
-                                              (walk child child-path)
-                                              child))))
-                    (_ node))))))
+                   (match node
+                          ((node p tag children)
+                           (list* :path p tag
+                                  (loop for child in children
+                                        for i of-type fixnum from 0
+                                        for child-path = (append curr-path (list i))
+                                        collect (if (or (prefix-of-p child-path path1)
+                                                        (prefix-of-p child-path path2))
+                                                  (walk child child-path)
+                                                  child))))
+                          (_ node))))))
       (walk tree '()))))
 
 (defun wrap-node (tree path tag)
@@ -183,40 +183,40 @@
 (defun unwrap-node (tree path)
   "Unwrap the collection node at PATH, spilling its children into its parent."
   (if (null path)
-      tree
-      (let ((idx (lastcar path)))
-        (update-node-at-path
-          tree
-          (butlast path)
-          (lambda (parent)
-            (match parent
-                   ((node p ptag children)
-                    (unless (and (>= idx 0) (< idx (length children)))
-                      (error 'invalid-path-error
-                             :path path
-                             :tree tree
-                             :message (fmt "Child index ~D out of bounds for unwrap at ~A" idx (butlast path))))
-                    (let ((target (nth idx children)))
-                      (match target
-                             ((leaf _ _) parent)
-                             ((comment _ _) parent)
-                             ((node _ _ inner-children)
-                              (reindex-paths
-                                `(:path ,p ,ptag ,@(take idx children) ,@inner-children ,@(drop (1+ idx) children))
-                                p))
-                             (_ parent))))
-                   (_ parent)))))))
+    tree
+    (let ((idx (lastcar path)))
+      (update-node-at-path
+        tree
+        (butlast path)
+        (lambda (parent)
+          (match parent
+                 ((node p ptag children)
+                  (unless (and (>= idx 0) (< idx (length children)))
+                    (error 'invalid-path-error
+                           :path path
+                           :tree tree
+                           :message (fmt "Child index ~D out of bounds for unwrap at ~A" idx (butlast path))))
+                  (let ((target (nth idx children)))
+                    (match target
+                           ((leaf _ _) parent)
+                           ((comment _ _) parent)
+                           ((node _ _ inner-children)
+                            (reindex-paths
+                              `(:path ,p ,ptag ,@(take idx children) ,@inner-children ,@(drop (1+ idx) children))
+                              p))
+                           (_ parent))))
+                 (_ parent)))))))
 
 (defun promote-node (tree path)
   "Promote the node at PATH to replace its parent node."
   (if (null path)
-      tree
-      (let ((idx (lastcar path)))
-        (update-node-at-path
-          tree
-          (butlast path)
-          (lambda (parent)
-            (match parent ((node _ _ children) (nth idx children)) (_ parent)))))))
+    tree
+    (let ((idx (lastcar path)))
+      (update-node-at-path
+        tree
+        (butlast path)
+        (lambda (parent)
+          (match parent ((node _ _ children) (nth idx children)) (_ parent)))))))
 
 (defun split-node (tree path child-index)
   "Split the collection node at PATH into two siblings at CHILD-INDEX."

@@ -158,131 +158,131 @@
                                                                               (ok (search "(defpackage :mod-pkg (:use :cl))" mod-content))))))))))
 
 (deftest test-workspace-isolated-contexts
-  (testing "with-workspace-context provides isolated multi-workspace sessions"
-    (let ((ctx-a (make-workspace-context))
-          (ctx-b (make-workspace-context)))
-      ;; Context A: initialize and add a CL form
-      (with-workspace-context (ctx-a)
-        (init-workspace)
-        (setf *workspace-tree* '(:path () :workspace
-                                 (:path (0) :common-lisp
-                                  (:path (0 0) :file
-                                   (:path (0 0 0) :leaf a)))))
-        (ok (= 1 (length (get-node-children *workspace-tree*))))
-        (ok (equal '(:path (0 0 0) :leaf a) (get-node-at-path *workspace-tree* '(0 0 0)))))
+         (testing "with-workspace-context provides isolated multi-workspace sessions"
+                  (let ((ctx-a (make-workspace-context))
+                        (ctx-b (make-workspace-context)))
+                    ;; Context A: initialize and add a CL form
+                    (with-workspace-context (ctx-a)
+                                            (init-workspace)
+                                            (setf *workspace-tree* '(:path () :workspace
+                                                                     (:path (0) :common-lisp
+                                                                      (:path (0 0) :file
+                                                                       (:path (0 0 0) :leaf a)))))
+                                            (ok (= 1 (length (get-node-children *workspace-tree*))))
+                                            (ok (equal '(:path (0 0 0) :leaf a) (get-node-at-path *workspace-tree* '(0 0 0)))))
 
-      ;; Context B: should be independent, empty workspace
-      (with-workspace-context (ctx-b)
-        (init-workspace)
-        (ok (equal '(:path () :workspace) *workspace-tree*))
-        (setf *workspace-tree* '(:path () :workspace
-                                 (:path (0) :clojure
-                                  (:path (0 0) :file
-                                   (:path (0 0 0) :leaf b)))))
-        (ok (eq :clojure (get-node-tag (first (get-node-children *workspace-tree*))))))
+                    ;; Context B: should be independent, empty workspace
+                    (with-workspace-context (ctx-b)
+                                            (init-workspace)
+                                            (ok (equal '(:path () :workspace) *workspace-tree*))
+                                            (setf *workspace-tree* '(:path () :workspace
+                                                                     (:path (0) :clojure
+                                                                      (:path (0 0) :file
+                                                                       (:path (0 0 0) :leaf b)))))
+                                            (ok (eq :clojure (get-node-tag (first (get-node-children *workspace-tree*))))))
 
-      ;; Back in Context A: verify state was preserved and isolated
-      (with-workspace-context (ctx-a)
-        (ok (eq :common-lisp (get-node-tag (first (get-node-children *workspace-tree*)))))
-        (ok (equal '(:path (0 0 0) :leaf a) (get-node-at-path *workspace-tree* '(0 0 0))))))))
+                    ;; Back in Context A: verify state was preserved and isolated
+                    (with-workspace-context (ctx-a)
+                                            (ok (eq :common-lisp (get-node-tag (first (get-node-children *workspace-tree*)))))
+                                            (ok (equal '(:path (0 0 0) :leaf a) (get-node-at-path *workspace-tree* '(0 0 0))))))))
 
 (deftest test-workspace-helpers
-  (testing "normalize-agent-id handles nil, empty string, and custom id"
-    (ok (equal (normalize-agent-id nil) "default"))
-    (ok (equal (normalize-agent-id "") "default"))
-    (ok (equal (normalize-agent-id "agent-42") "agent-42")))
-  (testing "safe-truename returns valid namestring or nil"
-    (ok (stringp (safe-truename "src/workspace.lisp")))
-    (ok (null (safe-truename "non-existent-path-abc-123.xyz"))))
-  (testing "ensure-workspace initializes if tree is nil"
-    (setf *workspace-tree* nil)
-    (ensure-workspace)
-    (ok (not (null *workspace-tree*)))))
+         (testing "normalize-agent-id handles nil, empty string, and custom id"
+                  (ok (equal (normalize-agent-id nil) "default"))
+                  (ok (equal (normalize-agent-id "") "default"))
+                  (ok (equal (normalize-agent-id "agent-42") "agent-42")))
+         (testing "safe-truename returns valid namestring or nil"
+                  (ok (stringp (safe-truename "src/workspace.lisp")))
+                  (ok (null (safe-truename "non-existent-path-abc-123.xyz"))))
+         (testing "ensure-workspace initializes if tree is nil"
+                  (setf *workspace-tree* nil)
+                  (ensure-workspace)
+                  (ok (not (null *workspace-tree*)))))
 
 (deftest test-workspace-registry
-  (testing "workspace creation, retrieval, and listing"
-    (let ((ws1 (create-workspace "test-ws-1"))
-          (ws2 (create-workspace "test-ws-2" :parent-id "test-ws-1" :base-revision 5)))
-      (ok (equal "test-ws-1" (workspace-context-id ws1)))
-      (ok (equal "test-ws-2" (workspace-context-id ws2)))
-      (ok (equal "test-ws-1" (workspace-context-parent-id ws2)))
-      (ok (= 5 (workspace-context-base-revision ws2)))
-      (ok (eq ws1 (get-workspace "test-ws-1")))
-      (ok (eq ws2 (get-workspace "test-ws-2")))
-      (let ((listed (list-workspaces)))
-        (ok (find "test-ws-1" listed :key (lambda (p) (getf p :id)) :test #'equal))
-        (ok (find "test-ws-2" listed :key (lambda (p) (getf p :id)) :test #'equal)))
-      ;; Duplicate creation error
-      (ok (signals (create-workspace "test-ws-1") 'workspace-error))
-      ;; Deletion
-      (delete-workspace "test-ws-1")
-      (delete-workspace "test-ws-2")
-      (ok (signals (get-workspace "test-ws-1") 'workspace-not-found-error))
-      ;; Deleting default workspace is forbidden
-      (ok (signals (delete-workspace "default") 'workspace-error))))
+         (testing "workspace creation, retrieval, and listing"
+                  (let ((ws1 (create-workspace "test-ws-1"))
+                        (ws2 (create-workspace "test-ws-2" :parent-id "test-ws-1" :base-revision 5)))
+                    (ok (equal "test-ws-1" (workspace-context-id ws1)))
+                    (ok (equal "test-ws-2" (workspace-context-id ws2)))
+                    (ok (equal "test-ws-1" (workspace-context-parent-id ws2)))
+                    (ok (= 5 (workspace-context-base-revision ws2)))
+                    (ok (eq ws1 (get-workspace "test-ws-1")))
+                    (ok (eq ws2 (get-workspace "test-ws-2")))
+                    (let ((listed (list-workspaces)))
+                      (ok (find "test-ws-1" listed :key (lambda (p) (getf p :id)) :test #'equal))
+                      (ok (find "test-ws-2" listed :key (lambda (p) (getf p :id)) :test #'equal)))
+                    ;; Duplicate creation error
+                    (ok (signals (create-workspace "test-ws-1") 'workspace-error))
+                    ;; Deletion
+                    (delete-workspace "test-ws-1")
+                    (delete-workspace "test-ws-2")
+                    (ok (signals (get-workspace "test-ws-1") 'workspace-not-found-error))
+                    ;; Deleting default workspace is forbidden
+                    (ok (signals (delete-workspace "default") 'workspace-error))))
 
-  (testing "copy-workspace-context creates independent deep copy"
-    (let* ((orig (create-workspace "orig-ws"))
-           (copy (copy-workspace-context orig :new-id "copy-ws")))
-      (ok (equal "copy-ws" (workspace-context-id copy)))
-      (ok (equal "orig-ws" (workspace-context-parent-id copy)))
-      ;; Mutating copy tree does not mutate orig tree
-      (setf (workspace-context-tree copy) '(:path () :workspace (:path (0) :leaf mutated)))
-      (ok (not (equal (workspace-context-tree orig) (workspace-context-tree copy))))
-      (delete-workspace "orig-ws"))))
+         (testing "copy-workspace-context creates independent deep copy"
+                  (let* ((orig (create-workspace "orig-ws"))
+                         (copy (copy-workspace-context orig :new-id "copy-ws")))
+                    (ok (equal "copy-ws" (workspace-context-id copy)))
+                    (ok (equal "orig-ws" (workspace-context-parent-id copy)))
+                    ;; Mutating copy tree does not mutate orig tree
+                    (setf (workspace-context-tree copy) '(:path () :workspace (:path (0) :leaf mutated)))
+                    (ok (not (equal (workspace-context-tree orig) (workspace-context-tree copy))))
+                    (delete-workspace "orig-ws"))))
 
 (deftest test-workspace-lifecycle
-  (testing "fork, snapshot, restore, and clear"
-    (let* ((ws (create-workspace "life-ws"))
-           (cl-node '(:path () :workspace (:path (0) :common-lisp (:path (0 0) :file (:path (0 0 0) :leaf initial))))))
-      (setf (workspace-context-tree ws) cl-node)
-      ;; Snapshot
-      (snapshot-workspace "snap1" ws)
-      ;; Mutate tree
-      (setf (workspace-context-tree ws) '(:path () :workspace (:path (0) :common-lisp (:path (0 0) :file (:path (0 0 0) :leaf modified)))))
-      (ok (not (equal cl-node (workspace-context-tree ws))))
-      ;; Restore
-      (restore-workspace "snap1" ws)
-      (ok (equal cl-node (workspace-context-tree ws)))
-      ;; Fork
-      (let ((forked (fork-workspace "life-ws" "forked-life-ws")))
-        (ok (equal "forked-life-ws" (workspace-context-id forked)))
-        (ok (equal "life-ws" (workspace-context-parent-id forked)))
-        (ok (equal cl-node (workspace-context-tree forked)))
-        (delete-workspace "forked-life-ws"))
-      ;; Clear
-      (clear-workspace ws)
-      (ok (equal '(:path () :workspace) (workspace-context-tree ws)))
-      (delete-workspace "life-ws"))))
+         (testing "fork, snapshot, restore, and clear"
+                  (let* ((ws (create-workspace "life-ws"))
+                         (cl-node '(:path () :workspace (:path (0) :common-lisp (:path (0 0) :file (:path (0 0 0) :leaf initial))))))
+                    (setf (workspace-context-tree ws) cl-node)
+                    ;; Snapshot
+                    (snapshot-workspace "snap1" ws)
+                    ;; Mutate tree
+                    (setf (workspace-context-tree ws) '(:path () :workspace (:path (0) :common-lisp (:path (0 0) :file (:path (0 0 0) :leaf modified)))))
+                    (ok (not (equal cl-node (workspace-context-tree ws))))
+                    ;; Restore
+                    (restore-workspace "snap1" ws)
+                    (ok (equal cl-node (workspace-context-tree ws)))
+                    ;; Fork
+                    (let ((forked (fork-workspace "life-ws" "forked-life-ws")))
+                      (ok (equal "forked-life-ws" (workspace-context-id forked)))
+                      (ok (equal "life-ws" (workspace-context-parent-id forked)))
+                      (ok (equal cl-node (workspace-context-tree forked)))
+                      (delete-workspace "forked-life-ws"))
+                    ;; Clear
+                    (clear-workspace ws)
+                    (ok (equal '(:path () :workspace) (workspace-context-tree ws)))
+                    (delete-workspace "life-ws"))))
 
 (deftest test-workspace-merge-and-diff
-  (testing "status, diff, and disjoint merge"
-    (let* ((ws-a (create-workspace "merge-ws-a"))
-           (ws-b (create-workspace "merge-ws-b" :parent-id "merge-ws-a" :base-revision 1))
-           (file-a "/tmp/test-merge-a.lisp")
-           (file-b "/tmp/test-merge-b.lisp"))
-      (with-open-file (f file-a :direction :output :if-exists :supersede)
-        (write-string "(defun fa () 1)" f))
-      (with-open-file (f file-b :direction :output :if-exists :supersede)
-        (write-string "(defun fb () 2)" f))
-      ;; Load disjoint files
-      (with-workspace-context (ws-a)
-        (read-workspace-file file-a))
-      (with-workspace-context (ws-b)
-        (read-workspace-file file-b))
-      ;; Check status
-      (let ((st-a (workspace-status ws-a)))
-        (ok (equal "merge-ws-a" (getf st-a :id)))
-        (ok (= 1 (length (getf st-a :clean-files)))))
-      ;; Check diff
-      (let ((df (diff-workspaces "merge-ws-b" "merge-ws-a")))
-        (ok (find (safe-truename file-b) (getf df :source-only) :test #'equal))
-        (ok (find (safe-truename file-a) (getf df :target-only) :test #'equal)))
-      ;; Merge ws-b into ws-a
-      (let ((merge-res (merge-workspaces "merge-ws-b" "merge-ws-a")))
-        (ok (equal "disjoint" (getf merge-res :action)))
-        (ok (= 1 (length (getf merge-res :merged-files))))
-        ;; Verify ws-a now has both files in its clean state
-        (ok (= 2 (hash-table-count (workspace-context-clean-state ws-a)))))
-      (delete-workspace "merge-ws-a")
-      (delete-workspace "merge-ws-b"))))
+         (testing "status, diff, and disjoint merge"
+                  (let* ((ws-a (create-workspace "merge-ws-a"))
+                         (ws-b (create-workspace "merge-ws-b" :parent-id "merge-ws-a" :base-revision 1))
+                         (file-a "/tmp/test-merge-a.lisp")
+                         (file-b "/tmp/test-merge-b.lisp"))
+                    (with-open-file (f file-a :direction :output :if-exists :supersede)
+                      (write-string "(defun fa () 1)" f))
+                    (with-open-file (f file-b :direction :output :if-exists :supersede)
+                      (write-string "(defun fb () 2)" f))
+                    ;; Load disjoint files
+                    (with-workspace-context (ws-a)
+                                            (read-workspace-file file-a))
+                    (with-workspace-context (ws-b)
+                                            (read-workspace-file file-b))
+                    ;; Check status
+                    (let ((st-a (workspace-status ws-a)))
+                      (ok (equal "merge-ws-a" (getf st-a :id)))
+                      (ok (= 1 (length (getf st-a :clean-files)))))
+                    ;; Check diff
+                    (let ((df (diff-workspaces "merge-ws-b" "merge-ws-a")))
+                      (ok (find (safe-truename file-b) (getf df :source-only) :test #'equal))
+                      (ok (find (safe-truename file-a) (getf df :target-only) :test #'equal)))
+                    ;; Merge ws-b into ws-a
+                    (let ((merge-res (merge-workspaces "merge-ws-b" "merge-ws-a")))
+                      (ok (equal "disjoint" (getf merge-res :action)))
+                      (ok (= 1 (length (getf merge-res :merged-files))))
+                      ;; Verify ws-a now has both files in its clean state
+                      (ok (= 2 (hash-table-count (workspace-context-clean-state ws-a)))))
+                    (delete-workspace "merge-ws-a")
+                    (delete-workspace "merge-ws-b"))))

@@ -14,4 +14,4 @@
          (let* ((ctx (make-workspace-context)))
            (setf (structural-editing-mcp.workspace::workspace-context-tree ctx) nil)
            (with-workspace-context (ctx)
-             (ok (signals (write-workspace) 'workspace-error)))))
+                                   (ok (signals (write-workspace) 'workspace-error)))))

@@ -339,396 +339,396 @@
                               (search "No refactoring opportunities detected" text)))))))
 
 (deftest test-mcp-occ-concurrency
-  (testing "implicit agent session tracking OCC prevents race conditions and guides agents"
-    (structural-editing-mcp.workspace:init-workspace)
-    (with-open-file (f "/tmp/occ-test.lisp" :direction :output :if-exists :supersede)
-      (write-string "(defun foo () 1) (defun bar () 2)" f))
+         (testing "implicit agent session tracking OCC prevents race conditions and guides agents"
+                  (structural-editing-mcp.workspace:init-workspace)
+                  (with-open-file (f "/tmp/occ-test.lisp" :direction :output :if-exists :supersede)
+                    (write-string "(defun foo () 1) (defun bar () 2)" f))
 
-    ;; 1. Agent A reads node [0, 0]
-    (let* ((read-a (structural-editing-mcp.mcp::dict
-                     "jsonrpc" "2.0"
-                     "id" 1001
-                     "method" "tools/call"
-                     "params" (structural-editing-mcp.mcp::dict
-                                "name" "read_node"
-                                "arguments" (structural-editing-mcp.mcp::dict
-                                              "path" '(0 0)
-                                              "load_files" #("/tmp/occ-test.lisp")
-                                              "agent_id" "agent-a"))))
-           (*standard-output* (make-string-output-stream))
-           (out-a (progn
-                    (structural-editing-mcp.mcp:handle-message read-a)
-                    (get-output-stream-string *standard-output*)))
-           (json-a (let ((yason:*parse-json-arrays-as-vectors* nil))
-                     (yason:parse out-a)))
-           (content-a (first (gethash "content" (gethash "result" json-a))))
-           (text-a (gethash "text" content-a)))
-      (ok (search "Workspace Revision: 1" text-a)))
+                  ;; 1. Agent A reads node [0, 0]
+                  (let* ((read-a (structural-editing-mcp.mcp::dict
+                                   "jsonrpc" "2.0"
+                                   "id" 1001
+                                   "method" "tools/call"
+                                   "params" (structural-editing-mcp.mcp::dict
+                                              "name" "read_node"
+                                              "arguments" (structural-editing-mcp.mcp::dict
+                                                            "path" '(0 0)
+                                                            "load_files" #("/tmp/occ-test.lisp")
+                                                            "agent_id" "agent-a"))))
+                         (*standard-output* (make-string-output-stream))
+                         (out-a (progn
+                                  (structural-editing-mcp.mcp:handle-message read-a)
+                                  (get-output-stream-string *standard-output*)))
+                         (json-a (let ((yason:*parse-json-arrays-as-vectors* nil))
+                                   (yason:parse out-a)))
+                         (content-a (first (gethash "content" (gethash "result" json-a))))
+                         (text-a (gethash "text" content-a)))
+                    (ok (search "Workspace Revision: 1" text-a)))
 
-    ;; 2. Agent B also reads node [0, 0]
-    (let* ((read-b (structural-editing-mcp.mcp::dict
-                     "jsonrpc" "2.0"
-                     "id" 1002
-                     "method" "tools/call"
-                     "params" (structural-editing-mcp.mcp::dict
-                                "name" "read_node"
-                                "arguments" (structural-editing-mcp.mcp::dict
-                                              "path" '(0 0)
-                                              "agent_id" "agent-b"))))
-           (*standard-output* (make-string-output-stream))
-           (out-b (progn
-                    (structural-editing-mcp.mcp:handle-message read-b)
-                    (get-output-stream-string *standard-output*)))
-           (json-b (let ((yason:*parse-json-arrays-as-vectors* nil))
-                     (yason:parse out-b)))
-           (content-b (first (gethash "content" (gethash "result" json-b))))
-           (text-b (gethash "text" content-b)))
-      (ok (search "Workspace Revision: 1" text-b)))
+                  ;; 2. Agent B also reads node [0, 0]
+                  (let* ((read-b (structural-editing-mcp.mcp::dict
+                                   "jsonrpc" "2.0"
+                                   "id" 1002
+                                   "method" "tools/call"
+                                   "params" (structural-editing-mcp.mcp::dict
+                                              "name" "read_node"
+                                              "arguments" (structural-editing-mcp.mcp::dict
+                                                            "path" '(0 0)
+                                                            "agent_id" "agent-b"))))
+                         (*standard-output* (make-string-output-stream))
+                         (out-b (progn
+                                  (structural-editing-mcp.mcp:handle-message read-b)
+                                  (get-output-stream-string *standard-output*)))
+                         (json-b (let ((yason:*parse-json-arrays-as-vectors* nil))
+                                   (yason:parse out-b)))
+                         (content-b (first (gethash "content" (gethash "result" json-b))))
+                         (text-b (gethash "text" content-b)))
+                    (ok (search "Workspace Revision: 1" text-b)))
 
-    ;; 3. Agent A modifies form at [0, 0, 1]
-    (let* ((mod-a (structural-editing-mcp.mcp::dict
-                    "jsonrpc" "2.0"
-                    "id" 1003
-                    "method" "tools/call"
-                    "params" (structural-editing-mcp.mcp::dict
-                               "name" "ast_modify"
-                               "arguments" (structural-editing-mcp.mcp::dict
-                                             "path" '(0 0 1)
-                                             "action" "insert"
-                                             "new_node" "(defun inserted () 42)"
-                                             "agent_id" "agent-a"))))
-           (*standard-output* (make-string-output-stream))
-           (out-mod-a (progn
-                        (structural-editing-mcp.mcp:handle-message mod-a)
-                        (get-output-stream-string *standard-output*)))
-           (json-mod-a (let ((yason:*parse-json-arrays-as-vectors* nil))
-                         (yason:parse out-mod-a)))
-           (res-a (gethash "result" json-mod-a))
-           (text-res-a (gethash "text" (first (gethash "content" res-a)))))
-      (ok (search "Workspace Revision: 2" text-res-a))
-      (ok (= structural-editing-mcp.workspace:*workspace-revision* 2)))
+                  ;; 3. Agent A modifies form at [0, 0, 1]
+                  (let* ((mod-a (structural-editing-mcp.mcp::dict
+                                  "jsonrpc" "2.0"
+                                  "id" 1003
+                                  "method" "tools/call"
+                                  "params" (structural-editing-mcp.mcp::dict
+                                             "name" "ast_modify"
+                                             "arguments" (structural-editing-mcp.mcp::dict
+                                                           "path" '(0 0 1)
+                                                           "action" "insert"
+                                                           "new_node" "(defun inserted () 42)"
+                                                           "agent_id" "agent-a"))))
+                         (*standard-output* (make-string-output-stream))
+                         (out-mod-a (progn
+                                      (structural-editing-mcp.mcp:handle-message mod-a)
+                                      (get-output-stream-string *standard-output*)))
+                         (json-mod-a (let ((yason:*parse-json-arrays-as-vectors* nil))
+                                       (yason:parse out-mod-a)))
+                         (res-a (gethash "result" json-mod-a))
+                         (text-res-a (gethash "text" (first (gethash "content" res-a)))))
+                    (ok (search "Workspace Revision: 2" text-res-a))
+                    (ok (= structural-editing-mcp.workspace:*workspace-revision* 2)))
 
-    ;; 4. Agent B tries to mutate [0, 0, 1] without re-reading -> CONFLICT REJECTION!
-    (let* ((mod-b (structural-editing-mcp.mcp::dict
-                    "jsonrpc" "2.0"
-                    "id" 1004
-                    "method" "tools/call"
-                    "params" (structural-editing-mcp.mcp::dict
-                               "name" "ast_modify"
-                               "arguments" (structural-editing-mcp.mcp::dict
-                                             "path" '(0 0 1)
-                                             "action" "overwrite"
-                                             "new_node" "(defun bar () 99)"
-                                             "agent_id" "agent-b"))))
-           (*standard-output* (make-string-output-stream))
-           (out-mod-b (progn
-                        (structural-editing-mcp.mcp:handle-message mod-b)
-                        (get-output-stream-string *standard-output*)))
-           (json-mod-b (let ((yason:*parse-json-arrays-as-vectors* nil))
-                         (yason:parse out-mod-b)))
-           (res-b (gethash "result" json-mod-b))
-           (err-content (first (gethash "content" res-b)))
-           (err-text (gethash "text" err-content)))
-      (ok (gethash "isError" res-b))
-      (ok (search "Conflict: The workspace was modified by another agent since your last read" err-text))
-      (ok (search "Current revision is 2 (your view was at revision 1)" err-text))
-      (ok (search "Action required: Call read_node on [0, 0]" err-text)))
+                  ;; 4. Agent B tries to mutate [0, 0, 1] without re-reading -> CONFLICT REJECTION!
+                  (let* ((mod-b (structural-editing-mcp.mcp::dict
+                                  "jsonrpc" "2.0"
+                                  "id" 1004
+                                  "method" "tools/call"
+                                  "params" (structural-editing-mcp.mcp::dict
+                                             "name" "ast_modify"
+                                             "arguments" (structural-editing-mcp.mcp::dict
+                                                           "path" '(0 0 1)
+                                                           "action" "overwrite"
+                                                           "new_node" "(defun bar () 99)"
+                                                           "agent_id" "agent-b"))))
+                         (*standard-output* (make-string-output-stream))
+                         (out-mod-b (progn
+                                      (structural-editing-mcp.mcp:handle-message mod-b)
+                                      (get-output-stream-string *standard-output*)))
+                         (json-mod-b (let ((yason:*parse-json-arrays-as-vectors* nil))
+                                       (yason:parse out-mod-b)))
+                         (res-b (gethash "result" json-mod-b))
+                         (err-content (first (gethash "content" res-b)))
+                         (err-text (gethash "text" err-content)))
+                    (ok (gethash "isError" res-b))
+                    (ok (search "Conflict: The workspace was modified by another agent since your last read" err-text))
+                    (ok (search "Current revision is 2 (your view was at revision 1)" err-text))
+                    (ok (search "Action required: Call read_node on [0, 0]" err-text)))
 
-    ;; 5. Agent B follows action required and calls read_node on [0, 0]
-    (let* ((read-b2 (structural-editing-mcp.mcp::dict
-                      "jsonrpc" "2.0"
-                      "id" 1005
-                      "method" "tools/call"
-                      "params" (structural-editing-mcp.mcp::dict
-                                 "name" "read_node"
-                                 "arguments" (structural-editing-mcp.mcp::dict
-                                               "path" '(0 0)
-                                               "agent_id" "agent-b"))))
-           (*standard-output* (make-string-output-stream)))
-      (structural-editing-mcp.mcp:handle-message read-b2)
-      (ok (= (gethash "agent-b" structural-editing-mcp.workspace:*agent-views*) 2)))
+                  ;; 5. Agent B follows action required and calls read_node on [0, 0]
+                  (let* ((read-b2 (structural-editing-mcp.mcp::dict
+                                    "jsonrpc" "2.0"
+                                    "id" 1005
+                                    "method" "tools/call"
+                                    "params" (structural-editing-mcp.mcp::dict
+                                               "name" "read_node"
+                                               "arguments" (structural-editing-mcp.mcp::dict
+                                                             "path" '(0 0)
+                                                             "agent_id" "agent-b"))))
+                         (*standard-output* (make-string-output-stream)))
+                    (structural-editing-mcp.mcp:handle-message read-b2)
+                    (ok (= (gethash "agent-b" structural-editing-mcp.workspace:*agent-views*) 2)))
 
-    ;; 6. Agent B now re-submits its edit with updated target path [0, 0, 2] -> SUCCEEDS!
-    (let* ((mod-b2 (structural-editing-mcp.mcp::dict
-                     "jsonrpc" "2.0"
-                     "id" 1006
-                     "method" "tools/call"
-                     "params" (structural-editing-mcp.mcp::dict
-                                "name" "ast_modify"
-                                "arguments" (structural-editing-mcp.mcp::dict
-                                              "path" '(0 0 2)
-                                              "action" "overwrite"
-                                              "new_node" "(defun bar () 99)"
-                                              "agent_id" "agent-b"))))
-           (*standard-output* (make-string-output-stream))
-           (out-b2 (progn
-                     (structural-editing-mcp.mcp:handle-message mod-b2)
-                     (get-output-stream-string *standard-output*)))
-           (json-b2 (let ((yason:*parse-json-arrays-as-vectors* nil))
-                      (yason:parse out-b2)))
-           (res-b2 (gethash "result" json-b2)))
-      (ok (null (gethash "isError" res-b2)))
-      (ok (= structural-editing-mcp.workspace:*workspace-revision* 3)))))
+                  ;; 6. Agent B now re-submits its edit with updated target path [0, 0, 2] -> SUCCEEDS!
+                  (let* ((mod-b2 (structural-editing-mcp.mcp::dict
+                                   "jsonrpc" "2.0"
+                                   "id" 1006
+                                   "method" "tools/call"
+                                   "params" (structural-editing-mcp.mcp::dict
+                                              "name" "ast_modify"
+                                              "arguments" (structural-editing-mcp.mcp::dict
+                                                            "path" '(0 0 2)
+                                                            "action" "overwrite"
+                                                            "new_node" "(defun bar () 99)"
+                                                            "agent_id" "agent-b"))))
+                         (*standard-output* (make-string-output-stream))
+                         (out-b2 (progn
+                                   (structural-editing-mcp.mcp:handle-message mod-b2)
+                                   (get-output-stream-string *standard-output*)))
+                         (json-b2 (let ((yason:*parse-json-arrays-as-vectors* nil))
+                                    (yason:parse out-b2)))
+                         (res-b2 (gethash "result" json-b2)))
+                    (ok (null (gethash "isError" res-b2)))
+                    (ok (= structural-editing-mcp.workspace:*workspace-revision* 3)))))
 
 (deftest test-mcp-worker-pool
-  (testing "worker thread pool processes queued tasks safely and cleanly shuts down"
-    (structural-editing-mcp.mcp:start-worker-pool 2)
-    (let ((counter 0)
-          (lock (bt:make-lock "test-lock")))
-      (loop repeat 10
-            do (structural-editing-mcp.mcp::enqueue-task
-                 (lambda ()
-                   (bt:with-lock-held (lock)
-                     (incf counter)))))
-      ;; Allow worker threads to drain queue
-      (loop repeat 30
-            until (bt:with-lock-held (lock) (= counter 10))
-            do (sleep 0.05))
-      (ok (= counter 10)))
-    (structural-editing-mcp.mcp:stop-worker-pool)))
+         (testing "worker thread pool processes queued tasks safely and cleanly shuts down"
+                  (structural-editing-mcp.mcp:start-worker-pool 2)
+                  (let ((counter 0)
+                        (lock (bt:make-lock "test-lock")))
+                    (loop repeat 10
+                          do (structural-editing-mcp.mcp::enqueue-task
+                               (lambda ()
+                                 (bt:with-lock-held (lock)
+                                                    (incf counter)))))
+                    ;; Allow worker threads to drain queue
+                    (loop repeat 30
+                          until (bt:with-lock-held (lock) (= counter 10))
+                          do (sleep 0.05))
+                    (ok (= counter 10)))
+                  (structural-editing-mcp.mcp:stop-worker-pool)))
 
 (deftest test-mcp-granular-error-codes
-  (testing "handle-tools-call returns distinct error codes and structured error types"
-    (structural-editing-mcp.workspace:init-workspace)
-    (with-open-file (f "/tmp/err-test.lisp" :direction :output :if-exists :supersede)
-      (write-string "(defun foo () 1)" f))
-    (structural-editing-mcp.workspace:load-into-workspace '("/tmp/err-test.lisp"))
+         (testing "handle-tools-call returns distinct error codes and structured error types"
+                  (structural-editing-mcp.workspace:init-workspace)
+                  (with-open-file (f "/tmp/err-test.lisp" :direction :output :if-exists :supersede)
+                    (write-string "(defun foo () 1)" f))
+                  (structural-editing-mcp.workspace:load-into-workspace '("/tmp/err-test.lisp"))
 
-    ;; 1. Invalid path error -> code -32602, errorType "invalid_path"
-    (let* ((msg (structural-editing-mcp.mcp::dict
-                  "jsonrpc" "2.0"
-                  "id" 2001
-                  "method" "tools/call"
-                  "params" (structural-editing-mcp.mcp::dict
-                             "name" "ast_modify"
-                             "arguments" (structural-editing-mcp.mcp::dict
-                                           "path" '(0 0 999)
-                                           "action" "overwrite"
-                                           "new_node" "42"))))
-           (json (call-mcp-msg msg))
-           (res (gethash "result" json)))
-      (ok (gethash "isError" res) "invalid path: isError")
-      (ok (= (gethash "errorCode" res) -32602) "invalid path: errorCode -32602")
-      (ok (equal (gethash "errorType" res) "invalid_path") "invalid path: errorType"))
+                  ;; 1. Invalid path error -> code -32602, errorType "invalid_path"
+                  (let* ((msg (structural-editing-mcp.mcp::dict
+                                "jsonrpc" "2.0"
+                                "id" 2001
+                                "method" "tools/call"
+                                "params" (structural-editing-mcp.mcp::dict
+                                           "name" "ast_modify"
+                                           "arguments" (structural-editing-mcp.mcp::dict
+                                                         "path" '(0 0 999)
+                                                         "action" "overwrite"
+                                                         "new_node" "42"))))
+                         (json (call-mcp-msg msg))
+                         (res (gethash "result" json)))
+                    (ok (gethash "isError" res) "invalid path: isError")
+                    (ok (= (gethash "errorCode" res) -32602) "invalid path: errorCode -32602")
+                    (ok (equal (gethash "errorType" res) "invalid_path") "invalid path: errorType"))
 
-    ;; 2. Sexp parse error -> code -32700, errorType "parse_error"
-    (let* ((msg2 (structural-editing-mcp.mcp::dict
-                   "jsonrpc" "2.0"
-                   "id" 2002
-                   "method" "tools/call"
-                   "params" (structural-editing-mcp.mcp::dict
-                              "name" "ast_modify"
-                              "arguments" (structural-editing-mcp.mcp::dict
-                                            "path" '(0 0 0)
-                                            "action" "overwrite"
-                                            "new_node" ""))))
-           (json2 (call-mcp-msg msg2))
-           (res2 (gethash "result" json2)))
-      (ok (gethash "isError" res2) "parse error: isError")
-      (ok (= (gethash "errorCode" res2) -32700) "parse error: errorCode -32700")
-      (ok (equal (gethash "errorType" res2) "parse_error") "parse error: errorType"))))
+                  ;; 2. Sexp parse error -> code -32700, errorType "parse_error"
+                  (let* ((msg2 (structural-editing-mcp.mcp::dict
+                                 "jsonrpc" "2.0"
+                                 "id" 2002
+                                 "method" "tools/call"
+                                 "params" (structural-editing-mcp.mcp::dict
+                                            "name" "ast_modify"
+                                            "arguments" (structural-editing-mcp.mcp::dict
+                                                          "path" '(0 0 0)
+                                                          "action" "overwrite"
+                                                          "new_node" ""))))
+                         (json2 (call-mcp-msg msg2))
+                         (res2 (gethash "result" json2)))
+                    (ok (gethash "isError" res2) "parse error: isError")
+                    (ok (= (gethash "errorCode" res2) -32700) "parse error: errorCode -32700")
+                    (ok (equal (gethash "errorType" res2) "parse_error") "parse error: errorType"))))
 
 (deftest test-mcp-commit-workspace
-  (testing "commit_workspace persists an in-memory edit to disk"
-    (structural-editing-mcp.workspace:init-workspace)
-    (with-open-file (f "/tmp/commit-test.lisp" :direction :output :if-exists :supersede)
-      (write-string "(defun original () 1)" f))
+         (testing "commit_workspace persists an in-memory edit to disk"
+                  (structural-editing-mcp.workspace:init-workspace)
+                  (with-open-file (f "/tmp/commit-test.lisp" :direction :output :if-exists :supersede)
+                    (write-string "(defun original () 1)" f))
 
-    ;; Load the file into the workspace through read_node
-    (let* ((read-msg (structural-editing-mcp.mcp::dict
-                      "jsonrpc" "2.0"
-                      "id" 3001
-                      "method" "tools/call"
-                      "params" (structural-editing-mcp.mcp::dict
-                                 "name" "read_node"
-                                 "arguments" (structural-editing-mcp.mcp::dict
-                                               "path" #()
-                                               "load_files" #("/tmp/commit-test.lisp")))))
-           (*standard-output* (make-string-output-stream)))
-      (structural-editing-mcp.mcp:handle-message read-msg))
+                  ;; Load the file into the workspace through read_node
+                  (let* ((read-msg (structural-editing-mcp.mcp::dict
+                                     "jsonrpc" "2.0"
+                                     "id" 3001
+                                     "method" "tools/call"
+                                     "params" (structural-editing-mcp.mcp::dict
+                                                "name" "read_node"
+                                                "arguments" (structural-editing-mcp.mcp::dict
+                                                              "path" #()
+                                                              "load_files" #("/tmp/commit-test.lisp")))))
+                         (*standard-output* (make-string-output-stream)))
+                    (structural-editing-mcp.mcp:handle-message read-msg))
 
-    ;; Mutate a leaf in memory using ast_modify
-    (let* ((mod-msg (structural-editing-mcp.mcp::dict
-                     "jsonrpc" "2.0"
-                     "id" 3002
-                     "method" "tools/call"
-                     "params" (structural-editing-mcp.mcp::dict
-                                "name" "ast_modify"
-                                "arguments" (structural-editing-mcp.mcp::dict
-                                              "path" '(0 0 0 0)
-                                              "action" "overwrite"
-                                              "new_node" "renamed"))))
-           (*standard-output* (make-string-output-stream)))
-      (structural-editing-mcp.mcp:handle-message mod-msg))
+                  ;; Mutate a leaf in memory using ast_modify
+                  (let* ((mod-msg (structural-editing-mcp.mcp::dict
+                                    "jsonrpc" "2.0"
+                                    "id" 3002
+                                    "method" "tools/call"
+                                    "params" (structural-editing-mcp.mcp::dict
+                                               "name" "ast_modify"
+                                               "arguments" (structural-editing-mcp.mcp::dict
+                                                             "path" '(0 0 0 0)
+                                                             "action" "overwrite"
+                                                             "new_node" "renamed"))))
+                         (*standard-output* (make-string-output-stream)))
+                    (structural-editing-mcp.mcp:handle-message mod-msg))
 
-    ;; Nothing was written to disk before commit
-    (ok (not (search "renamed" (uiop:read-file-string "/tmp/commit-test.lisp"))))
+                  ;; Nothing was written to disk before commit
+                  (ok (not (search "renamed" (uiop:read-file-string "/tmp/commit-test.lisp"))))
 
-    ;; Commit through the MCP tool itself
-    (let* ((commit-msg (structural-editing-mcp.mcp::dict
-                        "jsonrpc" "2.0"
-                        "id" 3003
-                        "method" "tools/call"
-                        "params" (structural-editing-mcp.mcp::dict
-                                   "name" "commit_workspace"
-                                   "arguments" (make-hash-table))))
-           (json (call-mcp-msg commit-msg))
-           (res (gethash "result" json)))
-      (ok (null (gethash "isError" res)))
-      (ok (search "committed" (gethash "text" (first (gethash "content" res)))))
+                  ;; Commit through the MCP tool itself
+                  (let* ((commit-msg (structural-editing-mcp.mcp::dict
+                                       "jsonrpc" "2.0"
+                                       "id" 3003
+                                       "method" "tools/call"
+                                       "params" (structural-editing-mcp.mcp::dict
+                                                  "name" "commit_workspace"
+                                                  "arguments" (make-hash-table))))
+                         (json (call-mcp-msg commit-msg))
+                         (res (gethash "result" json)))
+                    (ok (null (gethash "isError" res)))
+                    (ok (search "committed" (gethash "text" (first (gethash "content" res)))))
 
-    ;; The file on disk now reflects the edit
-    (ok (search "renamed" (uiop:read-file-string "/tmp/commit-test.lisp"))))))
+                    ;; The file on disk now reflects the edit
+                    (ok (search "renamed" (uiop:read-file-string "/tmp/commit-test.lisp"))))))
 
 (deftest test-mcp-mutation-rollback
-  (testing "execute-mutation-tool-locked rolls back *workspace-tree* and revision on failure"
-    (structural-editing-mcp.workspace:init-workspace)
-    (with-open-file (f "/tmp/rollback-test.lisp" :direction :output :if-exists :supersede)
-      (write-string "(defun test () 123)" f))
-    (let* ((read-msg (structural-editing-mcp.mcp::dict
-                       "jsonrpc" "2.0"
-                       "id" 4000
-                       "method" "tools/call"
-                       "params" (structural-editing-mcp.mcp::dict
-                                  "name" "read_node"
-                                  "arguments" (structural-editing-mcp.mcp::dict
-                                                "path" #()
-                                                "load_files" #("/tmp/rollback-test.lisp")))))
-           (*standard-output* (make-string-output-stream)))
-      (structural-editing-mcp.mcp:handle-message read-msg))
-    (let ((init-tree (copy-tree structural-editing-mcp.workspace:*workspace-tree*))
-          (orig-rev structural-editing-mcp.workspace:*workspace-revision*))
-      ;; Attempt a mutation that fails with invalid-path-error
-      (let* ((failing-msg (structural-editing-mcp.mcp::dict
-                            "jsonrpc" "2.0"
-                            "id" 4001
-                            "method" "tools/call"
-                            "params" (structural-editing-mcp.mcp::dict
-                                       "name" "ast_modify"
-                                       "arguments" (structural-editing-mcp.mcp::dict
-                                                     "path" '(0 0 999 999)
-                                                     "action" "overwrite"
-                                                     "new_node" "boom"))))
-             (json (call-mcp-msg failing-msg))
-             (res (gethash "result" json)))
-        (ok (gethash "isError" res))
-        (ok (= structural-editing-mcp.workspace:*workspace-revision* orig-rev))
-        (ok (equal structural-editing-mcp.workspace:*workspace-tree* init-tree))))))
+         (testing "execute-mutation-tool-locked rolls back *workspace-tree* and revision on failure"
+                  (structural-editing-mcp.workspace:init-workspace)
+                  (with-open-file (f "/tmp/rollback-test.lisp" :direction :output :if-exists :supersede)
+                    (write-string "(defun test () 123)" f))
+                  (let* ((read-msg (structural-editing-mcp.mcp::dict
+                                     "jsonrpc" "2.0"
+                                     "id" 4000
+                                     "method" "tools/call"
+                                     "params" (structural-editing-mcp.mcp::dict
+                                                "name" "read_node"
+                                                "arguments" (structural-editing-mcp.mcp::dict
+                                                              "path" #()
+                                                              "load_files" #("/tmp/rollback-test.lisp")))))
+                         (*standard-output* (make-string-output-stream)))
+                    (structural-editing-mcp.mcp:handle-message read-msg))
+                  (let ((init-tree (copy-tree structural-editing-mcp.workspace:*workspace-tree*))
+                        (orig-rev structural-editing-mcp.workspace:*workspace-revision*))
+                    ;; Attempt a mutation that fails with invalid-path-error
+                    (let* ((failing-msg (structural-editing-mcp.mcp::dict
+                                          "jsonrpc" "2.0"
+                                          "id" 4001
+                                          "method" "tools/call"
+                                          "params" (structural-editing-mcp.mcp::dict
+                                                     "name" "ast_modify"
+                                                     "arguments" (structural-editing-mcp.mcp::dict
+                                                                   "path" '(0 0 999 999)
+                                                                   "action" "overwrite"
+                                                                   "new_node" "boom"))))
+                           (json (call-mcp-msg failing-msg))
+                           (res (gethash "result" json)))
+                      (ok (gethash "isError" res))
+                      (ok (= structural-editing-mcp.workspace:*workspace-revision* orig-rev))
+                      (ok (equal structural-editing-mcp.workspace:*workspace-tree* init-tree))))))
 
 (deftest test-mcp-workspace-routing
-  (testing "tools route through workspace_id isolating independent workspaces"
-    (structural-editing-mcp.workspace:create-workspace "isolated-ws")
-    (with-open-file (f "/tmp/iso-test.lisp" :direction :output :if-exists :supersede)
-      (write-string "(defun iso () 1)" f))
-    ;; Load file into isolated-ws
-    (let* ((load-msg (structural-editing-mcp.mcp::dict
-                       "jsonrpc" "2.0"
-                       "id" 5001
-                       "method" "tools/call"
-                       "params" (structural-editing-mcp.mcp::dict
-                                  "name" "read_node"
-                                  "arguments" (structural-editing-mcp.mcp::dict
-                                                "workspace_id" "isolated-ws"
-                                                "path" #()
-                                                "load_files" #("/tmp/iso-test.lisp")))))
-           (*standard-output* (make-string-output-stream)))
-      (structural-editing-mcp.mcp:handle-message load-msg))
-    ;; Verify default workspace did NOT load this file
-    (let* ((default-ws (structural-editing-mcp.workspace:get-workspace "default"))
-           (iso-ws (structural-editing-mcp.workspace:get-workspace "isolated-ws")))
-      (ok (not (equal (structural-editing-mcp.workspace:workspace-context-tree default-ws)
-                      (structural-editing-mcp.workspace:workspace-context-tree iso-ws))))
-      (ok (= 1 (hash-table-count (structural-editing-mcp.workspace:workspace-context-clean-state iso-ws))))
-      ;; Non-existent workspace_id yields workspace_error in response
-      (let* ((bad-msg (structural-editing-mcp.mcp::dict
-                        "jsonrpc" "2.0"
-                        "id" 5002
-                        "method" "tools/call"
-                        "params" (structural-editing-mcp.mcp::dict
-                                   "name" "read_node"
-                                   "arguments" (structural-editing-mcp.mcp::dict
-                                                 "workspace_id" "non-existent-xyz"
-                                                 "path" #()))))
-             (json (call-mcp-msg bad-msg))
-             (res (gethash "result" json)))
-        (ok (gethash "isError" res))
-        (ok (equal "workspace_error" (gethash "errorType" res)))))
-    (structural-editing-mcp.workspace:delete-workspace "isolated-ws")))
+         (testing "tools route through workspace_id isolating independent workspaces"
+                  (structural-editing-mcp.workspace:create-workspace "isolated-ws")
+                  (with-open-file (f "/tmp/iso-test.lisp" :direction :output :if-exists :supersede)
+                    (write-string "(defun iso () 1)" f))
+                  ;; Load file into isolated-ws
+                  (let* ((load-msg (structural-editing-mcp.mcp::dict
+                                     "jsonrpc" "2.0"
+                                     "id" 5001
+                                     "method" "tools/call"
+                                     "params" (structural-editing-mcp.mcp::dict
+                                                "name" "read_node"
+                                                "arguments" (structural-editing-mcp.mcp::dict
+                                                              "workspace_id" "isolated-ws"
+                                                              "path" #()
+                                                              "load_files" #("/tmp/iso-test.lisp")))))
+                         (*standard-output* (make-string-output-stream)))
+                    (structural-editing-mcp.mcp:handle-message load-msg))
+                  ;; Verify default workspace did NOT load this file
+                  (let* ((default-ws (structural-editing-mcp.workspace:get-workspace "default"))
+                         (iso-ws (structural-editing-mcp.workspace:get-workspace "isolated-ws")))
+                    (ok (not (equal (structural-editing-mcp.workspace:workspace-context-tree default-ws)
+                                    (structural-editing-mcp.workspace:workspace-context-tree iso-ws))))
+                    (ok (= 1 (hash-table-count (structural-editing-mcp.workspace:workspace-context-clean-state iso-ws))))
+                    ;; Non-existent workspace_id yields workspace_error in response
+                    (let* ((bad-msg (structural-editing-mcp.mcp::dict
+                                      "jsonrpc" "2.0"
+                                      "id" 5002
+                                      "method" "tools/call"
+                                      "params" (structural-editing-mcp.mcp::dict
+                                                 "name" "read_node"
+                                                 "arguments" (structural-editing-mcp.mcp::dict
+                                                               "workspace_id" "non-existent-xyz"
+                                                               "path" #()))))
+                           (json (call-mcp-msg bad-msg))
+                           (res (gethash "result" json)))
+                      (ok (gethash "isError" res))
+                      (ok (equal "workspace_error" (gethash "errorType" res)))))
+                  (structural-editing-mcp.workspace:delete-workspace "isolated-ws")))
 
 (deftest test-mcp-workspace-manage
-  (testing "workspace_manage tool actions create, list, fork, snapshot, restore, delete"
-    (let* ((create-msg (structural-editing-mcp.mcp::dict
-                         "jsonrpc" "2.0"
-                         "id" 6001
-                         "method" "tools/call"
-                         "params" (structural-editing-mcp.mcp::dict
-                                    "name" "workspace_manage"
-                                    "arguments" (structural-editing-mcp.mcp::dict
-                                                  "action" "create"
-                                                  "target_id" "ws-tool-test"))))
-           (create-res (call-mcp-msg create-msg))
-           (list-msg (structural-editing-mcp.mcp::dict
-                       "jsonrpc" "2.0"
-                       "id" 6002
-                       "method" "tools/call"
-                       "params" (structural-editing-mcp.mcp::dict
-                                  "name" "workspace_manage"
-                                  "arguments" (structural-editing-mcp.mcp::dict
-                                                "action" "list"))))
-           (list-res (call-mcp-msg list-msg))
-           (delete-msg (structural-editing-mcp.mcp::dict
-                         "jsonrpc" "2.0"
-                         "id" 6003
-                         "method" "tools/call"
-                         "params" (structural-editing-mcp.mcp::dict
-                                    "name" "workspace_manage"
-                                    "arguments" (structural-editing-mcp.mcp::dict
-                                                  "action" "delete"
-                                                  "workspace_id" "ws-tool-test"))))
-           (delete-res (call-mcp-msg delete-msg)))
-      (ok (null (gethash "isError" (gethash "result" create-res))))
-      (ok (search "Workspaces" (gethash "text" (first (gethash "content" (gethash "result" list-res))))))
-      (ok (search "ws-tool-test" (gethash "text" (first (gethash "content" (gethash "result" list-res))))))
-      (ok (null (gethash "isError" (gethash "result" delete-res)))))))
+         (testing "workspace_manage tool actions create, list, fork, snapshot, restore, delete"
+                  (let* ((create-msg (structural-editing-mcp.mcp::dict
+                                       "jsonrpc" "2.0"
+                                       "id" 6001
+                                       "method" "tools/call"
+                                       "params" (structural-editing-mcp.mcp::dict
+                                                  "name" "workspace_manage"
+                                                  "arguments" (structural-editing-mcp.mcp::dict
+                                                                "action" "create"
+                                                                "target_id" "ws-tool-test"))))
+                         (create-res (call-mcp-msg create-msg))
+                         (list-msg (structural-editing-mcp.mcp::dict
+                                     "jsonrpc" "2.0"
+                                     "id" 6002
+                                     "method" "tools/call"
+                                     "params" (structural-editing-mcp.mcp::dict
+                                                "name" "workspace_manage"
+                                                "arguments" (structural-editing-mcp.mcp::dict
+                                                              "action" "list"))))
+                         (list-res (call-mcp-msg list-msg))
+                         (delete-msg (structural-editing-mcp.mcp::dict
+                                       "jsonrpc" "2.0"
+                                       "id" 6003
+                                       "method" "tools/call"
+                                       "params" (structural-editing-mcp.mcp::dict
+                                                  "name" "workspace_manage"
+                                                  "arguments" (structural-editing-mcp.mcp::dict
+                                                                "action" "delete"
+                                                                "workspace_id" "ws-tool-test"))))
+                         (delete-res (call-mcp-msg delete-msg)))
+                    (ok (null (gethash "isError" (gethash "result" create-res))))
+                    (ok (search "Workspaces" (gethash "text" (first (gethash "content" (gethash "result" list-res))))))
+                    (ok (search "ws-tool-test" (gethash "text" (first (gethash "content" (gethash "result" list-res))))))
+                    (ok (null (gethash "isError" (gethash "result" delete-res)))))))
 
 (deftest test-mcp-workspace-status-diff-merge
-  (testing "workspace_status, workspace_diff, workspace_merge via MCP JSON-RPC"
-    (structural-editing-mcp.workspace:create-workspace "mcp-merge-src")
-    (structural-editing-mcp.workspace:create-workspace "mcp-merge-tgt")
-    (let* ((status-msg (structural-editing-mcp.mcp::dict
-                         "jsonrpc" "2.0"
-                         "id" 7001
-                         "method" "tools/call"
-                         "params" (structural-editing-mcp.mcp::dict
-                                    "name" "workspace_status"
-                                    "arguments" (structural-editing-mcp.mcp::dict
-                                                  "workspace_id" "mcp-merge-src"))))
-           (status-res (call-mcp-msg status-msg))
-           (diff-msg (structural-editing-mcp.mcp::dict
-                       "jsonrpc" "2.0"
-                       "id" 7002
-                       "method" "tools/call"
-                       "params" (structural-editing-mcp.mcp::dict
-                                  "name" "workspace_diff"
-                                  "arguments" (structural-editing-mcp.mcp::dict
-                                                "source_workspace_id" "mcp-merge-src"
-                                                "target_workspace_id" "mcp-merge-tgt"))))
-           (diff-res (call-mcp-msg diff-msg))
-           (merge-msg (structural-editing-mcp.mcp::dict
-                        "jsonrpc" "2.0"
-                        "id" 7003
-                        "method" "tools/call"
-                        "params" (structural-editing-mcp.mcp::dict
-                                   "name" "workspace_merge"
-                                   "arguments" (structural-editing-mcp.mcp::dict
-                                                 "source_workspace_id" "mcp-merge-src"
-                                                 "target_workspace_id" "mcp-merge-tgt"))))
-           (merge-res (call-mcp-msg merge-msg)))
-      (ok (null (gethash "isError" (gethash "result" status-res))))
-      (ok (search "Workspace: mcp-merge-src" (gethash "text" (first (gethash "content" (gethash "result" status-res))))))
-      (ok (null (gethash "isError" (gethash "result" diff-res))))
-      (ok (search "Diff between [mcp-merge-src] and [mcp-merge-tgt]" (gethash "text" (first (gethash "content" (gethash "result" diff-res))))))
-      (ok (null (gethash "isError" (gethash "result" merge-res))))
-      (ok (search "Successfully merged" (gethash "text" (first (gethash "content" (gethash "result" merge-res)))))))
-    (structural-editing-mcp.workspace:delete-workspace "mcp-merge-src")
-    (structural-editing-mcp.workspace:delete-workspace "mcp-merge-tgt")))
+         (testing "workspace_status, workspace_diff, workspace_merge via MCP JSON-RPC"
+                  (structural-editing-mcp.workspace:create-workspace "mcp-merge-src")
+                  (structural-editing-mcp.workspace:create-workspace "mcp-merge-tgt")
+                  (let* ((status-msg (structural-editing-mcp.mcp::dict
+                                       "jsonrpc" "2.0"
+                                       "id" 7001
+                                       "method" "tools/call"
+                                       "params" (structural-editing-mcp.mcp::dict
+                                                  "name" "workspace_status"
+                                                  "arguments" (structural-editing-mcp.mcp::dict
+                                                                "workspace_id" "mcp-merge-src"))))
+                         (status-res (call-mcp-msg status-msg))
+                         (diff-msg (structural-editing-mcp.mcp::dict
+                                     "jsonrpc" "2.0"
+                                     "id" 7002
+                                     "method" "tools/call"
+                                     "params" (structural-editing-mcp.mcp::dict
+                                                "name" "workspace_diff"
+                                                "arguments" (structural-editing-mcp.mcp::dict
+                                                              "source_workspace_id" "mcp-merge-src"
+                                                              "target_workspace_id" "mcp-merge-tgt"))))
+                         (diff-res (call-mcp-msg diff-msg))
+                         (merge-msg (structural-editing-mcp.mcp::dict
+                                      "jsonrpc" "2.0"
+                                      "id" 7003
+                                      "method" "tools/call"
+                                      "params" (structural-editing-mcp.mcp::dict
+                                                 "name" "workspace_merge"
+                                                 "arguments" (structural-editing-mcp.mcp::dict
+                                                               "source_workspace_id" "mcp-merge-src"
+                                                               "target_workspace_id" "mcp-merge-tgt"))))
+                         (merge-res (call-mcp-msg merge-msg)))
+                    (ok (null (gethash "isError" (gethash "result" status-res))))
+                    (ok (search "Workspace: mcp-merge-src" (gethash "text" (first (gethash "content" (gethash "result" status-res))))))
+                    (ok (null (gethash "isError" (gethash "result" diff-res))))
+                    (ok (search "Diff between [mcp-merge-src] and [mcp-merge-tgt]" (gethash "text" (first (gethash "content" (gethash "result" diff-res))))))
+                    (ok (null (gethash "isError" (gethash "result" merge-res))))
+                    (ok (search "Successfully merged" (gethash "text" (first (gethash "content" (gethash "result" merge-res)))))))
+                  (structural-editing-mcp.workspace:delete-workspace "mcp-merge-src")
+                  (structural-editing-mcp.workspace:delete-workspace "mcp-merge-tgt")))

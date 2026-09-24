@@ -19,7 +19,7 @@
 ;;; JSON-RPC & MCP Utilities
 
 (defvar *stdout-lock* (bt:make-lock "stdout-lock")
-  "Mutex serializing output to *standard-output* across concurrent worker threads.")
+                      "Mutex serializing output to *standard-output* across concurrent worker threads.")
 
 (defun to-list (val)
   "Ensure val is a list, converting from vector if necessary."
@@ -28,9 +28,9 @@
 (defun send-json (object)
   "Encode and send JSON over stdout under *stdout-lock*."
   (bt:with-lock-held (*stdout-lock*)
-    (yason:encode object *standard-output*)
-    (terpri *standard-output*)
-    (force-output *standard-output*)))
+                     (yason:encode object *standard-output*)
+                     (terpri *standard-output*)
+                     (force-output *standard-output*)))
 
 (defun send-error (id code message)
   (send-json
@@ -52,12 +52,12 @@
   (loop
     (let ((task nil))
       (bt:with-lock-held (*worker-queue-lock*)
-        (loop while (and *worker-pool-running* (null *worker-queue*))
-              do (bt:condition-wait *worker-queue-cvar* *worker-queue-lock*))
-        (when (null *worker-queue*)
-          (unless *worker-pool-running*
-            (return)))
-        (setf task (pop *worker-queue*)))
+                         (loop while (and *worker-pool-running* (null *worker-queue*))
+                               do (bt:condition-wait *worker-queue-cvar* *worker-queue-lock*))
+                         (when (null *worker-queue*)
+                           (unless *worker-pool-running*
+                             (return)))
+                         (setf task (pop *worker-queue*)))
       (when task
         (handler-case
             (funcall task)
@@ -72,15 +72,15 @@
   (setf *worker-threads*
         (loop repeat num-workers
               collect (bt:make-thread
-                       (lambda () (worker-loop))
-                       :name "mcp-worker-thread"))))
+                        (lambda () (worker-loop))
+                        :name "mcp-worker-thread"))))
 
 (defun stop-worker-pool ()
   "Stop all worker threads in the worker pool."
   (setf *worker-pool-running* nil)
   (bt:with-lock-held (*worker-queue-lock*)
-    (loop repeat (* 2 (max 1 (length *worker-threads*)))
-          do (bt:condition-notify *worker-queue-cvar*)))
+                     (loop repeat (* 2 (max 1 (length *worker-threads*)))
+                           do (bt:condition-notify *worker-queue-cvar*)))
   (dolist (th *worker-threads*)
     (ignore-errors (bt:join-thread th)))
   (setf *worker-threads* nil))
@@ -88,8 +88,8 @@
 (defun enqueue-task (task-thunk)
   "Enqueue TASK-THUNK for processing by the worker pool."
   (bt:with-lock-held (*worker-queue-lock*)
-    (setf *worker-queue* (append *worker-queue* (list task-thunk)))
-    (bt:condition-notify *worker-queue-cvar*)))
+                     (setf *worker-queue* (append *worker-queue* (list task-thunk)))
+                     (bt:condition-notify *worker-queue-cvar*)))
 
 ;;; Node Presentation & Discovery Helpers
 
@@ -614,17 +614,17 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 (defun handle-tool-read-node (path args &optional (agent-id "default"))
   "Handle the read_node tool execution."
   (bt:with-lock-held (structural-editing-mcp.workspace:*workspace-lock*)
-    (let ((files-to-load (to-list (gethash "load_files" args))))
-      (when files-to-load
-        (structural-editing-mcp.workspace:load-into-workspace files-to-load)))
-    (unless structural-editing-mcp.workspace:*workspace-tree*
-      (structural-editing-mcp.workspace:init-workspace))
-    (structural-editing-mcp.workspace:record-agent-read agent-id)
-    (let* ((depth (or (gethash "depth" args) 2))
-           (node (structural-editing-mcp.tree:resolve-tree-scope
-                   structural-editing-mcp.workspace:*workspace-tree*
-                   path)))
-      (format-node-preview node :depth depth))))
+                     (let ((files-to-load (to-list (gethash "load_files" args))))
+                       (when files-to-load
+                         (structural-editing-mcp.workspace:load-into-workspace files-to-load)))
+                     (unless structural-editing-mcp.workspace:*workspace-tree*
+                       (structural-editing-mcp.workspace:init-workspace))
+                     (structural-editing-mcp.workspace:record-agent-read agent-id)
+                     (let* ((depth (or (gethash "depth" args) 2))
+                            (node (structural-editing-mcp.tree:resolve-tree-scope
+                                    structural-editing-mcp.workspace:*workspace-tree*
+                                    path)))
+                       (format-node-preview node :depth depth))))
 
 (defun handle-tool-ast-modify (path args)
   "Handle the ast_modify tool execution."
@@ -955,31 +955,31 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                        "isError" t)))
     (when extra-fields
       (loop for (k v) on extra-fields by #'cddr do
-        (setf (gethash k payload) v)))
+            (setf (gethash k payload) v)))
     (send-result id payload)))
 
 (defun execute-mutation-tool-locked (name path args dialect agent-id)
   "Execute a mutation tool holding *WORKSPACE-LOCK* with OCC validation and rollback on error."
   (bt:with-lock-held (structural-editing-mcp.workspace:*workspace-lock*)
-    (let ((target-path (if (equal name "ast_relocate")
-                         (to-list (href args "target_path"))
-                         path)))
-      (structural-editing-mcp.workspace:validate-agent-edit
-        :agent-id agent-id
-        :target-path target-path)
-      (let ((old-rev structural-editing-mcp.workspace:*workspace-revision*)
-            (old-tree structural-editing-mcp.workspace:*workspace-tree*)
-            (old-agent-rev (gethash agent-id structural-editing-mcp.workspace:*agent-views*)))
-        (structural-editing-mcp.workspace:commit-agent-edit agent-id)
-        (handler-case
-            (dispatch-tool-call name path args dialect agent-id)
-          (error (e)
-            (setf structural-editing-mcp.workspace:*workspace-tree* old-tree)
-            (setf structural-editing-mcp.workspace:*workspace-revision* old-rev)
-            (if old-agent-rev
-              (setf (gethash agent-id structural-editing-mcp.workspace:*agent-views*) old-agent-rev)
-              (remhash agent-id structural-editing-mcp.workspace:*agent-views*))
-            (error e)))))))
+                     (let ((target-path (if (equal name "ast_relocate")
+                                          (to-list (href args "target_path"))
+                                          path)))
+                       (structural-editing-mcp.workspace:validate-agent-edit
+                         :agent-id agent-id
+                         :target-path target-path)
+                       (let ((old-rev structural-editing-mcp.workspace:*workspace-revision*)
+                             (old-tree structural-editing-mcp.workspace:*workspace-tree*)
+                             (old-agent-rev (gethash agent-id structural-editing-mcp.workspace:*agent-views*)))
+                         (structural-editing-mcp.workspace:commit-agent-edit agent-id)
+                         (handler-case
+                             (dispatch-tool-call name path args dialect agent-id)
+                           (error (e)
+                             (setf structural-editing-mcp.workspace:*workspace-tree* old-tree)
+                             (setf structural-editing-mcp.workspace:*workspace-revision* old-rev)
+                             (if old-agent-rev
+                               (setf (gethash agent-id structural-editing-mcp.workspace:*agent-views*) old-agent-rev)
+                               (remhash agent-id structural-editing-mcp.workspace:*agent-views*))
+                             (error e)))))))
 
 (defun execute-tool-call (name path args dialect agent-id)
   "Route tool execution based on whether it requires mutation locking or plain dispatch."
@@ -988,7 +988,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (execute-mutation-tool-locked name path args dialect agent-id))
     ((equal name "commit_workspace")
       (bt:with-lock-held (structural-editing-mcp.workspace:*workspace-lock*)
-        (dispatch-tool-call name path args dialect agent-id)))
+                         (dispatch-tool-call name path args dialect agent-id)))
     (t
       (dispatch-tool-call name path args dialect agent-id))))
 
@@ -1002,7 +1002,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
     (handler-case
         (let* ((ws (structural-editing-mcp.workspace:get-workspace ws-id))
                (content (structural-editing-mcp.workspace:with-workspace-context (ws)
-                          (execute-tool-call name path args dialect agent-id))))
+                                                                                 (execute-tool-call name path args dialect agent-id))))
           (send-result id (dict "content" (list (dict "type" "text" "text" content)))))
       (structural-editing-mcp.conditions:occ-conflict-error (c)
         (send-tool-error-response

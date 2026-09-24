@@ -1,6 +1,6 @@
 (defpackage :structural-editing-mcp.conditions
   (:use :cl)
-   (:export :structural-editing-error
+  (:export :structural-editing-error
            :sexp-parse-error
            :parse-error-token
            :parse-error-message
@@ -120,16 +120,16 @@
   (:documentation "Signaled when an agent's edit conflicts with a concurrent workspace modification."))
 
 (defconstant +error-code-parse-error+ -32700
-  "JSON-RPC standard error code for syntax/parse errors.")
+                                      "JSON-RPC standard error code for syntax/parse errors.")
 
 (defconstant +error-code-invalid-params+ -32602
-  "JSON-RPC standard error code for invalid parameters or invalid AST paths.")
+                                         "JSON-RPC standard error code for invalid parameters or invalid AST paths.")
 
 (defconstant +error-code-workspace-error+ -32001
-  "JSON-RPC server error code for workspace lifecycle or file access failures.")
+                                          "JSON-RPC server error code for workspace lifecycle or file access failures.")
 
 (defconstant +error-code-occ-conflict+ -32002
-  "JSON-RPC server error code for optimistic concurrency control conflicts.")
+                                       "JSON-RPC server error code for optimistic concurrency control conflicts.")
 
 (defconstant +error-code-internal-error+ -32603
-  "JSON-RPC standard error code for internal server errors.")
+                                         "JSON-RPC standard error code for internal server errors.")
