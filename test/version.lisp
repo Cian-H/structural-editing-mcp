@@ -1,4 +1,4 @@
-(in-package :structural-editing-mcp-tests)
+(in-package :structural-editing-mcp-tests/version)
 
 (deftest test-calver-version-format
          (testing "version string is non-empty and accessible via +version+ and get-version"

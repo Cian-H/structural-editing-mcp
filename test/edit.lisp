@@ -1,4 +1,4 @@
-(in-package :structural-editing-mcp-tests)
+(in-package :structural-editing-mcp-tests/edit)
 
 (deftest test-insert-node
          (let ((ast (string-to-sexp "(a c)")))

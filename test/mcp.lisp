@@ -1,4 +1,4 @@
-(in-package :structural-editing-mcp-tests)
+(in-package :structural-editing-mcp-tests/mcp)
 
 (defun parse-mcp-response (json-str)
   "Parse a JSON-RPC response string into a hash table with list arrays."

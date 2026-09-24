@@ -1,4 +1,4 @@
-(in-package :structural-editing-mcp-tests)
+(in-package :structural-editing-mcp-tests/workspace)
 
 (deftest test-workspace
          (init-workspace)

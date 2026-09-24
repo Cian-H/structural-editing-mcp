@@ -1,4 +1,4 @@
-(in-package :structural-editing-mcp-tests)
+(in-package :structural-editing-mcp-tests/analysis)
 
 (deftest test-search-ast
          (let ((ast (string-to-sexp "(defun compute-total (items) (+ (calculate-subtotal items) (tax items)))")))

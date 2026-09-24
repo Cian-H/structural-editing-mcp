@@ -27,7 +27,8 @@ You can specify one or more test symbol names as command-line arguments to run o
 ./scripts/run-tests.lisp test-tree test-edit test-parser
 ```
 
-Available test suites (defined in `test/*.lisp` under the package `:structural-editing-mcp-tests`):
+Available test suites (defined in `test/*.lisp` under packages `:structural-editing-mcp-tests/<module>`):
+- `test-version` (`test/version.lisp`)
 - `test-conditions` (`test/conditions.lisp`)
 - `test-tree` (`test/tree.lisp`)
 - `test-parser` (`test/parser.lisp`)
@@ -42,6 +43,7 @@ Available test suites (defined in `test/*.lisp` under the package `:structural-e
 - `test-multi-dialect-workspace` (`test/workspace.lisp`)
 - `test-workspace-lifecycle` (`test/workspace.lisp`)
 - `test-workspace-merge-and-diff` (`test/workspace.lisp`)
+- `test-mcp` (`test/mcp.lisp`)
 - `test-mcp-initialize` (`test/mcp.lisp`)
 - `test-mcp-tools-list` (`test/mcp.lisp`)
 - `test-mcp-ast-operations` (`test/mcp.lisp`)
@@ -56,7 +58,7 @@ Tests use the [Rove](https://github.com/fukamachi/rove) framework.
 
 ### Example Test Form
 ```lisp
-(in-package :structural-editing-mcp-tests)
+(in-package :structural-editing-mcp-tests/my-module)
 
 (deftest test-new-feature
   (testing "handles normal inputs"

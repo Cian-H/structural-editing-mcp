@@ -1,4 +1,4 @@
-(in-package :structural-editing-mcp-tests)
+(in-package :structural-editing-mcp-tests/parser)
 
 (deftest test-string-to-sexp
          (ok (equal '(:path () :file
