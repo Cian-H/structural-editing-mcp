@@ -150,7 +150,60 @@ When modifying or extending this codebase, adhere strictly to these rules:
 
 ---
 
-## 7. Progressive Context: Skills & Rules
+## 7. Tool Selection & Agent Workflow Guide
+
+The MCP server provides 19 tools organized into distinct operational tiers. Follow these patterns to edit code reliably without parenthetical corruption or parallel agent collisions:
+
+### 1. The Standard Structural Editing Loop
+Whenever you are asked to read, modify, or refactor code:
+1. **Load & Inspect**:
+   - Call `read_node` with `load_files: ["/path/to/project"]` on your first interaction to load target files into the workspace.
+   - Inspect parent forms at depth 2 (e.g. `path: [0, 0, 5]`) to view the entire expression and its child paths simultaneously. Do NOT probe child indices one-by-one.
+   - Use `ast_search` to find symbols, functions, or text across the entire workspace quickly.
+2. **Isolate / Branch (For Multi-Step or Multi-Agent Work)**:
+   - For isolated experimentation or parallel work, call `workspace_manage` with `action: "fork"`, `source_id: "default"`, and `target_id: "agent-<id>"`.
+   - Pass `workspace_id: "agent-<id>"` to all subsequent tool calls.
+   - Create checkpoints before risky edits using `workspace_manage` `action: "snapshot"`, `snapshot_name: "before-refactor"`.
+3. **Apply Structural Transforms**:
+   - `ast_modify`: Use `action: "overwrite"` to replace an entire sub-expression, `action: "insert"` to add forms into bodies or parameter lists, or `action: "wrap"` to enclose an expression in parens or a macro form (e.g. `(when condition)`).
+   - `ast_remove`: Use `action: "delete"` to eliminate an unused node, `action: "unwrap"` to peel away an outer wrapper (e.g. removing `progn`), or `action: "promote"` to replace a parent with its child.
+   - `ast_relocate`: Use `action: "move"` or `action: "copy"` to reorder top-level definitions or arguments, `action: "swap"` to interchange two expressions, or `action: "merge"` / `action: "split"` for collections.
+   - *Instant Preview*: Every mutation tool automatically returns the rendered code snippet of the enclosing parent node. **Do not issue redundant `read_node` calls to verify mutations.**
+4. **Semantic Refactoring & Search**:
+   - `ast_rename`: Renames identifiers across the workspace or a subtree while safely ignoring string literals and comments.
+   - `ast_replace_pattern`: Structural AST pattern replacement with wildcard variables (`?x`, `?y`). Use this for API migrations and macro upgrades instead of regex or diffs.
+   - `ast_extract_variable`: Extracts sub-expressions into local `let` bindings.
+   - `ast_extract_function`: Extracts sub-expressions into top-level functions and replaces call-sites.
+5. **Quality Assurance & Linting**:
+   - `ast_lint`: Identifies anti-patterns and code smells (e.g. `(if ... (progn ...))` $\rightarrow$ `when`).
+   - `ast_complexity_metrics`: Computes cyclomatic complexity and nesting depth to locate functions needing decomposition.
+   - `ast_find_duplicates`: Identifies repeated AST subtrees across files to extract shared utilities.
+   - `ast_analyze_bindings`: Detects unused variables and lexical shadowing bugs.
+   - `ast_suggest_refactorings`: Aggregates lint, complexity, duplicate, and binding analysis into a prioritized refactoring plan.
+6. **Verify, Merge, & Commit**:
+   - Run `workspace_status` to see dirty vs clean files and current revision numbers.
+   - Run `workspace_diff` between your branch and `"default"` to confirm disjoint modifications and detect collisions.
+   - Run `workspace_merge` to fold your branch changes back into `"default"`.
+   - Call `commit_workspace` to persist modified files to disk (supports optional `files` subset).
+
+### 2. Multi-Agent Branching Matrix
+
+| Tool | Primary Purpose | When to Use |
+| :--- | :--- | :--- |
+| `read_node` | AST & Workspace Inspection | First step to view code and obtain 0-indexed integer paths. |
+| `ast_modify` | Insert, overwrite, wrap nodes | Core AST surgery without risking unmatched parentheses. |
+| `ast_remove` | Delete, unwrap, promote nodes | Eliminating dead code, stripping wrappers, promoting children. |
+| `ast_relocate` | Move, copy, swap, merge, split | Moving functions, reordering parameters, combining lists. |
+| `ast_replace_pattern` | AST pattern template replacement | Refactoring API patterns (e.g. `(old-fn ?a ?b)` $\rightarrow$ `(new-fn ?b :arg ?a)`). |
+| `workspace_manage` | Lifecycle (`fork`, `snapshot`, `restore`, etc.) | Branching isolated agent workspaces and creating fallback points. |
+| `workspace_status` | Status inspection | Checking dirty files and revision counters before merge/commit. |
+| `workspace_diff` | AST difference comparison | Checking for collisions before merging two workspaces. |
+| `workspace_merge` | Fast-forward or disjoint AST merge | Integrating an agent's changes into `"default"`. |
+| `commit_workspace` | Disk persistence | Writing in-memory workspace AST back to source files on disk. |
+
+---
+
+## 8. Progressive Context: Skills & Rules
 
 For specialized tasks, consult the `.agents/` directory:
 - [`.agents/rules/architecture.md`](file:///.agents/rules/architecture.md): Deep-dive into AST node tags, pattern matching, and tree representations.

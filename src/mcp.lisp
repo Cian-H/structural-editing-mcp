@@ -404,50 +404,58 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 (defparameter +prop-agent-id+
   (prop-string "Optional identifier for the calling agent (e.g. 'agent-1', 'refactorer'). Used for automatic multi-agent concurrency tracking."))
 
+(defparameter +prop-workspace-id+
+  (prop-string "Target workspace identifier (default: 'default'). Use an isolated workspace ID (via workspace_manage 'fork') to branch and stage edits safely without clobbering other agents."))
+
 (defun get-tools-list ()
   (list
     (make-tool
       "read_node"
-      "Inspect any node in the AST or workspace. Returns rendered code and a nested tree of child paths up to 'depth' levels. BEST PRACTICE: Always read parent forms (e.g. [0, 10]) to see the entire expression and its child paths at once—do NOT probe child indices one-by-one. Use 'ast_search' to find symbols/calls across the workspace."
+      "Inspect any node in the AST or workspace. Returns rendered code and a nested tree of child paths up to 'depth' levels. BEST PRACTICE: Always read parent forms (e.g. [0, 10]) to see the entire expression and its child paths at once—do NOT probe child indices one-by-one. Use 'ast_search' to find symbols/calls across the workspace. Pass 'load_files' on initial call to populate the workspace from disk."
       (dict "path" +prop-path+
             "depth" (prop-integer "Recursion depth for displaying nested children and their paths (default: 2). Use depth 1 for only immediate children, 2 or 3 to inspect deeper sub-expressions.")
             "load_files" +prop-load-files+
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+))
 
     (make-tool
       "ast_modify"
-      "Mutate AST nodes. Actions: 'insert' (adds new_node before path, or at child index if index is given), 'overwrite' (replaces node at path with new_node), 'wrap' (wraps node at path with parens, brackets, or an enclosing form). NOTE: Automatically returns an updated preview of the enclosing parent node; separate verification reads are unnecessary."
+      "Mutate AST nodes in memory. Actions: 'insert' (adds new_node before path, or at child index if index is given), 'overwrite' (replaces node at path with new_node), 'wrap' (wraps node or child range with parens, brackets, or enclosing form). NOTE: Automatically returns an updated preview of the enclosing parent node; separate verification reads are unnecessary. To preserve safety in multi-agent workflows, fork a workspace first with 'workspace_manage'."
       (dict "path" (prop-path "Target AST path (e.g. [0, 2] to target form 2 in file 0).")
             "action" (prop-string "The modification action to perform." :enum (list "insert" "overwrite" "wrap"))
             "new_node" (prop-string "For insert/overwrite: the S-expression code string (e.g. '(defun foo () 42)'). For wrap: delimiter keyword (':paren', ':square', ':curly') or enclosing form string (e.g. '(when condition)').")
             "index" (prop-integer "Optional child index for insert. If omitted when inserting, uses the last element of path.")
             "end_index" (prop-integer "Optional ending child index for range wrapping with action 'wrap'.")
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+)
       (list "path" "action" "new_node"))
 
     (make-tool
       "ast_remove"
-      "Remove or unwrap AST nodes. Actions: 'delete' (deletes the node at path), 'unwrap' (removes enclosing collection, spilling children into parent), 'promote' (replaces parent node with the node at path). NOTE: Automatically returns an updated preview."
+      "Remove, unwrap, or promote AST nodes in memory. Actions: 'delete' (deletes the node at path), 'unwrap' (removes enclosing collection, spilling children into parent), 'promote' (replaces parent node with the child node at path). NOTE: Automatically returns an updated preview of the parent form."
       (dict "path" (prop-path "The AST path of the node to remove/unwrap/promote.")
             "action" (prop-string "Removal action to perform." :enum (list "delete" "unwrap" "promote"))
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+)
       (list "path" "action"))
 
     (make-tool
       "ast_relocate"
-      "Move, copy, swap, merge, or split AST nodes. Actions: 'move' (moves source_path to target_path), 'copy' (duplicates source_path to target_path), 'swap' (swaps nodes at source_path and target_path), 'merge' (merges sibling collection nodes), 'split' (splits target collection node at index). NOTE: Automatically returns an updated preview."
+      "Move, copy, swap, merge, or split AST nodes in memory. Actions: 'move' (moves source_path to target_path), 'copy' (duplicates source_path to target_path), 'swap' (swaps nodes at source_path and target_path), 'merge' (merges sibling collection nodes), 'split' (splits target collection node at index into two sibling collections). NOTE: Automatically returns an updated preview."
       (dict "source_path" (prop-path "Path to source node (optional for split).")
             "target_path" (prop-path "Target path for move/copy/swap/merge/split (e.g. [0, 2] places before index 2 in file 0).")
             "action" (prop-string "Relocation action to perform." :enum (list "move" "copy" "swap" "merge" "split"))
             "index" (prop-integer "Child index within target collection to split at (action 'split') or destination insertion index (actions 'move', 'copy').")
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+)
       (list "target_path" "action"))
 
     (make-tool
       "ast_search"
-      "Search the workspace or a subtree for symbols, identifiers, function calls, or literal values. Fast AST-aware token searching."
+      "Search the workspace or a subtree for symbols, identifiers, function calls, or literal values. Fast AST-aware token searching that returns matched AST paths."
       (dict "query" (prop-string "Symbol or text to search for (case-insensitive substring/symbol match).")
             "path" (prop-path "Optional AST path to constrain the search scope. If omitted, searches the entire workspace.")
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+)
       (list "query"))
 
@@ -457,31 +465,35 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (dict "old_name" (prop-string "The exact symbol/string to replace (e.g. 'make-api-call').")
             "new_name" (prop-string "The new symbol/string to replace it with (e.g. 'execute-api-call').")
             "path" (prop-path "Optional AST path to constrain the bulk rename to a specific subtree. If omitted, renames globally across the workspace.")
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+)
       (list "old_name" "new_name"))
 
     (make-tool
       "ast_replace_pattern"
-      "Search the workspace for a structural Lisp pattern and replace it with a new pattern, preserving matched variables (e.g. pattern='(foo ?x ?y)', replacement='(bar ?y ?x)')."
+      "Search the workspace for a structural Lisp pattern and replace it with a new pattern, preserving matched variables (e.g. pattern='(foo ?x ?y)', replacement='(bar ?y ?x)'). Ideal for semantic API migrations and structural refactorings."
       (dict "pattern" (prop-string "The pattern to match. Variables start with '?' (e.g. '(make-api-call ?method ?url ?headers ?body)').")
             "replacement" (prop-string "The replacement template (e.g. '(make-api-call ?url ?method :headers ?headers :body ?body)').")
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+)
       (list "pattern" "replacement"))
 
     (make-tool
       "ast_extract_variable"
-      "Extracts an AST node into a local `let` binding wrapped around its immediate parent."
+      "Extracts an AST node into a local `let` binding wrapped around its immediate parent. Preserves sub-expression structure and automatically replaces the node with the bound variable."
       (dict "path" (prop-path "AST path of the node to extract.")
             "variable_name" (prop-string "The name of the new variable to bind it to.")
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+)
       (list "path" "variable_name"))
 
     (make-tool
       "ast_extract_function"
-      "Extracts an AST node into a new top-level function definition and replaces the original node with a call to the new function."
+      "Extracts an AST node into a new top-level function definition and replaces the original node with a call to the new function. Emits the new function right before the current top-level form."
       (dict "path" (prop-path "AST path of the node to extract into a function.")
             "function_name" (prop-string "The name of the new function.")
             "params" (prop-string-array "Optional list of parameter names for the new function.")
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+)
       (list "path" "function_name"))
 
@@ -491,6 +503,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (dict "path" (prop-path "Optional AST path to lint a specific node or file. If omitted, lints the entire workspace.")
             "dialect" +prop-dialect+
             "rules" (prop-string-array "Optional list of rule IDs to filter by (e.g. ['if-progn-to-when', 'single-clause-cond']).")
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+))
 
     (make-tool
@@ -500,6 +513,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
             "min_complexity" (prop-integer "Optional minimum cyclomatic complexity threshold to filter results (default: 1).")
             "min_depth" (prop-integer "Optional minimum parenthetical nesting depth threshold to filter results (default: 1).")
             "dialect" +prop-dialect+
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+))
 
     (make-tool
@@ -509,6 +523,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
             "min_nodes" (prop-integer "Optional minimum AST node count threshold for subtrees (default: 4).")
             "min_depth" (prop-integer "Optional minimum parenthetical nesting depth threshold for subtrees (default: 2).")
             "exact" (prop-boolean "If true (default), matches exact identical code. If false, matches structural clones where variables/literals can vary.")
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+))
 
     (make-tool
@@ -518,6 +533,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
             "include_unused" (prop-boolean "If true (default), reports variables defined but never used in their lexical scope.")
             "include_shadowed" (prop-boolean "If true (default), reports local variables that shadow outer bindings with the same name.")
             "dialect" +prop-dialect+
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+))
 
     (make-tool
@@ -527,11 +543,20 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
             "min_priority" (prop-string "Optional minimum priority filter ('high', 'medium', 'low', defaults to 'low').")
             "categories" (prop-string-array "Optional list of categories to include ('lint', 'complexity', 'duplicate', 'binding').")
             "dialect" +prop-dialect+
+            "workspace_id" +prop-workspace-id+
             "agent_id" +prop-agent-id+))
 
     (make-tool
       "workspace_manage"
-      "Manage isolated multi-agent workspace lifecycle: 'create', 'list', 'delete', 'clear', 'fork', 'snapshot', 'restore', or 'reload'."
+      "Manage isolated multi-agent workspace lifecycle. Actions:
+- 'create': Create an empty named workspace (requires target_id).
+- 'list': List all active workspace IDs and their parent/revision metadata.
+- 'delete': Delete a named workspace (requires workspace_id, cannot delete 'default').
+- 'clear': Reset a workspace to empty state (requires force: true if dirty).
+- 'fork': Branch source_id into new target_id for isolated parallel editing.
+- 'snapshot': Save an in-memory named checkpoint of workspace_id (requires snapshot_name).
+- 'restore': Roll back workspace_id to a previously saved checkpoint (requires snapshot_name).
+- 'reload': Re-read files from disk into memory (requires force: true if dirty)."
       (dict "action" (dict "type" "string" "description" "Action to perform: 'create', 'list', 'delete', 'clear', 'fork', 'snapshot', 'restore', or 'reload'.")
             "workspace_id" (prop-string "Target workspace identifier for the action.")
             "source_id" (prop-string "Source workspace identifier (required for 'fork').")
@@ -543,20 +568,20 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 
     (make-tool
       "workspace_status"
-      "Inspect the status of a workspace: revision, dirty uncommitted files, clean files, and available snapshots."
+      "Inspect the live status of a workspace: revision counter, dirty uncommitted files, clean files, and available snapshot checkpoints. Always run this before committing or merging to verify what has changed."
       (dict "workspace_id" (prop-string "Target workspace identifier (default: 'default').")
             "agent_id" +prop-agent-id+))
 
     (make-tool
       "workspace_diff"
-      "Compare AST contents and file states between two workspaces, reporting disjoint modifications and conflicting files."
-      (dict "source_workspace_id" (prop-string "Source workspace identifier.")
+      "Compare AST contents and file states between two workspaces. Categorizes source-only files, target-only files, disjoint modified files (safe to auto-merge), and colliding modified files (conflicts). Always run this before workspace_merge."
+      (dict "source_workspace_id" (prop-string "Source workspace identifier (e.g. your agent branch).")
             "target_workspace_id" (prop-string "Target workspace identifier (default: 'default').")
             "agent_id" +prop-agent-id+))
 
     (make-tool
       "workspace_merge"
-      "Merge changes from source workspace into target workspace. Supports fast-forward, disjoint file merge, or selective file transfer."
+      "Merge changes from source workspace into target workspace. Automatically performs fast-forward or disjoint file merging. If colliding edits exist, signals an error unless specific non-conflicting files are passed in 'files'. Run workspace_diff first to verify safety."
       (dict "source_workspace_id" (dict "type" "string" "description" "Source workspace identifier containing changes to merge.")
             "target_workspace_id" (prop-string "Target workspace identifier receiving changes (default: 'default').")
             "files" (prop-string-array "Optional list of specific files to transfer instead of merging all modified files.")
@@ -564,7 +589,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 
     (make-tool
       "commit_workspace"
-      "Persists in-memory workspace modifications back to their respective files on disk. Optionally commit only a subset of files."
+      "Persists in-memory workspace modifications back to their respective files on disk using dialect-aware pretty printing. Pass 'files' to selectively persist specific files, or omit to persist all dirty files in the workspace."
       (dict "files" (prop-string-array "Optional list of specific files to persist. If omitted, all modified files are written.")
             "workspace_id" (prop-string "Target workspace identifier (default: 'default').")
             "agent_id" +prop-agent-id+))))

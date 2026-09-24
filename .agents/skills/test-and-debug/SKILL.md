@@ -40,9 +40,13 @@ Available test suites (defined in `test/*.lisp` under the package `:structural-e
 - `test-workspace` (`test/workspace.lisp`)
 - `test-workspace-directory-scanning` (`test/workspace.lisp`)
 - `test-multi-dialect-workspace` (`test/workspace.lisp`)
+- `test-workspace-lifecycle` (`test/workspace.lisp`)
+- `test-workspace-merge-and-diff` (`test/workspace.lisp`)
 - `test-mcp-initialize` (`test/mcp.lisp`)
 - `test-mcp-tools-list` (`test/mcp.lisp`)
 - `test-mcp-ast-operations` (`test/mcp.lisp`)
+- `test-mcp-workspace-lifecycle` (`test/mcp.lisp`)
+- `test-mcp-workspace-status-diff-merge` (`test/mcp.lisp`)
 
 ---
 

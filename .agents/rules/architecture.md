@@ -84,12 +84,13 @@ to recalculate consistent coordinate paths.
 
 ---
 
-## 3. Workspace Staging & File Registry
+## 3. Workspace Staging, Multi-Agent Registry, & Concurrency
 
 Defined in [`src/workspace.lisp`](file:///home/cianh/Projects/structural-editing-mcp/src/workspace.lisp):
 
-- `*workspace-tree*`: Holds the global AST root for the active workspace.
-- `*workspace-registry*`: Hash table mapping workspace IDs (default `"default"`) to `workspace-context` structs for parallel agent editing, branching, and merging.
+- `*workspace-tree*`: Holds the active AST root for the dynamically bound workspace context.
+- `*workspace-registry*`: Hash table mapping workspace IDs (default `"default"`) to `workspace-context` structures.
+- `workspace-context`: Encapsulates an isolated project tree (`tree`), parent workspace lineage (`parent-id`), base revision (`base-revision`), current revision counter (`revision`), in-memory snapshots table (`snapshots`), clean state snapshots (`clean-state`), and a dedicated per-workspace mutex lock (`lock`).
 - `*file-registry*`: Hash table mapping numerical file IDs and path tuples to physical filesystem paths.
 - `load-into-workspace`: Loads a file or scans a directory recursively, classifying dialect by file extension:
   - Common Lisp: `.lisp`, `.cl`, `.asd`, `.lsp`
@@ -97,7 +98,22 @@ Defined in [`src/workspace.lisp`](file:///home/cianh/Projects/structural-editing
   - Scheme: `.scm`, `.ss`, `.rkt`, `.sld`
   - Emacs Lisp: `.el`
   - Fennel: `.fnl`
-- `write-workspace`: Writes modified AST files back to disk by unparsing the trees with dialect-appropriate pretty printing. Supports selective file committing.
+- `write-workspace`: Writes modified AST files back to disk by unparsing the trees with dialect-appropriate pretty printing. Supports selective file committing via `:files`.
+
+### Multi-Agent Workspace Branching & Merging Workflow
+
+1. **Forking**: An agent forks an isolated workspace:
+   `workspace_manage(action: "fork", source_id: "default", target_id: "worker-1")`
+2. **Editing**: The agent runs AST transformations targeting `workspace_id: "worker-1"`. The mutations stage strictly in memory.
+3. **Diffing**: Before merging, check for disjoint changes or collisions:
+   `workspace_diff(source_workspace_id: "worker-1", target_workspace_id: "default")`
+4. **Merging**:
+   `workspace_merge(source_workspace_id: "worker-1", target_workspace_id: "default")`
+   - If only the fork has changed, a clean fast-forward occurs.
+   - If both workspaces have changed on disjoint files, files are non-destructively grafted.
+   - If both modified the same file, a `workspace-merge-conflict-error` is signaled unless specific non-colliding files are explicitly passed in `files`.
+5. **Committing**:
+   `commit_workspace(workspace_id: "default")` persists in-memory modifications to disk.
 
 ---
 
