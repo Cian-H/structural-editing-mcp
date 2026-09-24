@@ -542,9 +542,32 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
             "agent_id" +prop-agent-id+))
 
     (make-tool
+      "workspace_status"
+      "Inspect the status of a workspace: revision, dirty uncommitted files, clean files, and available snapshots."
+      (dict "workspace_id" (prop-string "Target workspace identifier (default: 'default').")
+            "agent_id" +prop-agent-id+))
+
+    (make-tool
+      "workspace_diff"
+      "Compare AST contents and file states between two workspaces, reporting disjoint modifications and conflicting files."
+      (dict "source_workspace_id" (prop-string "Source workspace identifier.")
+            "target_workspace_id" (prop-string "Target workspace identifier (default: 'default').")
+            "agent_id" +prop-agent-id+))
+
+    (make-tool
+      "workspace_merge"
+      "Merge changes from source workspace into target workspace. Supports fast-forward, disjoint file merge, or selective file transfer."
+      (dict "source_workspace_id" (dict "type" "string" "description" "Source workspace identifier containing changes to merge.")
+            "target_workspace_id" (prop-string "Target workspace identifier receiving changes (default: 'default').")
+            "files" (prop-string-array "Optional list of specific files to transfer instead of merging all modified files.")
+            "agent_id" +prop-agent-id+))
+
+    (make-tool
       "commit_workspace"
-      "Persists all in-memory workspace modifications back to their respective files on disk."
-      (dict "agent_id" +prop-agent-id+))))
+      "Persists in-memory workspace modifications back to their respective files on disk. Optionally commit only a subset of files."
+      (dict "files" (prop-string-array "Optional list of specific files to persist. If omitted, all modified files are written.")
+            "workspace_id" (prop-string "Target workspace identifier (default: 'default').")
+            "agent_id" +prop-agent-id+))))
 
 ;;; Handlers
 
@@ -817,6 +840,61 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (t
         (error "Unknown workspace_manage action: ~A" action)))))
 
+(defun format-workspace-status-summary (st)
+  "Format workspace status plist ST into a readable summary string."
+  (with-output-to-string (s)
+    (format s "Workspace: ~A~%" (getf st :id))
+    (format s "  Parent: ~A (base revision: ~A)~%" (or (getf st :parent-id) "none") (getf st :base-revision))
+    (format s "  Current Revision: ~A~%" (getf st :revision))
+    (let ((dirty (getf st :dirty-files))
+          (clean (getf st :clean-files))
+          (snaps (getf st :snapshots)))
+      (format s "  Dirty Files (~A):~%~{    - ~A~%~}" (length dirty) dirty)
+      (format s "  Clean Files (~A):~%~{    - ~A~%~}" (length clean) clean)
+      (format s "  Snapshots (~A):~%~{    - ~A~%~}" (length snaps) snaps))))
+
+(defun format-workspace-diff-summary (df)
+  "Format workspace diff plist DF into a readable summary string."
+  (with-output-to-string (s)
+    (format s "Diff between [~A] and [~A]:~%" (getf df :source-id) (getf df :target-id))
+    (let ((so (getf df :source-only))
+          (to (getf df :target-only))
+          (smo (getf df :source-modified-only))
+          (tmo (getf df :target-modified-only))
+          (both (getf df :modified-in-both))
+          (ast-diff (getf df :ast-differing-files)))
+      (when so (format s "  Files only in source (~A):~%~{    + ~A~%~}" (length so) so))
+      (when to (format s "  Files only in target (~A):~%~{    - ~A~%~}" (length to) to))
+      (when smo (format s "  Source modified only (~A):~%~{    * ~A~%~}" (length smo) smo))
+      (when tmo (format s "  Target modified only (~A):~%~{    * ~A~%~}" (length tmo) tmo))
+      (when both (format s "  COLLIDING MODIFICATIONS in both (~A):~%~{    ! ~A~%~}" (length both) both))
+      (when ast-diff (format s "  AST differing files (~A):~%~{    ~A~%~}" (length ast-diff) ast-diff))
+      (when (and (null so) (null to) (null smo) (null tmo) (null both) (null ast-diff))
+        (format s "  No differences detected.~%")))))
+
+(defun handle-tool-workspace-status (args)
+  "Handle workspace_status tool call."
+  (let* ((ws-id (or (href args "workspace_id") (href args "workspace") "default"))
+         (ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+    (format-workspace-status-summary (structural-editing-mcp.workspace:workspace-status ws))))
+
+(defun handle-tool-workspace-diff (args)
+  "Handle workspace_diff tool call."
+  (let* ((src-id (or (href args "source_workspace_id") (href args "source_id")))
+         (tgt-id (or (href args "target_workspace_id") (href args "target_id") "default")))
+    (unless src-id (error "source_workspace_id is required for workspace_diff"))
+    (format-workspace-diff-summary (structural-editing-mcp.workspace:diff-workspaces src-id tgt-id))))
+
+(defun handle-tool-workspace-merge (args)
+  "Handle workspace_merge tool call."
+  (let* ((src-id (or (href args "source_workspace_id") (href args "source_id")))
+         (tgt-id (or (href args "target_workspace_id") (href args "target_id") "default"))
+         (files (to-list (href args "files"))))
+    (unless src-id (error "source_workspace_id is required for workspace_merge"))
+    (let ((res (structural-editing-mcp.workspace:merge-workspaces src-id tgt-id :files files)))
+      (fmt "Successfully merged workspace ~S into ~S (~A merge, ~A file(s) transferred)."
+           src-id tgt-id (getf res :action) (length (getf res :merged-files))))))
+
 (defun dispatch-tool-call (name path args dialect &optional (agent-id "default"))
   "Dispatch tool invocation by tool NAME to appropriate handler."
   (cond
@@ -836,9 +914,18 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (handle-tool-ast-analysis name path args dialect))
     ((equal name "workspace_manage")
       (handle-tool-workspace-manage args))
+    ((equal name "workspace_status")
+      (handle-tool-workspace-status args))
+    ((equal name "workspace_diff")
+      (handle-tool-workspace-diff args))
+    ((equal name "workspace_merge")
+      (handle-tool-workspace-merge args))
     ((equal name "commit_workspace")
-      (structural-editing-mcp.workspace:write-workspace)
-      (fmt "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))
+      (let ((files (to-list (href args "files"))))
+        (structural-editing-mcp.workspace:write-workspace files)
+        (if files
+          (fmt "Committed ~A specified file(s) to disk successfully." (length files))
+          (fmt "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))))
     (t
       (error "Tool not found: ~A" name))))
 

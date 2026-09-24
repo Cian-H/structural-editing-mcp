@@ -254,3 +254,35 @@
       (clear-workspace ws)
       (ok (equal '(:path () :workspace) (workspace-context-tree ws)))
       (delete-workspace "life-ws"))))
+
+(deftest test-workspace-merge-and-diff
+  (testing "status, diff, and disjoint merge"
+    (let* ((ws-a (create-workspace "merge-ws-a"))
+           (ws-b (create-workspace "merge-ws-b" :parent-id "merge-ws-a" :base-revision 1))
+           (file-a "/tmp/test-merge-a.lisp")
+           (file-b "/tmp/test-merge-b.lisp"))
+      (with-open-file (f file-a :direction :output :if-exists :supersede)
+        (write-string "(defun fa () 1)" f))
+      (with-open-file (f file-b :direction :output :if-exists :supersede)
+        (write-string "(defun fb () 2)" f))
+      ;; Load disjoint files
+      (with-workspace-context (ws-a)
+        (read-workspace-file file-a))
+      (with-workspace-context (ws-b)
+        (read-workspace-file file-b))
+      ;; Check status
+      (let ((st-a (workspace-status ws-a)))
+        (ok (equal "merge-ws-a" (getf st-a :id)))
+        (ok (= 1 (length (getf st-a :clean-files)))))
+      ;; Check diff
+      (let ((df (diff-workspaces "merge-ws-b" "merge-ws-a")))
+        (ok (find (safe-truename file-b) (getf df :source-only) :test #'equal))
+        (ok (find (safe-truename file-a) (getf df :target-only) :test #'equal)))
+      ;; Merge ws-b into ws-a
+      (let ((merge-res (merge-workspaces "merge-ws-b" "merge-ws-a")))
+        (ok (equal "disjoint" (getf merge-res :action)))
+        (ok (= 1 (length (getf merge-res :merged-files))))
+        ;; Verify ws-a now has both files in its clean state
+        (ok (= 2 (hash-table-count (workspace-context-clean-state ws-a)))))
+      (delete-workspace "merge-ws-a")
+      (delete-workspace "merge-ws-b"))))

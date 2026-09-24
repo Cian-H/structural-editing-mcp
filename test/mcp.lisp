@@ -42,7 +42,7 @@
                     (let* ((res (gethash "result" result-json))
                            (tools (gethash "tools" res)))
                       (ok (listp tools))
-                      (ok (= (length tools) 16))
+                      (ok (= (length tools) 19))
                       (let ((names (mapcar (lambda (x) (gethash "name" x)) tools)))
                         (ok (member "read_node" names :test #'equal))
                         (ok (not (member "read_workspace" names :test #'equal)))
@@ -56,6 +56,9 @@
                         (ok (member "ast_suggest_refactorings" names :test #'equal))
                         (ok (member "ast_extract_function" names :test #'equal))
                         (ok (member "workspace_manage" names :test #'equal))
+                        (ok (member "workspace_status" names :test #'equal))
+                        (ok (member "workspace_diff" names :test #'equal))
+                        (ok (member "workspace_merge" names :test #'equal))
                         (ok (member "commit_workspace" names :test #'equal)))))))
 
 (deftest test-mcp-ast-operations
@@ -687,3 +690,45 @@
       (ok (search "Workspaces" (gethash "text" (first (gethash "content" (gethash "result" list-res))))))
       (ok (search "ws-tool-test" (gethash "text" (first (gethash "content" (gethash "result" list-res))))))
       (ok (null (gethash "isError" (gethash "result" delete-res)))))))
+
+(deftest test-mcp-workspace-status-diff-merge
+  (testing "workspace_status, workspace_diff, workspace_merge via MCP JSON-RPC"
+    (structural-editing-mcp.workspace:create-workspace "mcp-merge-src")
+    (structural-editing-mcp.workspace:create-workspace "mcp-merge-tgt")
+    (let* ((status-msg (structural-editing-mcp.mcp::dict
+                         "jsonrpc" "2.0"
+                         "id" 7001
+                         "method" "tools/call"
+                         "params" (structural-editing-mcp.mcp::dict
+                                    "name" "workspace_status"
+                                    "arguments" (structural-editing-mcp.mcp::dict
+                                                  "workspace_id" "mcp-merge-src"))))
+           (status-res (call-mcp-msg status-msg))
+           (diff-msg (structural-editing-mcp.mcp::dict
+                       "jsonrpc" "2.0"
+                       "id" 7002
+                       "method" "tools/call"
+                       "params" (structural-editing-mcp.mcp::dict
+                                  "name" "workspace_diff"
+                                  "arguments" (structural-editing-mcp.mcp::dict
+                                                "source_workspace_id" "mcp-merge-src"
+                                                "target_workspace_id" "mcp-merge-tgt"))))
+           (diff-res (call-mcp-msg diff-msg))
+           (merge-msg (structural-editing-mcp.mcp::dict
+                        "jsonrpc" "2.0"
+                        "id" 7003
+                        "method" "tools/call"
+                        "params" (structural-editing-mcp.mcp::dict
+                                   "name" "workspace_merge"
+                                   "arguments" (structural-editing-mcp.mcp::dict
+                                                 "source_workspace_id" "mcp-merge-src"
+                                                 "target_workspace_id" "mcp-merge-tgt"))))
+           (merge-res (call-mcp-msg merge-msg)))
+      (ok (null (gethash "isError" (gethash "result" status-res))))
+      (ok (search "Workspace: mcp-merge-src" (gethash "text" (first (gethash "content" (gethash "result" status-res))))))
+      (ok (null (gethash "isError" (gethash "result" diff-res))))
+      (ok (search "Diff between [mcp-merge-src] and [mcp-merge-tgt]" (gethash "text" (first (gethash "content" (gethash "result" diff-res))))))
+      (ok (null (gethash "isError" (gethash "result" merge-res))))
+      (ok (search "Successfully merged" (gethash "text" (first (gethash "content" (gethash "result" merge-res)))))))
+    (structural-editing-mcp.workspace:delete-workspace "mcp-merge-src")
+    (structural-editing-mcp.workspace:delete-workspace "mcp-merge-tgt")))
