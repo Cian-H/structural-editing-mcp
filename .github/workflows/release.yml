@@ -54,7 +54,13 @@ jobs:
           sbcl --non-interactive --no-userinit \
             --load /tmp/quicklisp.lisp \
             --eval '(quicklisp-quickstart:install :path #P"~/quicklisp/")' \
-            --eval '(ql:quickload (list "trivia" "alexandria" "serapeum" "yason" "rove") :silent t)' \
+            --eval '(ql:quickload (list "trivia" "alexandria" "serapeum" "yason" "cl-indentify" "bordeaux-threads" "rove") :silent t)' \
+            --eval '(uiop:quit 0)'
+          mkdir -p "$HOME/quicklisp/local-projects"
+          ln -s "$GITHUB_WORKSPACE" "$HOME/quicklisp/local-projects/"
+          sbcl --non-interactive --no-userinit \
+            --load "$HOME/quicklisp/setup.lisp" \
+            --eval '(ql:quickload :structural-editing-mcp/tests :silent t)' \
             --eval '(uiop:quit 0)'
 
       - name: Run tests

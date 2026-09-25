@@ -27,6 +27,8 @@ The project uses [devenv](https://devenv.sh/) with Nix for hermetic, reproducibl
   - `trivia`: Pattern matching on AST nodes
   - `alexandria` & `serapeum`: Standard utility libraries
   - `yason`: JSON parsing and serialization for MCP JSON-RPC
+  - `cl-indentify`: Code layout and indentation formatting
+  - `bordeaux-threads`: Cross-platform multithreading and lock management
   - `rove`: Testing framework
 - **Environment Entry**:
   - You can run any command in the environment using `devenv shell -- <command>` or run scripts directly via their shebangs (e.g., `./scripts/run-tests.lisp`).
