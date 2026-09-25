@@ -9,10 +9,13 @@
 (let* ((root (uiop:pathname-parent-directory-pathname
                (uiop:pathname-directory-pathname
                  (or *load-truename* *load-pathname*))))
+       (tpl-file (merge-pathnames ".templates.lisp" root))
        (files (append (directory (merge-pathnames "src/*.lisp" root))
                       (directory (merge-pathnames "test/*.lisp" root))
                       (directory (merge-pathnames "scripts/*.lisp" root))
                       (directory (merge-pathnames "*.asd" root)))))
+  (when (probe-file tpl-file)
+    (indentify:load-template-file tpl-file))
   (dolist (file files)
     (let ((text (uiop:read-file-string file)))
       (uiop:with-output-file (out file :if-exists :supersede)

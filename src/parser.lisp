@@ -793,11 +793,17 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
             i
             from
             1
+            for starts-compound = (and (plusp (length b))
+                                       (member (char b 0) '(#\( #\[ #\{)))
+            for should-inline = (if (< i inline-n)
+                                  (and (single-line-p b)
+                                       (<= (+ col 1 (length b)) *inline-column-limit*))
+                                  (and (eq op-cat :iteration)
+                                       (not starts-compound)
+                                       (single-line-p b)
+                                       (<= (+ col 1 (length b)) *inline-column-limit*)))
             do
-            (if
-                (and (< i inline-n)
-                     (single-line-p b)
-                     (<= (+ col 1 (length b)) *inline-column-limit*))
+            (if should-inline
               (progn (write-char #\space s) (write-string b s) (incf col (+ 1 (length b))))
               (progn (terpri s) (write-string b s) (setf col (length b))))))
     (write-string close s)))
@@ -865,10 +871,22 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
 (defparameter *cl-indentify-initialized* nil
                                          "Whether cl-indentify default templates have been loaded.")
 
+(defparameter *project-indent-templates*
+  '(("define-mcp-tool" :count 3)
+    ("with-workspace-context" :count 1)
+    ("with-workspaces-locked" :count 1)
+    ("with-lock-held" :count 1)
+    ("deftest" :count 1)
+    ("testing" :count 1)
+    ("ok" :count 0))
+  "Project-specific indentation templates for cl-indentify.")
+
 (defun ensure-cl-indentify-init ()
-  "Load cl-indentify templates lazily once."
+  "Load cl-indentify templates lazily once, including project templates."
   (unless *cl-indentify-initialized*
     (indentify:initialize-templates)
+    (dolist (tpl *project-indent-templates*)
+      (setf (indentify:indent-template (first tpl)) (cdr tpl)))
     (setf *cl-indentify-initialized* t)))
 
 (defun cl-indentify-text (raw-text)
@@ -908,57 +926,29 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
               (setf start (1+ pos)))))))
 
 (defgeneric collection-delimiters (dialect tag)
-  (:documentation
-    "Return (values open-string close-string) for collection TAG in DIALECT."))
+  (:documentation "Return (values open-string close-string) for collection TAG in DIALECT."))
 
 (defmethod collection-delimiters (dialect tag)
   (declare (ignore dialect))
   (collection-delims tag))
 
-(defgeneric dialect-supports-indentify-p
-            (dialect node)
+(defgeneric dialect-supports-indentify-p (dialect node)
   (:documentation "Return T if DIALECT can format NODE with cl-indentify."))
 
-(defmethod dialect-supports-indentify-p
-           (dialect node)
+(defmethod dialect-supports-indentify-p (dialect node)
   (and (member dialect *cl-indentify-dialects*) (not (node-has-braces-p node))))
 
-(defmethod dialect-supports-indentify-p
-           ((dialect (eql :clojure)) node)
-  (declare (ignore node))
-  nil)
+(defgeneric format-dialect-form (dialect node stream indent)
+  (:documentation "Render NODE to STREAM according to DIALECT formatting rules at INDENT."))
 
-(defmethod dialect-supports-indentify-p
-           ((dialect (eql :fennel)) node)
-  (declare (ignore node))
-  nil)
-
-(defgeneric format-dialect-form
-            (dialect node stream indent)
-  (:documentation
-    "Render NODE to STREAM according to DIALECT formatting rules at INDENT."))
-
-(defmethod format-dialect-form
-           (dialect node stream indent)
+(defmethod format-dialect-form (dialect node stream indent)
   "Default formatting implementation delegating to cl-indentify or generic-form-text."
-  (let
-      ((text
-         (if (dialect-supports-indentify-p dialect node)
-           (let ((raw (raw-form-text node)))
-             (if (find #\newline raw)
-               (cl-indentify-text raw)
-               raw))
-           (generic-form-text node indent))))
-    (write-string (shift-indent-text text indent) stream)))
-
-(defmethod format-dialect-form
-           ((dialect (eql :clojure)) node stream indent)
-  (let ((text (generic-form-text node indent)))
-    (write-string (shift-indent-text text indent) stream)))
-
-(defmethod format-dialect-form
-           ((dialect (eql :fennel)) node stream indent)
-  (let ((text (generic-form-text node indent)))
+  (let ((text (if (dialect-supports-indentify-p dialect node)
+                (let ((raw (raw-form-text node)))
+                  (if (find #\newline raw)
+                    (cl-indentify-text raw)
+                    raw))
+                (generic-form-text node indent))))
     (write-string (shift-indent-text text indent) stream)))
 
 (defun use-cl-indentify-p (node dialect)
@@ -967,8 +957,7 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
 
 (defun print-formatted-form (node stream indent)
   "Render NODE to STREAM with cl-indentify, or the generic fallback for brace dialects."
-  (let
-      ((dialect (or *current-dialect* :common-lisp)))
+  (let ((dialect (or *current-dialect* :common-lisp)))
     (format-dialect-form dialect node stream indent)))
 
 (defun print-toplevel-sequence

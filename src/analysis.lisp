@@ -4,12 +4,7 @@
         :trivia
         :structural-editing-mcp.tree
         :structural-editing-mcp.parser)
-  (:import-from :serapeum
-    :trim-whitespace
-    :ellipsize
-    :filter-map
-    :fmt
-    :string-join)
+  (:import-from :serapeum :trim-whitespace :ellipsize :filter-map :fmt :string-join)
   (:export :variable-node-p
            :match-pattern
            :instantiate-pattern
@@ -86,8 +81,7 @@
            :refactoring-suggestion-action-plan
            :suggest-refactorings
            :format-refactoring-suggestions)
-  (:documentation
-    "Static analysis, pattern matching, structural search, and linting."))
+  (:documentation "Static analysis, pattern matching, structural search, and linting."))
 
 (in-package :structural-editing-mcp.analysis)
 
@@ -506,134 +500,93 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
   (:documentation "Return T if RULE is applicable to DIALECT."))
 
 (defgeneric check-rule (rule node path dialect)
-  (:documentation
-    "Execute RULE on NODE at PATH for DIALECT. Return LINT-FINDING or NIL."))
+  (:documentation "Execute RULE on NODE at PATH for DIALECT. Return LINT-FINDING or NIL."))
 
-(defmethod rule-applicable-p
-           ((rule lint-rule) dialect)
+(defmethod rule-applicable-p ((rule lint-rule) dialect)
   (let ((rule-dialects (rule-dialects rule)))
     (or (null rule-dialects) (null dialect) (member dialect rule-dialects))))
 
-(defmethod rule-applicable-p
-           ((rule list) dialect)
+(defmethod rule-applicable-p ((rule list) dialect)
   "Backward compatibility method for plist-based rule specs."
   (let ((rule-dialects (getf rule :dialects)))
     (or (null rule-dialects) (null dialect) (member dialect rule-dialects))))
 
-(defmethod check-rule
-           ((rule lint-rule) node path dialect)
-  (let ((fn (rule-check rule))) (when fn (funcall fn node path dialect))))
+(defmethod check-rule ((rule lint-rule) node path dialect)
+  (let ((fn (rule-check rule)))
+    (when fn (funcall fn node path dialect))))
 
-(defmethod check-rule
-           ((rule list) node path dialect)
+(defmethod check-rule ((rule list) node path dialect)
   "Backward compatibility method for plist-based rule specs."
-  (let ((fn (getf rule :check))) (when fn (funcall fn node path dialect))))
+  (let ((fn (getf rule :check)))
+    (when fn (funcall fn node path dialect))))
 
-(defun make-lint-rule
-       (id check &key dialects description)
+(defun make-lint-rule (id check &key dialects description)
   "Construct a LINT-RULE instance."
   (make-instance 'lint-rule
-                 :id
-                 id
-                 :check
-                 check
-                 :dialects
-                 dialects
-                 :description
-                 (or description "")))
+                 :id id
+                 :check check
+                 :dialects dialects
+                 :description (or description "")))
 
 (defparameter *anti-pattern-rules*
   (list
-    (make-lint-rule :if-progn-to-when
-                    #'check-if-progn-to-when
-                    :dialects
-                    '
-                    (:common-lisp :emacs-lisp :scheme))
-    (make-lint-rule :if-nil-to-when
-                    #'check-if-nil-to-when
-                    :dialects
-                    '
-                    (:common-lisp :emacs-lisp :scheme :clojure))
-    (make-lint-rule :if-not-to-unless
-                    #'check-if-not-to-unless
-                    :dialects
-                    '
-                    (:common-lisp :emacs-lisp :clojure))
+    (make-lint-rule :if-progn-to-when #'check-if-progn-to-when :dialects '(:common-lisp :emacs-lisp :scheme))
+    (make-lint-rule :if-nil-to-when #'check-if-nil-to-when :dialects '(:common-lisp :emacs-lisp :scheme :clojure))
+    (make-lint-rule :if-not-to-unless #'check-if-not-to-unless :dialects '(:common-lisp :emacs-lisp :clojure))
     (make-lint-rule :invert-if-not #'check-invert-if-not :dialects nil)
-    (make-lint-rule :single-clause-cond
-                    #'check-single-clause-cond
-                    :dialects
-                    '
-                    (:common-lisp :emacs-lisp :scheme :clojure))
-    (make-lint-rule :if-boolean-redundant
-                    #'check-if-boolean-redundant
-                    :dialects
-                    nil)
-    (make-lint-rule :redundant-progn
-                    #'check-redundant-progn
-                    :dialects
-                    '
-                    (:common-lisp :emacs-lisp))
-    (make-lint-rule :nested-let
-                    #'check-nested-let
-                    :dialects
-                    '
-                    (:common-lisp :emacs-lisp :scheme))
-    (make-lint-rule :equal-nil-to-null
-                    #'check-equal-nil-to-null
-                    :dialects
-                    '
-                    (:common-lisp :emacs-lisp)))
+    (make-lint-rule :single-clause-cond #'check-single-clause-cond :dialects '(:common-lisp :emacs-lisp :scheme :clojure))
+    (make-lint-rule :if-boolean-redundant #'check-if-boolean-redundant :dialects nil)
+    (make-lint-rule :redundant-progn #'check-redundant-progn :dialects '(:common-lisp :emacs-lisp))
+    (make-lint-rule :nested-let #'check-nested-let :dialects '(:common-lisp :emacs-lisp :scheme))
+    (make-lint-rule :equal-nil-to-null #'check-equal-nil-to-null :dialects '(:common-lisp :emacs-lisp)))
   "Active structural anti-pattern and code smell lint rules.")
 
 (defun rule-matches-dialect-p (rule dialect)
   "Return T if RULE applies to DIALECT."
   (rule-applicable-p rule dialect))
 
-(defun rule-matches-filter-p
-       (rule-or-id requested-rules)
+(defun rule-matches-filter-p (rule-or-id requested-rules)
   "Return T if RULE-OR-ID is permitted by REQUESTED-RULES (list of keywords or strings)."
   (if (null requested-rules)
     t
-    (let
-        ((id
-           (cond
-             ((typep rule-or-id 'lint-rule) (rule-id rule-or-id))
-             ((listp rule-or-id) (getf rule-or-id :id))
-             (t rule-or-id))))
+    (let ((id (cond ((typep rule-or-id 'lint-rule) (rule-id rule-or-id))
+                    ((listp rule-or-id) (getf rule-or-id :id))
+                    (t rule-or-id))))
       (member (string id) requested-rules :test #'string-equal))))
 
-(defun lint-node
-       (node path &key (dialect :common-lisp) rules)
+(defun lint-node (node path &key (dialect :common-lisp) rules)
   "Check a single NODE against active rules. Return a list of LINT-FINDING instances."
   (let ((findings '()))
     (dolist (r *anti-pattern-rules*)
-      (when
-          (and (rule-applicable-p r dialect) (rule-matches-filter-p r rules))
+      (when (and (rule-applicable-p r dialect)
+                 (rule-matches-filter-p r rules))
         (let ((finding (check-rule r node path dialect)))
-          (when finding (push finding findings)))))
+          (when finding
+            (push finding findings)))))
     (nreverse findings)))
 
 (defun lint-ast (tree &key path dialect rules)
   "Recursively lint TREE (or subtree at PATH) for structural code smells and anti-patterns.
 Returns a list of LINT-FINDING instances."
-  (let*
-      ((start-node (resolve-tree-scope tree path)) (findings '()))
+  (let* ((start-node (resolve-tree-scope tree path))
+         (findings '()))
     (when start-node
-      (labels
-          ((walk (node current-dialect)
-             (let*
-                 ((tag (get-node-tag node))
-                  (node-path (get-node-path node))
-                  (effective-dialect
-                    (cond
-                      ((supported-dialect-p tag) tag)
-                      (t (or current-dialect dialect :common-lisp))))
-                  (node-findings
-                    (lint-node node node-path :dialect effective-dialect :rules rules)))
-               (dolist (f node-findings) (push f findings))
-               (let ((children (get-node-children node)))
-                 (dolist (child children) (walk child effective-dialect))))))
+      (labels ((walk (node current-dialect)
+                 (let* ((tag (get-node-tag node))
+                        (node-path (get-node-path node))
+                        (effective-dialect
+                          (cond
+                            ((supported-dialect-p tag)
+                              tag)
+                            (t (or current-dialect dialect :common-lisp))))
+                        (node-findings (lint-node node node-path
+                                                  :dialect effective-dialect
+                                                  :rules rules)))
+                   (dolist (f node-findings)
+                     (push f findings))
+                   (let ((children (get-node-children node)))
+                     (dolist (child children)
+                       (walk child effective-dialect))))))
         (walk start-node dialect)))
     (nreverse findings)))
 
@@ -642,11 +595,10 @@ Returns a list of LINT-FINDING instances."
   (when fix
     (cond
       ((and (listp fix) (getf fix :pattern) (getf fix :replacement))
-        (format stream
-                "   Suggested Fix:~%     Pattern:     ~A~%     Replacement: ~A~%"
-                (getf fix :pattern)
-                (getf fix :replacement)))
-      ((stringp fix) (format stream "   Suggested Fix: ~A~%" fix)))))
+        (format stream "   Suggested Fix:~%     Pattern:     ~A~%     Replacement: ~A~%"
+                (getf fix :pattern) (getf fix :replacement)))
+      ((stringp fix)
+        (format stream "   Suggested Fix: ~A~%" fix)))))
 
 (defun format-lint-findings (findings)
   "Format a list of LINT-FINDING instances into a human-readable diagnostic report."
@@ -654,47 +606,20 @@ Returns a list of LINT-FINDING instances."
     "No anti-patterns or code smells detected."
     (with-output-to-string (s)
       (format s "Found ~A anti-pattern~:P:~%~%" (length findings))
-      (loop for
-            f
-            in
-            findings
-            for
-            i
-            from
-            1
-            for
-            rule
-            =
-            (lint-finding-rule f)
-            for
-            path
-            =
-            (lint-finding-path f)
-            for
-            msg
-            =
-            (lint-finding-message f)
-            for
-            sev
-            =
-            (lint-finding-severity f)
-            for
-            fix
-            =
-            (lint-finding-suggested-fix f)
+      (loop for f in findings
+            for i from 1
+            for rule = (lint-finding-rule f)
+            for path = (lint-finding-path f)
+            for msg = (lint-finding-message f)
+            for sev = (lint-finding-severity f)
+            for fix = (lint-finding-suggested-fix f)
             do
-            (format s
-                    "~A. [~A] [~{~A~^, ~}] ~A~%   Message: ~A~%"
-                    i
-                    sev
-                    (or path "()")
-                    (string-downcase (string rule))
-                    msg)
+            (format s "~A. [~A] [~{~A~^, ~}] ~A~%   Message: ~A~%"
+                    i sev (or path "()") (string-downcase (string rule)) msg)
             (format-lint-fix s fix)
             (format s "~%")))))
 
-(defstruct
-    (complexity-metrics (:constructor make-complexity-metrics))
+(defstruct (complexity-metrics (:constructor make-complexity-metrics))
   name
   kind
   path
@@ -706,8 +631,7 @@ Returns a list of LINT-FINDING instances."
 (defun scheme-define-info (name-node)
   "Extract (values name-str kind) for a Scheme/Lisp 'define' form given its NAME-NODE."
   (if (compound-node-p name-node)
-    (let
-        ((fn-head (first (get-node-children name-node))))
+    (let ((fn-head (first (get-node-children name-node))))
       (values (format-atom (nth-value 2 (parse-node fn-head))) :function))
     (values (format-atom (nth-value 2 (parse-node name-node))) :definition)))
 
@@ -724,89 +648,51 @@ Returns a list of LINT-FINDING instances."
   "If NODE is a definition (defun, defmacro, defmethod, defgeneric, defn, define),
 return (values is-def-p name-str kind-keyword)."
   (let ((children (get-node-children node)))
-    (when
-        (and (compound-node-p node) (>= (length children) 2))
-      (multiple-value-bind (path tag val)
-                           (parse-node (first children))
+    (when (and (compound-node-p node)
+               (>= (length children) 2))
+      (multiple-value-bind (path tag val) (parse-node (first children))
         (declare (ignore path tag))
         (when (symbolp val)
-          (let*
-              ((head-name (string-upcase (symbol-name val)))
-               (name-node (second children))
-               (kind (standard-definition-kind head-name)))
+          (let* ((head-name (string-upcase (symbol-name val)))
+                 (name-node (second children))
+                 (kind (standard-definition-kind head-name)))
             (cond
-              (kind (values t (format-atom (nth-value 2 (parse-node name-node))) kind))
+              (kind
+                (values t (format-atom (nth-value 2 (parse-node name-node))) kind))
               ((string= head-name "DEFINE")
-                (multiple-value-bind (name def-kind)
-                                     (scheme-define-info name-node)
+                (multiple-value-bind (name def-kind) (scheme-define-info name-node)
                   (values t name def-kind)))
               (t (values nil nil nil)))))))))
 
-(defun count-cond-branch-clauses
-       (clauses dialect)
+(defun count-cond-branch-clauses (clauses dialect)
   "Count non-default test clauses in COND form."
-  (loop for
-        clause
-        in
-        clauses
-        for
-        c-children
-        =
-        (get-node-children clause)
-        when
-        (and (compound-node-p clause) c-children)
-        count
-        (not (default-cond-clause-p (first c-children) dialect))))
+  (loop for clause in clauses
+        for c-children = (get-node-children clause)
+        when (and (compound-node-p clause) c-children)
+        count (not (default-cond-clause-p (first c-children) dialect))))
 
-(defun count-case-branch-clauses
-       (clauses dialect)
+(defun count-case-branch-clauses (clauses dialect)
   "Count non-default selector clauses in CASE forms."
-  (loop for
-        clause
-        in
-        clauses
-        for
-        c-children
-        =
-        (get-node-children clause)
-        when
-        (and (compound-node-p clause) c-children)
-        count
-        (not
-          (or (leaf-true-p (first c-children) dialect)
-              (leaf-symbol-p (first c-children) "OTHERWISE")))))
+  (loop for clause in clauses
+        for c-children = (get-node-children clause)
+        when (and (compound-node-p clause) c-children)
+        count (not (or (leaf-true-p (first c-children) dialect)
+                       (leaf-symbol-p (first c-children) "OTHERWISE")))))
 
-(defun branch-form-complexity-increment
-       (name children dialect)
+(defun branch-form-complexity-increment (name children dialect)
   "Calculate McCabe complexity increment contributed by form NAME."
   (cond
-    ((member name
-             '
-             ("IF" "WHEN"
-              "UNLESS"
-              "WHEN-NOT"
-              "IF-NOT"
-              "WHEN-LET"
-              "IF-LET"
-              "WHEN-FIRST"
-              "LOOP"
-              "DOLIST"
-              "DOTIMES"
-              "DO"
-              "DO*"
-              "DOSEQ"
-              "RECUR")
-             :test
-             #'string=)
+    ((member name '("IF" "WHEN" "UNLESS" "WHEN-NOT" "IF-NOT" "WHEN-LET" "IF-LET" "WHEN-FIRST"
+                    "LOOP" "DOLIST" "DOTIMES" "DO" "DO*" "DOSEQ" "RECUR")
+             :test #'string=)
       1)
-    ((string= name "COND") (count-cond-branch-clauses (rest children) dialect))
-    ((member name
-             '
-             ("CASE" "CCASE" "ECASE" "TYPECASE" "CTYPECASE" "ETYPECASE" "CONDP")
-             :test
-             #'string=)
+    ((string= name "COND")
+      (count-cond-branch-clauses (rest children) dialect))
+    ((member name '("CASE" "CCASE" "ECASE" "TYPECASE" "CTYPECASE" "ETYPECASE" "CONDP")
+             :test #'string=)
       (count-case-branch-clauses (nthcdr 2 children) dialect))
-    ((member name '("AND" "OR") :test #'string=) (max 0 (- (length children) 2)))
+    ((member name '("AND" "OR") :test #'string=)
+      (max 0 (- (length children) 2)))
     ((member name '("HANDLER-CASE" "RESTART-CASE") :test #'string=)
       (count-if #'compound-node-p (nthcdr 2 children)))
     (t 0)))
@@ -816,190 +702,129 @@ return (values is-def-p name-str kind-keyword)."
   (when (compound-node-p node)
     (let ((children (get-node-children node)))
       (when children
-        (multiple-value-bind (p t-val val)
-                             (parse-node (first children))
+        (multiple-value-bind (p t-val val) (parse-node (first children))
           (declare (ignore p t-val))
-          (when (symbolp val) (string-upcase (symbol-name val))))))))
+          (when (symbolp val)
+            (string-upcase (symbol-name val))))))))
 
-(defun compute-branch-complexity
-       (node &optional (dialect :common-lisp))
+(defun compute-branch-complexity (node &optional (dialect :common-lisp))
   "Compute McCabe cyclomatic complexity of NODE.
 Base complexity is 1, with +1 for each conditional branch, short-circuit point, loop, or handler."
   (let ((complexity 1))
-    (labels
-        ((walk (curr)
-           (let ((op (node-operator-symbol-name curr)))
-             (when op
-               (incf complexity
-                     (branch-form-complexity-increment op (get-node-children curr) dialect)))
-             (dolist (c (get-node-children curr)) (walk c)))))
+    (labels ((walk (curr)
+               (let ((op (node-operator-symbol-name curr)))
+                 (when op
+                   (incf complexity
+                         (branch-form-complexity-increment op (get-node-children curr) dialect)))
+                 (dolist (c (get-node-children curr))
+                   (walk c)))))
       (walk node)
       complexity)))
 
-(defun compute-nesting-depth
-       (node &optional (current-depth 0))
+(defun compute-nesting-depth (node &optional (current-depth 0))
   "Compute the maximum parenthetical nesting depth of sub-expressions within NODE."
   (let ((children (get-node-children node)))
-    (if
-        (and (member (get-node-tag node) '(:paren :square :curly)) children)
-      (reduce #'max
-              children
-              :key
-              (lambda (c)
-                (compute-nesting-depth c (1+ current-depth)))
-              :initial-value
-              (1+ current-depth))
+    (if (and (member (get-node-tag node) '(:paren :square :curly))
+             children)
+      (reduce #'max children
+              :key (lambda (c) (compute-nesting-depth c (1+ current-depth)))
+              :initial-value (1+ current-depth))
       current-depth)))
 
 (defun count-ast-nodes (node)
   "Count total number of nodes (forms and leaves) in NODE."
   (let ((count 1))
-    (dolist (c (get-node-children node)) (incf count (count-ast-nodes c)))
+    (dolist (c (get-node-children node))
+      (incf count (count-ast-nodes c)))
     count))
 
-(defun generate-complexity-recommendations
-       (complexity depth count path)
+(defun generate-complexity-recommendations (complexity depth count path)
   "Produce actionable refactoring recommendations when metrics exceed thresholds."
   (declare (ignore path))
   (let ((recs '()))
     (when (>= complexity 10)
-      (push
-        (format nil
-                "High cyclomatic complexity (~A) — consider decomposing conditional logic into helper functions using 'ast_extract_function'."
-                complexity)
-        recs))
+      (push (format nil "High cyclomatic complexity (~A) — consider decomposing conditional logic into helper functions using 'ast_extract_function'."
+                    complexity)
+            recs))
     (when (>= depth 6)
-      (push
-        (format nil
-                "Deep nesting depth (~A) — consider flattening expressions or extracting intermediate values using 'ast_extract_variable'."
-                depth)
-        recs))
+      (push (format nil "Deep nesting depth (~A) — consider flattening expressions or extracting intermediate values using 'ast_extract_variable'."
+                    depth)
+            recs))
     (when (>= count 60)
-      (push
-        (format nil
-                "Large form size (~A nodes) — consider breaking this definition into smaller, single-purpose functions."
-                count)
-        recs))
+      (push (format nil "Large form size (~A nodes) — consider breaking this definition into smaller, single-purpose functions."
+                    count)
+            recs))
     (nreverse recs)))
 
-(defun analyze-form-complexity
-       (node &key path dialect)
+(defun analyze-form-complexity (node &key path dialect)
   "Analyze structural complexity of a single top-level form or function definition NODE."
-  (multiple-value-bind (is-def name kind)
-                       (form-definition-info node)
-    (let*
-        ((effective-name
-           (if is-def
-             name
-             (let ((tag (get-node-tag node))) (format nil ":~A" tag))))
-         (effective-kind
-           (if is-def
-             kind
-             :form))
-         (complexity (compute-branch-complexity node dialect))
-         (depth (compute-nesting-depth node 0))
-         (node-count (count-ast-nodes node))
-         (recs (generate-complexity-recommendations complexity depth node-count path)))
-      (make-complexity-metrics :name
-                               effective-name
-                               :kind
-                               effective-kind
-                               :path
-                               path
-                               :cyclomatic-complexity
-                               complexity
-                               :max-nesting-depth
-                               depth
-                               :form-count
-                               node-count
-                               :recommendations
-                               recs))))
+  (multiple-value-bind (is-def name kind) (form-definition-info node)
+    (let* ((effective-name (if is-def name (let ((tag (get-node-tag node))) (format nil ":~A" tag))))
+           (effective-kind (if is-def kind :form))
+           (complexity (compute-branch-complexity node dialect))
+           (depth (compute-nesting-depth node 0))
+           (node-count (count-ast-nodes node))
+           (recs (generate-complexity-recommendations complexity depth node-count path)))
+      (make-complexity-metrics
+        :name effective-name
+        :kind effective-kind
+        :path path
+        :cyclomatic-complexity complexity
+        :max-nesting-depth depth
+        :form-count node-count
+        :recommendations recs))))
 
 (defun collect-file-forms (file-node f-path)
   "Collect all (form-node . form-path) pairs under FILE-NODE."
-  (loop for
-        form
-        in
-        (get-node-children file-node)
-        for
-        form-idx
-        from
-        0
-        for
-        form-path
-        =
-        (or (get-node-path form) (append f-path (list form-idx)))
-        collect
-        (cons form form-path)))
+  (loop for form in (get-node-children file-node)
+        for form-idx from 0
+        for form-path = (or (get-node-path form) (append f-path (list form-idx)))
+        collect (cons form form-path)))
 
-(defun collect-dialect-forms
-       (dialect-node d-path)
+(defun collect-dialect-forms (dialect-node d-path)
   "Collect all (form-node . form-path) pairs under DIALECT-NODE."
-  (loop for
-        file-child
-        in
-        (get-node-children dialect-node)
-        for
-        f-idx
-        from
-        0
-        for
-        f-path
-        =
-        (or (get-node-path file-child) (append d-path (list f-idx)))
-        append
-        (collect-file-forms file-child f-path)))
+  (loop for file-child in (get-node-children dialect-node)
+        for f-idx from 0
+        for f-path = (or (get-node-path file-child) (append d-path (list f-idx)))
+        append (collect-file-forms file-child f-path)))
 
 (defun collect-top-level-forms (node base-path)
   "Collect all (form-node . path) pairs from NODE (workspace, dialect, file, or single form)."
   (let ((tag (get-node-tag node)))
     (cond
       ((eq tag :workspace)
-        (loop for
-              dialect-child
-              in
-              (get-node-children node)
-              for
-              d-idx
-              from
-              0
-              for
-              d-path
-              =
-              (or (get-node-path dialect-child) (append base-path (list d-idx)))
-              append
-              (collect-dialect-forms dialect-child d-path)))
-      ((supported-dialect-p tag) (collect-dialect-forms node base-path))
-      ((eq tag :file) (collect-file-forms node base-path))
-      (t (list (cons node (or (get-node-path node) base-path)))))))
+        (loop for dialect-child in (get-node-children node)
+              for d-idx from 0
+              for d-path = (or (get-node-path dialect-child) (append base-path (list d-idx)))
+              append (collect-dialect-forms dialect-child d-path)))
+      ((supported-dialect-p tag)
+        (collect-dialect-forms node base-path))
+      ((eq tag :file)
+        (collect-file-forms node base-path))
+      (t
+        (list (cons node (or (get-node-path node) base-path)))))))
 
 (defun compare-complexity-metrics (a b)
   "Sort comparator ordering COMPLEXITY-METRICS by cyclomatic complexity then max nesting depth."
-  (let
-      ((ca (complexity-metrics-cyclomatic-complexity a))
-       (cb (complexity-metrics-cyclomatic-complexity b)))
+  (let ((ca (complexity-metrics-cyclomatic-complexity a))
+        (cb (complexity-metrics-cyclomatic-complexity b)))
     (if (= ca cb)
       (> (complexity-metrics-max-nesting-depth a)
          (complexity-metrics-max-nesting-depth b))
       (> ca cb))))
 
-(defun analyze-complexity
-       (tree &key path dialect (min-complexity 1) (min-depth 1))
+(defun analyze-complexity (tree &key path dialect (min-complexity 1) (min-depth 1))
   "Analyze structural complexity for forms in TREE (or under PATH).
 Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
-  (let*
-      ((start-node (resolve-tree-scope tree path))
-       (forms-with-paths (when start-node (collect-top-level-forms start-node path)))
-       (min-cc (or min-complexity 1))
-       (min-d (or min-depth 1))
-       (results '()))
+  (let* ((start-node (resolve-tree-scope tree path))
+         (forms-with-paths (when start-node (collect-top-level-forms start-node path)))
+         (min-cc (or min-complexity 1))
+         (min-d (or min-depth 1))
+         (results '()))
     (dolist (pair forms-with-paths)
-      (let
-          ((metrics (analyze-form-complexity (car pair) :path (cdr pair) :dialect dialect)))
-        (when
-            (and
-              (>= (complexity-metrics-cyclomatic-complexity metrics) min-cc)
-              (>= (complexity-metrics-max-nesting-depth metrics) min-d))
+      (let ((metrics (analyze-form-complexity (car pair) :path (cdr pair) :dialect dialect)))
+        (when (and (>= (complexity-metrics-cyclomatic-complexity metrics) min-cc)
+                   (>= (complexity-metrics-max-nesting-depth metrics) min-d))
           (push metrics results))))
     (sort results #'compare-complexity-metrics)))
 
@@ -1008,62 +833,26 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
   (if (null results)
     "No forms found matching the specified complexity thresholds."
     (with-output-to-string (s)
-      (format s
-              "Structural Complexity Report (~A form~:P analyzed):~%~%"
-              (length results))
-      (loop for
-            m
-            in
-            results
-            for
-            i
-            from
-            1
-            for
-            name
-            =
-            (complexity-metrics-name m)
-            for
-            kind
-            =
-            (complexity-metrics-kind m)
-            for
-            path
-            =
-            (complexity-metrics-path m)
-            for
-            cc
-            =
-            (complexity-metrics-cyclomatic-complexity m)
-            for
-            depth
-            =
-            (complexity-metrics-max-nesting-depth m)
-            for
-            count
-            =
-            (complexity-metrics-form-count m)
-            for
-            recs
-            =
-            (complexity-metrics-recommendations m)
+      (format s "Structural Complexity Report (~A form~:P analyzed):~%~%" (length results))
+      (loop for m in results
+            for i from 1
+            for name = (complexity-metrics-name m)
+            for kind = (complexity-metrics-kind m)
+            for path = (complexity-metrics-path m)
+            for cc = (complexity-metrics-cyclomatic-complexity m)
+            for depth = (complexity-metrics-max-nesting-depth m)
+            for count = (complexity-metrics-form-count m)
+            for recs = (complexity-metrics-recommendations m)
             do
-            (format s
-                    "~A. ~A ~A [~{~A~^, ~}]~%   Cyclomatic Complexity: ~A | Max Nesting Depth: ~A | AST Nodes: ~A~%"
-                    i
-                    kind
-                    name
-                    (or path "()")
-                    cc
-                    depth
-                    count)
+            (format s "~A. ~A ~A [~{~A~^, ~}]~%   Cyclomatic Complexity: ~A | Max Nesting Depth: ~A | AST Nodes: ~A~%"
+                    i kind name (or path "()") cc depth count)
             (when recs
               (format s "   Recommendations:~%")
-              (dolist (r recs) (format s "     - ~A~%" r)))
+              (dolist (r recs)
+                (format s "     - ~A~%" r)))
             (format s "~%")))))
 
-(defstruct
-    (duplicate-group (:constructor make-duplicate-group))
+(defstruct (duplicate-group (:constructor make-duplicate-group))
   code-snippet
   occurrence-count
   paths
@@ -1074,42 +863,30 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
 (defun combine-hashes (h1 h2)
   "Combine two 64-bit integer hashes."
   (declare (type (unsigned-byte 64) h1 h2))
-  (logand 18446744073709551615
+  (logand #xFFFFFFFFFFFFFFFF
           (logxor h1
                   (+ h2
-                     11400714819323198485
-                     (ash (logand h1 288230376151711743) 6)
-                     (ash (logand h1 18446744073709551615) -2)))))
+                     #x9e3779b97f4a7c15
+                     (ash (logand h1 #x03FFFFFFFFFFFFFF) 6)
+                     (ash (logand h1 #xFFFFFFFFFFFFFFFF) -2)))))
 
-(defun compute-structural-hash
-       (node &key (exact t) (is-head t))
+(defun compute-structural-hash (node &key (exact t) (is-head t))
   "Compute a Merkle-style 64-bit integer structural hash of NODE."
   (match node
          ((leaf _ val)
           (if (or exact is-head)
             (let ((base-hash (sxhash val)))
-              (combine-hashes (sxhash (type-of val)) (logand base-hash 18446744073709551615)))
+              (combine-hashes (sxhash (type-of val)) (logand base-hash #xFFFFFFFFFFFFFFFF)))
             (combine-hashes (sxhash :anonymized-leaf) (sxhash '?_))))
          ((comment _ text)
           (if exact
-            (combine-hashes (sxhash :comment) (logand (sxhash text) 18446744073709551615))
+            (combine-hashes (sxhash :comment) (logand (sxhash text) #xFFFFFFFFFFFFFFFF))
             (sxhash :comment)))
          ((node _ tag children)
-          (let
-              ((h (combine-hashes (sxhash :node) (sxhash tag))))
-            (loop for
-                  c
-                  in
-                  children
-                  for
-                  idx
-                  of-type
-                  fixnum
-                  from
-                  0
-                  do
-                  (setf h
-                        (combine-hashes h (compute-structural-hash c :exact exact :is-head (zerop idx)))))
+          (let ((h (combine-hashes (sxhash :node) (sxhash tag))))
+            (loop for c in children
+                  for idx of-type fixnum from 0
+                  do (setf h (combine-hashes h (compute-structural-hash c :exact exact :is-head (zerop idx)))))
             h))
          (_ (sxhash node))))
 
@@ -1125,320 +902,174 @@ Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
 (defun same-top-level-form-p (paths)
   "Return T if all PATHS share the same parent form (e.g. within the same function)."
   (when (and paths (cdr paths))
-    (let
-        ((first-parent
-           (if (<= (length (first paths)) 3)
-             (first paths)
-             (subseq (first paths) 0 3))))
-      (every
-        (lambda (p)
-          (let
-              ((parent
-                 (if (<= (length p) 3)
-                   p
-                   (subseq p 0 3))))
-            (equal first-parent parent)))
-        (rest paths)))))
+    (let ((first-parent (if (<= (length (first paths)) 3)
+                          (first paths)
+                          (subseq (first paths) 0 3))))
+      (every (lambda (p)
+               (let ((parent (if (<= (length p) 3) p (subseq p 0 3))))
+                 (equal first-parent parent)))
+             (rest paths)))))
 
-(defparameter *compiler-directive-heads* '
-  ("DECLARE" "DECLAIM"
-   "PROCLAIM"
-   "IN-PACKAGE"
-   "DEFPACKAGE"
-   "OPTIMIZE"
-   "SPEED"
-   "SAFETY"
-   "SPACE"
-   "COMPILATION-SPEED"
-   "DEBUG"
-   "INLINE"
-   "NOTINLINE")
+(defparameter *compiler-directive-heads*
+  '("DECLARE" "DECLAIM" "PROCLAIM" "IN-PACKAGE" "DEFPACKAGE"
+    "OPTIMIZE" "SPEED" "SAFETY" "SPACE" "COMPILATION-SPEED"
+    "DEBUG" "INLINE" "NOTINLINE")
   "List of compiler directive, package, and declaration symbol names to ignore in clone detection.")
 
-(defparameter *binding-form-heads* '
-  ("LET" "LET*"
-   "FLET"
-   "LABELS"
-   "MACROLET"
-   "SYMBOL-MACROLET"
-   "WHEN-LET"
-   "IF-LET"
-   "WHEN-SOME"
-   "IF-SOME"
-   "DO"
-   "DO*")
+(defparameter *binding-form-heads*
+  '("LET" "LET*" "FLET" "LABELS" "MACROLET" "SYMBOL-MACROLET"
+    "WHEN-LET" "IF-LET" "WHEN-SOME" "IF-SOME" "DO" "DO*")
   "List of head symbols whose child 1 is a list of lexical bindings.")
 
-(defun duplicate-subtree-eligible-p
-       (tag children head-str context)
+(defun duplicate-subtree-eligible-p (tag children head-str context)
   "Return T if a node with TAG, CHILDREN, HEAD-STR, and CONTEXT is eligible for duplicate tracking."
   (and (member tag '(:paren :square :curly))
        children
-       (not
-         (member tag '(:workspace :common-lisp :clojure :scheme :emacs-lisp :fennel)))
+       (not (member tag '(:workspace :common-lisp :clojure :scheme :emacs-lisp :fennel)))
        (not (member context '(:binding-list :binding-clause)))
        (not (member head-str *compiler-directive-heads* :test #'string=))))
 
-(defun record-duplicate-subtree
-       (curr curr-path node-cnt depth exact buckets node-metadata)
+(defun record-duplicate-subtree (curr curr-path node-cnt depth exact buckets node-metadata)
   "Record an eligible duplicate subtree node in BUCKETS and NODE-METADATA."
-  (let
-      ((fingerprint (canonicalize-subtree curr :exact exact)))
+  (let ((fingerprint (canonicalize-subtree curr :exact exact)))
     (push (cons curr-path curr) (gethash fingerprint buckets nil))
     (unless (gethash fingerprint node-metadata)
       (setf (gethash fingerprint node-metadata)
             (list :node-count node-cnt :depth depth :sample curr)))))
 
-(defun loop-with-vector-bindings-p
-       (head-str children)
+(defun loop-with-vector-bindings-p (head-str children)
   "Return T if form is a LOOP with a vector binding clause."
   (and (equal head-str "LOOP")
        children
        (second children)
        (eq (get-node-tag (second children)) :square)))
 
-(defun harvest-child-context
-       (parent-context parent-tag head-str idx children)
+(defun harvest-child-context (parent-context parent-tag head-str idx children)
   "Determine child context during harvest traversal."
   (cond
     ((and (eq parent-context :binding-list) (eq parent-tag :square))
       (when (evenp idx) :binding-clause))
-    ((eq parent-context :binding-list) :binding-clause)
-    ((eq parent-context :binding-clause) nil)
-    ((or
-       (member head-str *binding-form-heads* :test #'string=)
-       (member head-str '("MULTIPLE-VALUE-BIND" "DESTRUCTURING-BIND") :test #'string=)
-       (loop-with-vector-bindings-p head-str children))
+    ((eq parent-context :binding-list)
+      :binding-clause)
+    ((eq parent-context :binding-clause)
+      nil)
+    ((or (member head-str *binding-form-heads* :test #'string=)
+         (member head-str '("MULTIPLE-VALUE-BIND" "DESTRUCTURING-BIND") :test #'string=)
+         (loop-with-vector-bindings-p head-str children))
       (when (= idx 1) :binding-list))
     (t nil)))
 
-(defun harvest-duplicate-children
-       (curr-path children
-        tag
-        head-str
-        context
-        exact
-        min-nodes
-        min-depth
-        buckets
-        node-metadata)
+(defun harvest-duplicate-children (curr-path children tag head-str context exact min-nodes min-depth buckets node-metadata)
   "Traverse children of a node with contextual rules."
   (let ((skip-first (eq context :binding-clause)))
-    (loop for
-          child
-          in
-          (if skip-first
-            (rest children)
-            children)
-          for
-          idx
-          from
-          (if skip-first
-            1
-            0)
-          for
-          cp
-          =
-          (or (get-node-path child) (append curr-path (list idx)))
-          for
-          c-ctx
-          =
-          (harvest-child-context context tag head-str idx children)
-          do
-          (harvest-duplicate-subtrees child
-                                      cp
-                                      exact
-                                      min-nodes
-                                      min-depth
-                                      buckets
-                                      node-metadata
-                                      c-ctx))))
+    (loop for child in (if skip-first (rest children) children)
+          for idx from (if skip-first 1 0)
+          for cp = (or (get-node-path child) (append curr-path (list idx)))
+          for c-ctx = (harvest-child-context context tag head-str idx children)
+          do (harvest-duplicate-subtrees child cp exact min-nodes min-depth buckets node-metadata c-ctx))))
 
-(defun maybe-record-duplicate-subtree
-       (node curr-path
-        exact
-        min-nodes
-        min-depth
-        buckets
-        node-metadata
-        context
-        head-str)
+(defun maybe-record-duplicate-subtree (node curr-path exact min-nodes min-depth buckets node-metadata context head-str)
   "Check eligibility and record candidate duplicate subtree."
-  (when
-      (duplicate-subtree-eligible-p (get-node-tag node)
-                                    (get-node-children node)
-                                    head-str
-                                    context)
-    (let
-        ((node-cnt (count-ast-nodes node)) (depth (compute-nesting-depth node 0)))
-      (when
-          (and (>= node-cnt (or min-nodes 4)) (>= depth (or min-depth 2)))
-        (record-duplicate-subtree node
-                                  curr-path
-                                  node-cnt
-                                  depth
-                                  exact
-                                  buckets
-                                  node-metadata)))))
+  (when (duplicate-subtree-eligible-p (get-node-tag node) (get-node-children node) head-str context)
+    (let ((node-cnt (count-ast-nodes node))
+          (depth (compute-nesting-depth node 0)))
+      (when (and (>= node-cnt (or min-nodes 4))
+                 (>= depth (or min-depth 2)))
+        (record-duplicate-subtree node curr-path node-cnt depth exact buckets node-metadata)))))
 
-(defun harvest-duplicate-subtrees
-       (node curr-path
-        exact
-        min-nodes
-        min-depth
-        buckets
-        node-metadata
-        &optional
-        context)
+(defun harvest-duplicate-subtrees (node curr-path exact min-nodes min-depth buckets node-metadata &optional context)
   "Recursively traverse NODE to collect candidate subtrees into BUCKETS and NODE-METADATA."
-  (let*
-      ((children (get-node-children node))
-       (first-child (first children))
-       (first-val
-         (when
-             (and first-child (eq (get-node-tag first-child) :leaf))
-           (nth-value 2 (parse-node first-child))))
-       (head-str (when (symbolp first-val) (string-upcase (symbol-name first-val)))))
-    (maybe-record-duplicate-subtree node
-                                    curr-path
-                                    exact
-                                    min-nodes
-                                    min-depth
-                                    buckets
-                                    node-metadata
-                                    context
-                                    head-str)
-    (unless
-        (member head-str
-                '
-                ("DECLARE" "DECLAIM" "PROCLAIM" "IN-PACKAGE" "DEFPACKAGE")
-                :test
-                #'string=)
-      (harvest-duplicate-children curr-path
-                                  children
-                                  (get-node-tag node)
-                                  head-str
-                                  context
-                                  exact
-                                  min-nodes
-                                  min-depth
-                                  buckets
-                                  node-metadata))))
+  (let* ((children (get-node-children node))
+         (first-child (first children))
+         (first-val (when (and first-child (eq (get-node-tag first-child) :leaf))
+                      (nth-value 2 (parse-node first-child))))
+         (head-str (when (symbolp first-val) (string-upcase (symbol-name first-val)))))
+    (maybe-record-duplicate-subtree node curr-path exact min-nodes min-depth buckets node-metadata context head-str)
+    (unless (member head-str '("DECLARE" "DECLAIM" "PROCLAIM" "IN-PACKAGE" "DEFPACKAGE") :test #'string=)
+      (harvest-duplicate-children curr-path children (get-node-tag node)
+                                  head-str context exact min-nodes min-depth buckets node-metadata))))
 
-(defun extract-raw-duplicate-candidates
-       (buckets node-metadata)
+(defun extract-raw-duplicate-candidates (buckets node-metadata)
   "Extract entries appearing at least twice from BUCKETS and associate with NODE-METADATA."
   (filter-map
     (lambda (fingerprint)
       (let ((entries (gethash fingerprint buckets)))
         (when (>= (length entries) 2)
-          (let*
-              ((meta (gethash fingerprint node-metadata)) (paths (mapcar #'car entries)))
-            (list :fingerprint
-                  fingerprint
-                  :paths
-                  (nreverse paths)
-                  :node-count
-                  (getf meta :node-count)
-                  :depth
-                  (getf meta :depth)
-                  :sample
-                  (getf meta :sample))))))
+          (let* ((meta (gethash fingerprint node-metadata))
+                 (paths (mapcar #'car entries)))
+            (list :fingerprint fingerprint
+                  :paths (nreverse paths)
+                  :node-count (getf meta :node-count)
+                  :depth (getf meta :depth)
+                  :sample (getf meta :sample))))))
     (hash-table-keys buckets)))
 
 (defun candidate-subsumed-p (cand candidates)
   "Return T if CAND is subsumed by any other candidate in CANDIDATES."
-  (let*
-      ((c-paths (getf cand :paths)) (c-count (length c-paths)))
-    (some
-      (lambda (other)
-        (unless (eq cand other)
-          (let
-              ((o-paths (getf other :paths)) (o-count (length (getf other :paths))))
-            (and (= c-count o-count)
-                 (> (getf other :node-count) (getf cand :node-count))
-                 (every
-                   (lambda (cp)
-                     (some
-                       (lambda (op)
-                         (path-prefix-p op cp))
-                       o-paths))
-                   c-paths)))))
-      candidates)))
+  (let* ((c-paths (getf cand :paths))
+         (c-count (length c-paths)))
+    (some (lambda (other)
+            (unless (eq cand other)
+              (let ((o-paths (getf other :paths))
+                    (o-count (length (getf other :paths))))
+                (and (= c-count o-count)
+                     (> (getf other :node-count) (getf cand :node-count))
+                     (every (lambda (cp)
+                              (some (lambda (op) (path-prefix-p op cp)) o-paths))
+                            c-paths)))))
+          candidates)))
 
 (defun filter-subsumed-candidates (candidates)
   "Filter out candidates that are completely subsumed by larger subtrees with identical occurrences."
-  (remove-if
-    (lambda (cand)
-      (candidate-subsumed-p cand candidates))
-    candidates))
+  (remove-if (lambda (cand) (candidate-subsumed-p cand candidates)) candidates))
 
 (defun make-duplicate-snippet (sample)
   "Generate a single-line truncated snippet for SAMPLE node."
-  (let*
-      ((raw-str (sexp-to-string sample)) (cleaned (trim-whitespace raw-str)))
-    (ellipsize (substitute #\space #\newline cleaned) 80)))
+  (let* ((raw-str (sexp-to-string sample))
+         (cleaned (trim-whitespace raw-str)))
+    (ellipsize (substitute #\Space #\Newline cleaned) 80)))
 
 (defun build-duplicate-group (cand)
   "Build a DUPLICATE-GROUP instance from CAND."
-  (let*
-      ((paths (getf cand :paths))
-       (sample (getf cand :sample))
-       (snippet (make-duplicate-snippet sample))
-       (node-cnt (getf cand :node-count))
-       (depth (getf cand :depth))
-       (recomm
-         (if (same-top-level-form-p paths)
-           "Repeated expression within the same function — consider extracting into a local variable using 'ast_extract_variable'."
-           "Repeated code across multiple locations — consider extracting into a shared helper function using 'ast_extract_function'.")))
-    (make-duplicate-group :code-snippet
-                          snippet
-                          :occurrence-count
-                          (length paths)
-                          :paths
-                          paths
-                          :node-count
-                          node-cnt
-                          :depth
-                          depth
-                          :recommendation
-                          recomm)))
+  (let* ((paths (getf cand :paths))
+         (sample (getf cand :sample))
+         (snippet (make-duplicate-snippet sample))
+         (node-cnt (getf cand :node-count))
+         (depth (getf cand :depth))
+         (recomm (if (same-top-level-form-p paths)
+                   "Repeated expression within the same function — consider extracting into a local variable using 'ast_extract_variable'."
+                   "Repeated code across multiple locations — consider extracting into a shared helper function using 'ast_extract_function'.")))
+    (make-duplicate-group
+      :code-snippet snippet
+      :occurrence-count (length paths)
+      :paths paths
+      :node-count node-cnt
+      :depth depth
+      :recommendation recomm)))
 
 (defun sort-duplicate-groups (groups)
   "Sort duplicate groups descending by AST savings, then by occurrence count."
   (sort groups
         (lambda (a b)
-          (let
-              ((savings-a
-                 (* (duplicate-group-node-count a) (1- (duplicate-group-occurrence-count a))))
-               (savings-b
-                 (* (duplicate-group-node-count b) (1- (duplicate-group-occurrence-count b)))))
+          (let ((savings-a (* (duplicate-group-node-count a) (1- (duplicate-group-occurrence-count a))))
+                (savings-b (* (duplicate-group-node-count b) (1- (duplicate-group-occurrence-count b)))))
             (if (= savings-a savings-b)
               (> (duplicate-group-occurrence-count a) (duplicate-group-occurrence-count b))
               (> savings-a savings-b))))))
 
-(defun find-duplicate-subtrees
-       (tree &key path (min-nodes 4) (min-depth 2) (exact t))
+(defun find-duplicate-subtrees (tree &key path (min-nodes 4) (min-depth 2) (exact t))
   "Find repeated AST subtrees in TREE (or under PATH).
 Groups matching subtrees, removes redundant subsumed sub-expressions, and generates refactoring recommendations."
-  (let
-      ((start-node (resolve-tree-scope tree path)))
-    (unless start-node (return-from find-duplicate-subtrees nil))
-    (let
-        ((buckets (make-hash-table :test 'equal))
-         (node-metadata (make-hash-table :test 'equal))
-         (start-path (or (get-node-path start-node) path '())))
-      (harvest-duplicate-subtrees start-node
-                                  start-path
-                                  exact
-                                  min-nodes
-                                  min-depth
-                                  buckets
-                                  node-metadata)
-      (let*
-          ((raw-candidates (extract-raw-duplicate-candidates buckets node-metadata))
-           (filtered-candidates (filter-subsumed-candidates raw-candidates))
-           (groups (mapcar #'build-duplicate-group filtered-candidates)))
+  (let ((start-node (resolve-tree-scope tree path)))
+    (unless start-node
+      (return-from find-duplicate-subtrees nil))
+    (let ((buckets (make-hash-table :test 'equal))
+          (node-metadata (make-hash-table :test 'equal))
+          (start-path (or (get-node-path start-node) path '())))
+      (harvest-duplicate-subtrees start-node start-path exact min-nodes min-depth buckets node-metadata)
+      (let* ((raw-candidates (extract-raw-duplicate-candidates buckets node-metadata))
+             (filtered-candidates (filter-subsumed-candidates raw-candidates))
+             (groups (mapcar #'build-duplicate-group filtered-candidates)))
         (sort-duplicate-groups groups)))))
 
 (defun format-duplicate-report (duplicate-groups)
@@ -1446,135 +1077,61 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
   (if (null duplicate-groups)
     "No duplicate subtrees or structural clones detected."
     (with-output-to-string (s)
-      (format s
-              "Duplicate Subtrees Report (~A duplicate group~:P found):~%~%"
-              (length duplicate-groups))
-      (loop for
-            g
-            in
-            duplicate-groups
-            for
-            i
-            from
-            1
-            for
-            snippet
-            =
-            (duplicate-group-code-snippet g)
-            for
-            count
-            =
-            (duplicate-group-occurrence-count g)
-            for
-            paths
-            =
-            (duplicate-group-paths g)
-            for
-            node-cnt
-            =
-            (duplicate-group-node-count g)
-            for
-            depth
-            =
-            (duplicate-group-depth g)
-            for
-            rec
-            =
-            (duplicate-group-recommendation g)
+      (format s "Duplicate Subtrees Report (~A duplicate group~:P found):~%~%" (length duplicate-groups))
+      (loop for g in duplicate-groups
+            for i from 1
+            for snippet = (duplicate-group-code-snippet g)
+            for count = (duplicate-group-occurrence-count g)
+            for paths = (duplicate-group-paths g)
+            for node-cnt = (duplicate-group-node-count g)
+            for depth = (duplicate-group-depth g)
+            for rec = (duplicate-group-recommendation g)
             do
-            (format s
-                    "~A. [~A occurrences | ~A nodes | depth ~A]~%   Code: ~A~%   Paths:~%"
-                    i
-                    count
-                    node-cnt
-                    depth
-                    snippet)
-            (dolist (p paths) (format s "     - [~{~A~^, ~}]~%" p))
-            (when rec (format s "   Recommendation: ~A~%" rec))
+            (format s "~A. [~A occurrences | ~A nodes | depth ~A]~%   Code: ~A~%   Paths:~%"
+                    i count node-cnt depth snippet)
+            (dolist (p paths)
+              (format s "     - [~{~A~^, ~}]~%" p))
+            (when rec
+              (format s "   Recommendation: ~A~%" rec))
             (format s "~%")))))
 
-(defstruct binding-finding kind
-                           variable-name
-                           path
-                           scope-kind
-                           outer-path
-                           message
-                           recommendation)
+(defstruct binding-finding
+  kind
+  variable-name
+  path
+  scope-kind
+  outer-path
+  message
+  recommendation)
 
-(defstruct scope-binding name
-                         path
-                         scope-kind
-                         enclosing-name
-                         (ignored-p nil)
-                         (usage-count 0)
-                         (usage-paths nil))
+(defstruct scope-binding
+  name
+  path
+  scope-kind
+  enclosing-name
+  (ignored-p nil)
+  (usage-count 0)
+  (usage-paths nil))
 
-(defstruct lexical-scope kind
-                         parent
-                         dialect
-                         enclosing-name
-                         (bindings nil))
+(defstruct lexical-scope
+  kind
+  parent
+  dialect
+  enclosing-name
+  (bindings nil))
 
-(defparameter *cl-lambda-keywords* '
-  ("&optional" "&rest"
-   "&key"
-   "&aux"
-   "&body"
-   "&whole"
-   "&environment"
-   "&allow-other-keys"
-   "&"))
+(defparameter *cl-lambda-keywords*
+  '("&optional" "&rest" "&key" "&aux" "&body" "&whole" "&environment" "&allow-other-keys" "&"))
 
-(defparameter *lisp-special-operators* '
-  ("if" "when"
-   "unless"
-   "cond"
-   "case"
-   "typecase"
-   "ecase"
-   "ccase"
-   "ctypecase"
-   "etypecase"
-   "condp"
-   "and"
-   "or"
-   "do"
-   "progn"
-   "block"
-   "return-from"
-   "tagbody"
-   "go"
-   "catch"
-   "throw"
-   "unwind-protect"
-   "let"
-   "let*"
-   "letrec"
-   "loop"
-   "defun"
-   "defmacro"
-   "defmethod"
-   "defgeneric"
-   "define"
-   "defn"
-   "defn-"
-   "fn"
-   "lambda"
-   "quote"
-   "'"
-   "function"
-   "#'"
-   "declare"
-   "multiple-value-bind"
-   "destructuring-bind"
-   "dolist"
-   "dotimes"
-   "when-let"
-   "if-let"
-   "when-some"
-   "if-some"))
+(defparameter *lisp-special-operators*
+  '("if" "when" "unless" "cond" "case" "typecase" "ecase" "ccase" "ctypecase" "etypecase"
+    "condp" "and" "or" "do" "progn" "block" "return-from" "tagbody" "go" "catch" "throw"
+    "unwind-protect" "let" "let*" "letrec" "loop" "defun" "defmacro" "defmethod" "defgeneric"
+    "define" "defn" "defn-" "fn" "lambda" "quote" "'" "function" "#'" "declare"
+    "multiple-value-bind" "destructuring-bind" "dolist" "dotimes" "when-let" "if-let" "when-some" "if-some"))
 
-(defun lisp-1-dialect-p (dialect) (member dialect '(:clojure :scheme :fennel)))
+(defun lisp-1-dialect-p (dialect)
+  (member dialect '(:clojure :scheme :fennel)))
 
 (defun vector-binding-dialect-p (dialect)
   "Return T if DIALECT uses vector [var val ...] bindings (Clojure and Fennel)."
@@ -1582,8 +1139,7 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
 
 (defun leaf-any-symbol-p (node)
   "Return T if NODE is a leaf node containing a symbol (not keyword, boolean, or literal)."
-  (multiple-value-bind (path tag val)
-                       (parse-node node)
+  (multiple-value-bind (path tag val) (parse-node node)
     (declare (ignore path))
     (and (eq tag :leaf)
          (symbolp val)
@@ -1592,10 +1148,10 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
 
 (defun leaf-symbol-name (node)
   "Return downcased string name of leaf symbol node, or NIL if not a leaf symbol."
-  (multiple-value-bind (path tag val)
-                       (parse-node node)
+  (multiple-value-bind (path tag val) (parse-node node)
     (declare (ignore path))
-    (when (and (eq tag :leaf) (symbolp val)) (string-downcase (symbol-name val)))))
+    (when (and (eq tag :leaf) (symbolp val))
+      (string-downcase (symbol-name val)))))
 
 (defun ignored-variable-name-p (name)
   "Return T if variable NAME follows ignored naming conventions (_ or starts with _)."
@@ -1614,53 +1170,43 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
   "Extract ignored/ignorable variable names from a single declaration specifier form SPEC."
   (let ((result '()))
     (when (eq (get-node-tag spec) :paren)
-      (let*
-          ((spec-children (get-node-children spec))
-           (spec-name (when spec-children (leaf-symbol-name (first spec-children)))))
-        (when
-            (member spec-name '("ignore" "ignorable") :test #'string=)
+      (let* ((spec-children (get-node-children spec))
+             (spec-name (when spec-children (leaf-symbol-name (first spec-children)))))
+        (when (member spec-name '("ignore" "ignorable") :test #'string=)
           (dolist (var-node (rest spec-children))
-            (when (leaf-any-symbol-p var-node) (push (leaf-symbol-name var-node) result))))))
+            (when (leaf-any-symbol-p var-node)
+              (push (leaf-symbol-name var-node) result))))))
     result))
 
 (defun extract-cl-declarations (body-nodes)
   "Extract ignored/ignorable variable names from leading declarations and docstrings in BODY-NODES.
 Returns (values ignored-names remaining-body-nodes)."
-  (let
-      ((ignored '()) (remaining body-nodes) (seen-docstring nil))
-    (loop while
-          remaining
-          for
-          form
-          =
-          (first remaining)
-          for
-          tag
-          =
-          (get-node-tag form)
-          for
-          children
-          =
-          (get-node-children form)
-          do
-          (cond
-            ((and (not seen-docstring)
-                  (rest remaining)
-                  (eq tag :leaf)
-                  (stringp (third (parse-node form))))
-              (setf seen-docstring t)
-              (setf remaining (rest remaining)))
-            ((and (eq tag :paren)
-                  children
-                  (equal (leaf-symbol-name (first children)) "declare"))
-              (dolist (spec (rest children))
-                (dolist (var (extract-spec-ignored-vars spec)) (push var ignored)))
-              (setf remaining (rest remaining)))
-            (t (return))))
+  (let ((ignored '())
+        (remaining body-nodes)
+        (seen-docstring nil))
+    (loop while remaining
+          for form = (first remaining)
+          for tag = (get-node-tag form)
+          for children = (get-node-children form)
+          do (cond
+               ((and (not seen-docstring)
+                     (rest remaining)
+                     (eq tag :leaf)
+                     (stringp (third (parse-node form))))
+                 (setf seen-docstring t)
+                 (setf remaining (rest remaining)))
+               ((and (eq tag :paren)
+                     children
+                     (equal (leaf-symbol-name (first children)) "declare"))
+                 (dolist (spec (rest children))
+                   (dolist (var (extract-spec-ignored-vars spec))
+                     (push var ignored)))
+                 (setf remaining (rest remaining)))
+               (t
+                 (return))))
     (values ignored remaining)))
 
-(defun get-scope-declarations
-       (body-nodes dialect)
+(defun get-scope-declarations (body-nodes dialect)
   "Extract ignored/ignorable variable declarations from leading forms in BODY-NODES.
 Returns (values ignored-names remaining-body-nodes)."
   (if (lisp-1-dialect-p dialect)
@@ -1670,103 +1216,84 @@ Returns (values ignored-names remaining-body-nodes)."
 (defun find-in-lexical-scope (scope var-name)
   "Look up VAR-NAME in SCOPE and its enclosing parent scopes. Returns scope-binding or NIL."
   (when scope
-    (or
-      (find var-name
-            (lexical-scope-bindings scope)
-            :key
-            #'scope-binding-name
-            :test
-            #'string=)
-      (find-in-lexical-scope (lexical-scope-parent scope) var-name))))
+    (or (find var-name (lexical-scope-bindings scope)
+              :key #'scope-binding-name
+              :test #'string=)
+        (find-in-lexical-scope (lexical-scope-parent scope) var-name))))
 
-(defun register-scope-binding
-       (scope name path &key (ignored nil))
+(defun register-scope-binding (scope name path &key (ignored nil))
   "Register a new binding in SCOPE. Returns the new scope-binding."
-  (let*
-      ((is-ignored (or ignored (ignored-variable-name-p name)))
-       (binding
-         (make-scope-binding :name
-                             name
-                             :path
-                             path
-                             :scope-kind
-                             (lexical-scope-kind scope)
-                             :enclosing-name
-                             (lexical-scope-enclosing-name scope)
-                             :ignored-p
-                             is-ignored)))
+  (let* ((is-ignored (or ignored (ignored-variable-name-p name)))
+         (binding (make-scope-binding
+                    :name name
+                    :path path
+                    :scope-kind (lexical-scope-kind scope)
+                    :enclosing-name (lexical-scope-enclosing-name scope)
+                    :ignored-p is-ignored)))
     (push binding (lexical-scope-bindings scope))
     binding))
 
-(defun record-variable-usage
-       (scope var-name usage-path)
+(defun record-variable-usage (scope var-name usage-path)
   "Record an occurrence of VAR-NAME at USAGE-PATH in the nearest enclosing binding."
-  (let
-      ((binding (find-in-lexical-scope scope var-name)))
+  (let ((binding (find-in-lexical-scope scope var-name)))
     (when binding
       (incf (scope-binding-usage-count binding))
       (push usage-path (scope-binding-usage-paths binding))
       t)))
 
-(defun collect-cl-spec-param
-       (children collect-fn)
+(defun collect-cl-spec-param (children collect-fn)
   "Collect parameter bindings from a Common Lisp optional or keyword spec."
   (let ((first-child (first children)))
-    (if
-        (and (eq (get-node-tag first-child) :paren) (get-node-children first-child))
+    (if (and (eq (get-node-tag first-child) :paren)
+             (get-node-children first-child))
       (let ((sub (get-node-children first-child)))
-        (when (>= (length sub) 2) (funcall collect-fn (second sub))))
+        (when (>= (length sub) 2)
+          (funcall collect-fn (second sub))))
       (funcall collect-fn first-child))
-    (when (>= (length children) 3) (funcall collect-fn (third children)))))
+    (when (>= (length children) 3)
+      (funcall collect-fn (third children)))))
 
 (defun cl-param-spec-p (tag first-child)
   "Check if FIRST-CHILD under a collection of TAG represents a CL param spec."
   (and (eq tag :paren)
        (or (leaf-any-symbol-p first-child)
-           (and (eq (get-node-tag first-child) :paren) (get-node-children first-child)))))
+           (and (eq (get-node-tag first-child) :paren)
+                (get-node-children first-child)))))
 
-(defun collect-sequence-params
-       (tag children collect-fn)
+(defun collect-sequence-params (tag children collect-fn)
   "Collect parameter bindings from paren or square sequence CHILDREN."
   (when children
     (if (cl-param-spec-p tag (first children))
       (collect-cl-spec-param children collect-fn)
-      (dolist (c children) (funcall collect-fn c)))))
+      (dolist (c children)
+        (funcall collect-fn c)))))
 
-(defun collect-map-destructuring-entry
-       (k v collect-fn)
+(defun collect-map-destructuring-entry (k v collect-fn)
   "Collect bindings from a single map destructuring pair (K V)."
   (let ((k-name (leaf-symbol-name k)))
     (cond
       ((and (equal k-name ":keys") (member (get-node-tag v) '(:square :paren)))
-        (dolist (c (get-node-children v)) (funcall collect-fn c)))
-      ((and (equal k-name ":as") (leaf-any-symbol-p v)) (funcall collect-fn v))
-      ((leaf-any-symbol-p k) (funcall collect-fn k)))))
+        (dolist (c (get-node-children v))
+          (funcall collect-fn c)))
+      ((and (equal k-name ":as") (leaf-any-symbol-p v))
+        (funcall collect-fn v))
+      ((leaf-any-symbol-p k)
+        (funcall collect-fn k)))))
 
-(defun collect-map-destructuring-params
-       (children collect-fn)
+(defun collect-map-destructuring-params (children collect-fn)
   "Collect bindings from curly map destructuring CHILDREN."
-  (loop for
-        (k v)
-        on
-        children
-        by
-        #'cddr
-        while
-        k
-        do
-        (collect-map-destructuring-entry k v collect-fn)))
+  (loop for (k v) on children by #'cddr
+        while k
+        do (collect-map-destructuring-entry k v collect-fn)))
 
-(defun collect-single-param
-       (node collect-fn on-symbol-fn)
+(defun collect-single-param (node collect-fn on-symbol-fn)
   "Dispatch parameter collection for a single parameter NODE."
   (when node
     (let ((tag (get-node-tag node)))
       (cond
         ((leaf-any-symbol-p node)
           (let ((name (leaf-symbol-name node)))
-            (unless
-                (member name *cl-lambda-keywords* :test #'string=)
+            (unless (member name *cl-lambda-keywords* :test #'string=)
               (funcall on-symbol-fn name (get-node-path node)))))
         ((member tag '(:paren :square))
           (collect-sequence-params tag (get-node-children node) collect-fn))
@@ -1776,150 +1303,96 @@ Returns (values ignored-names remaining-body-nodes)."
 (defun extract-param-bindings (params-node)
   "Extract list of (name . path) pairs from PARAMS-NODE."
   (let ((results '()))
-    (labels
-        ((collect (node)
-           (collect-single-param node
-                                 #'collect
-                                 (lambda (name path)
-                                   (push (cons name path) results)))))
+    (labels ((collect (node)
+               (collect-single-param
+                 node
+                 #'collect
+                 (lambda (name path) (push (cons name path) results)))))
       (if (compound-node-p params-node)
-        (dolist (c (get-node-children params-node)) (collect c))
+        (dolist (c (get-node-children params-node))
+          (collect c))
         (collect params-node)))
     (nreverse results)))
 
 (defun extract-single-let-clause (clause)
   "Parse a single CLAUSE into plist (:pattern node :init node)."
   (cond
-    ((leaf-any-symbol-p clause) (list :pattern clause :init nil))
+    ((leaf-any-symbol-p clause)
+      (list :pattern clause :init nil))
     ((compound-node-p clause)
       (let ((c-children (get-node-children clause)))
-        (list :pattern (first c-children) :init (second c-children))))
+        (list :pattern (first c-children)
+              :init (second c-children))))
     (t nil)))
 
-(defun extract-let-clauses
-       (bindings-node dialect)
+(defun extract-let-clauses (bindings-node dialect)
   "Extract list of plist (:pattern node :init node) from BINDINGS-NODE according to DIALECT."
   (unless bindings-node (return-from extract-let-clauses nil))
-  (let
-      ((tag (get-node-tag bindings-node))
-       (children (get-node-children bindings-node)))
-    (if
-        (or (eq dialect :clojure) (eq dialect :fennel) (eq tag :square))
-      (loop for
-            (pat-node init-node)
-            on
-            children
-            by
-            #'cddr
-            while
-            pat-node
-            collect
-            (list :pattern pat-node :init init-node))
-      (loop for
-            clause
-            in
-            children
-            for
-            parsed
-            =
-            (extract-single-let-clause clause)
-            when
-            parsed
-            collect
-            parsed))))
+  (let ((tag (get-node-tag bindings-node))
+        (children (get-node-children bindings-node)))
+    (if (or (eq dialect :clojure) (eq dialect :fennel) (eq tag :square))
+      (loop for (pat-node init-node) on children by #'cddr
+            while pat-node
+            collect (list :pattern pat-node :init init-node))
+      (loop for clause in children
+            for parsed = (extract-single-let-clause clause)
+            when parsed collect parsed))))
 
-(defun check-and-register-binding
-       (scope name path ignored-names findings)
-  (let
-      ((outer (find-in-lexical-scope (lexical-scope-parent scope) name))
-       (ignored (member name ignored-names :test #'string-equal)))
-    (when
-        (and outer
-             (not (ignored-variable-name-p name))
-             (not (dynamic-variable-name-p name)))
-      (push
-        (make-binding-finding :kind
-                              :shadowed-variable
-                              :variable-name
-                              name
-                              :path
-                              path
-                              :scope-kind
-                              (lexical-scope-kind scope)
-                              :outer-path
-                              (scope-binding-path outer)
-                              :message
-                              (fmt
-                                "Variable '~A' in ~A shadows outer binding at [~{~A~^, ~}]."
-                                name
-                                (lexical-scope-kind scope)
-                                (scope-binding-path outer))
-                              :recommendation
-                              (fmt
-                                "Consider renaming local variable '~A' using 'ast_rename' to avoid shadowing."
-                                name))
-        findings))
-    (register-scope-binding scope
-                            name
-                            path
-                            :ignored
-                            (or ignored (ignored-variable-name-p name)))
+(defun check-and-register-binding (scope name path ignored-names findings)
+  (let ((outer (find-in-lexical-scope (lexical-scope-parent scope) name))
+        (ignored (member name ignored-names :test #'string-equal)))
+    (when (and outer
+               (not (ignored-variable-name-p name))
+               (not (dynamic-variable-name-p name)))
+      (push (make-binding-finding
+              :kind :shadowed-variable
+              :variable-name name
+              :path path
+              :scope-kind (lexical-scope-kind scope)
+              :outer-path (scope-binding-path outer)
+              :message (fmt "Variable '~A' in ~A shadows outer binding at [~{~A~^, ~}]."
+                            name (lexical-scope-kind scope) (scope-binding-path outer))
+              :recommendation (fmt "Consider renaming local variable '~A' using 'ast_rename' to avoid shadowing." name))
+            findings))
+    (register-scope-binding scope name path :ignored (or ignored (ignored-variable-name-p name)))
     findings))
 
-(defun check-unused-in-scope
-       (scope dialect findings)
+(defun check-unused-in-scope (scope dialect findings)
   (dolist (b (lexical-scope-bindings scope))
-    (when
-        (and (= (scope-binding-usage-count b) 0) (not (scope-binding-ignored-p b)))
-      (let*
-          ((name (scope-binding-name b))
-           (s-kind (scope-binding-scope-kind b))
-           (path (scope-binding-path b))
-           (recomm
-             (if
-                 (member s-kind '(:function :macro :lambda :method :definition))
-               (if (lisp-1-dialect-p dialect)
-                 (fmt "If intentionally unused, prefix with '_' (e.g. '_~A')." name)
-                 (fmt
-                   "If intentionally unused, prefix with '_' or add '(declare (ignore ~A))'."
-                   name))
-               (fmt
-                 "Variable '~A' is unused. Consider removing it with 'ast_remove' or prefixing with '_'."
-                 name))))
-        (push
-          (make-binding-finding :kind
-                                :unused-variable
-                                :variable-name
-                                name
-                                :path
-                                path
-                                :scope-kind
-                                s-kind
-                                :outer-path
-                                nil
-                                :message
-                                (fmt "Variable '~A' defined in ~A is never used." name s-kind)
-                                :recommendation
-                                recomm)
-          findings))))
+    (when (and (= (scope-binding-usage-count b) 0)
+               (not (scope-binding-ignored-p b)))
+      (let* ((name (scope-binding-name b))
+             (s-kind (scope-binding-scope-kind b))
+             (path (scope-binding-path b))
+             (recomm
+               (if (member s-kind '(:function :macro :lambda :method :definition))
+                 (if (lisp-1-dialect-p dialect)
+                   (fmt "If intentionally unused, prefix with '_' (e.g. '_~A')." name)
+                   (fmt "If intentionally unused, prefix with '_' or add '(declare (ignore ~A))'." name))
+                 (fmt "Variable '~A' is unused. Consider removing it with 'ast_remove' or prefixing with '_'." name))))
+        (push (make-binding-finding
+                :kind :unused-variable
+                :variable-name name
+                :path path
+                :scope-kind s-kind
+                :outer-path nil
+                :message (fmt "Variable '~A' defined in ~A is never used." name s-kind)
+                :recommendation recomm)
+              findings))))
   findings)
 
-(defun walk-binding-nodes
-       (nodes scope dialect findings-acc)
+(defun walk-binding-nodes (nodes scope dialect findings-acc)
   "Walk a list of NODES in SCOPE, accumulating binding findings."
   (dolist (item nodes findings-acc)
     (setf findings-acc (walk-binding-tree item scope dialect findings-acc))))
 
-(defun walk-binding-rest-children
-       (children scope dialect findings-acc)
+(defun walk-binding-rest-children (children scope dialect findings-acc)
   "Walk (rest CHILDREN) in SCOPE, accumulating binding findings."
   (walk-binding-nodes (rest children) scope dialect findings-acc))
 
-(defun extract-scheme-define
-       (name-child children)
+(defun extract-scheme-define (name-child children)
   "Extract define components for Scheme-style (define (name . params) body)."
-  (let
-      ((sig-children (get-node-children name-child)))
+  (let ((sig-children (get-node-children name-child)))
     (when sig-children
       (values (leaf-symbol-name (first sig-children))
               (list* :path (get-node-path name-child) :paren (rest sig-children))
@@ -1928,25 +1401,17 @@ Returns (values ignored-names remaining-body-nodes)."
 (defun extract-clojure-defn (children)
   "Extract defn components for Clojure defn/defn-."
   (let ((rem (cddr children)))
-    (when
-        (and rem
-             (or (stringp (third (parse-node (first rem))))
-                 (eq (get-node-tag (first rem)) :curly)))
+    (when (and rem (or (stringp (third (parse-node (first rem))))
+                       (eq (get-node-tag (first rem)) :curly)))
       (setf rem (rest rem)))
-    (if
-        (and rem (eq (get-node-tag (first rem)) :square))
+    (if (and rem (eq (get-node-tag (first rem)) :square))
       (values (first rem) (rest rem))
       (values nil rem))))
 
-(defun extract-defun-components
-       (head-name children dialect)
+(defun extract-defun-components (head-name children dialect)
   "Extract (values fn-name params-node body-nodes) from a defun-like form."
-  (let*
-      ((name-child (second children))
-       (fn-name
-         (if (leaf-any-symbol-p name-child)
-           (leaf-symbol-name name-child)
-           "anonymous")))
+  (let* ((name-child (second children))
+         (fn-name (if (leaf-any-symbol-p name-child) (leaf-symbol-name name-child) "anonymous")))
     (cond
       ((and (equal head-name "define") (compound-node-p name-child))
         (multiple-value-bind (name params body)
@@ -1956,274 +1421,196 @@ Returns (values ignored-names remaining-body-nodes)."
         (multiple-value-bind (params body)
                              (extract-clojure-defn children)
           (values fn-name params body)))
-      (t (values fn-name (third children) (cdddr children))))))
+      (t
+        (values fn-name (third children) (cdddr children))))))
 
-(defun walk-single-fn-method
-       (fn-name params-node body-nodes scope dialect findings-acc)
+(defun walk-single-fn-method (fn-name params-node body-nodes scope dialect findings-acc)
   "Walk a single function or method definition body."
   (multiple-value-bind (ignored rem-body)
                        (get-scope-declarations body-nodes dialect)
-    (let*
-        ((fn-scope
-           (make-lexical-scope :kind
-                               :function
-                               :parent
-                               scope
-                               :dialect
-                               dialect
-                               :enclosing-name
-                               fn-name))
-         (params (extract-param-bindings params-node)))
+    (let* ((fn-scope (make-lexical-scope :kind :function
+                                         :parent scope
+                                         :dialect dialect
+                                         :enclosing-name fn-name))
+           (params (extract-param-bindings params-node)))
       (dolist (p params)
-        (setf findings-acc
-              (check-and-register-binding fn-scope (car p) (cdr p) ignored findings-acc)))
+        (setf findings-acc (check-and-register-binding fn-scope (car p) (cdr p) ignored findings-acc)))
       (setf findings-acc (walk-binding-nodes rem-body fn-scope dialect findings-acc))
       (check-unused-in-scope fn-scope dialect findings-acc))))
 
-(defun walk-multi-arity-fn
-       (fn-name body-nodes scope dialect findings-acc)
+(defun walk-multi-arity-fn (fn-name body-nodes scope dialect findings-acc)
   "Walk multi-arity function bodies (e.g. Clojure or Scheme)."
   (dolist (form body-nodes findings-acc)
     (if (compound-node-p form)
-      (let*
-          ((f-children (get-node-children form))
-           (p-node (first f-children))
-           (b-nodes (rest f-children)))
+      (let* ((f-children (get-node-children form))
+             (p-node (first f-children))
+             (b-nodes (rest f-children)))
         (if (and p-node (compound-node-p p-node))
-          (setf findings-acc
-                (walk-single-fn-method fn-name p-node b-nodes scope dialect findings-acc))
+          (setf findings-acc (walk-single-fn-method fn-name p-node b-nodes scope dialect findings-acc))
           (setf findings-acc (walk-binding-tree form scope dialect findings-acc))))
       (setf findings-acc (walk-binding-tree form scope dialect findings-acc)))))
 
-(defun walk-defun-binding-form
-       (head-name children scope dialect findings-acc)
+(defun walk-defun-binding-form (head-name children scope dialect findings-acc)
   "Walk defun, defmacro, defmethod, defn, or define form."
-  (multiple-value-bind
-      (fn-name params-node body-nodes)
-      (extract-defun-components head-name children dialect)
+  (multiple-value-bind (fn-name params-node body-nodes)
+                       (extract-defun-components head-name children dialect)
     (if params-node
-      (walk-single-fn-method fn-name
-                             params-node
-                             body-nodes
-                             scope
-                             dialect
-                             findings-acc)
+      (walk-single-fn-method fn-name params-node body-nodes scope dialect findings-acc)
       (walk-multi-arity-fn fn-name body-nodes scope dialect findings-acc))))
 
 (defun extract-lambda-params-and-body (children)
   "Extract (values params-node body-nodes) from lambda or fn children."
   (let ((rem (rest children)))
-    (when
-        (and rem (leaf-any-symbol-p (first rem)) (rest rem))
+    (when (and rem (leaf-any-symbol-p (first rem)) (rest rem))
       (setf rem (rest rem)))
-    (when rem (values (first rem) (rest rem)))))
+    (when rem
+      (values (first rem) (rest rem)))))
 
-(defun walk-lambda-body
-       (params-node body-nodes scope dialect findings-acc)
+(defun walk-lambda-body (params-node body-nodes scope dialect findings-acc)
   "Walk the parameter and body nodes of a lambda form."
   (multiple-value-bind (ignored rem-body)
                        (get-scope-declarations body-nodes dialect)
-    (let*
-        ((lam-scope
-           (make-lexical-scope :kind
-                               :lambda
-                               :parent
-                               scope
-                               :dialect
-                               dialect
-                               :enclosing-name
-                               "lambda"))
-         (params (extract-param-bindings params-node)))
+    (let* ((lam-scope (make-lexical-scope :kind :lambda
+                                          :parent scope
+                                          :dialect dialect
+                                          :enclosing-name "lambda"))
+           (params (extract-param-bindings params-node)))
       (dolist (p params)
-        (setf findings-acc
-              (check-and-register-binding lam-scope (car p) (cdr p) ignored findings-acc)))
+        (setf findings-acc (check-and-register-binding lam-scope (car p) (cdr p) ignored findings-acc)))
       (setf findings-acc (walk-binding-nodes rem-body lam-scope dialect findings-acc))
       (check-unused-in-scope lam-scope dialect findings-acc))))
 
-(defun walk-lambda-binding-form
-       (children scope dialect findings-acc)
+(defun walk-lambda-binding-form (children scope dialect findings-acc)
   "Walk lambda or fn form."
   (multiple-value-bind (params-node body-nodes)
                        (extract-lambda-params-and-body children)
-    (if
-        (and params-node (compound-node-p params-node))
+    (if (and params-node (compound-node-p params-node))
       (walk-lambda-body params-node body-nodes scope dialect findings-acc)
       (walk-binding-rest-children children scope dialect findings-acc))))
 
-(defun walk-cl-let-form
-       (children scope dialect findings-acc)
+(defun walk-cl-let-form (children scope dialect findings-acc)
   "Walk parallel Common Lisp LET form."
-  (let*
-      ((bindings-node (second children))
-       (body-nodes (cddr children))
-       (clauses (extract-let-clauses bindings-node dialect)))
+  (let* ((bindings-node (second children))
+         (body-nodes (cddr children))
+         (clauses (extract-let-clauses bindings-node dialect)))
     (dolist (cl clauses)
       (when (getf cl :init)
-        (setf findings-acc
-              (walk-binding-tree (getf cl :init) scope dialect findings-acc))))
+        (setf findings-acc (walk-binding-tree (getf cl :init) scope dialect findings-acc))))
     (multiple-value-bind (ignored rem-body)
                          (get-scope-declarations body-nodes dialect)
-      (let
-          ((let-scope (make-lexical-scope :kind :let :parent scope :dialect dialect)))
+      (let ((let-scope (make-lexical-scope :kind :let :parent scope :dialect dialect)))
         (dolist (cl clauses)
-          (let
-              ((bound (extract-param-bindings (getf cl :pattern))))
+          (let ((bound (extract-param-bindings (getf cl :pattern))))
             (dolist (p bound)
-              (setf findings-acc
-                    (check-and-register-binding let-scope (car p) (cdr p) ignored findings-acc)))))
+              (setf findings-acc (check-and-register-binding let-scope (car p) (cdr p) ignored findings-acc)))))
         (setf findings-acc (walk-binding-nodes rem-body let-scope dialect findings-acc))
         (check-unused-in-scope let-scope dialect findings-acc)))))
 
-(defun walk-sequential-let-form
-       (head-name children scope dialect findings-acc)
+(defun walk-sequential-let-form (head-name children scope dialect findings-acc)
   "Walk LET*, LETREC, or vector-binding LET/LOOP forms."
-  (let*
-      ((bindings-node (second children))
-       (body-nodes (cddr children))
-       (clauses (extract-let-clauses bindings-node dialect))
-       (curr-scope scope)
-       (created-scopes '()))
+  (let* ((bindings-node (second children))
+         (body-nodes (cddr children))
+         (clauses (extract-let-clauses bindings-node dialect))
+         (curr-scope scope)
+         (created-scopes '()))
     (multiple-value-bind (ignored rem-body)
                          (get-scope-declarations body-nodes dialect)
       (dolist (cl clauses)
         (when (getf cl :init)
-          (setf findings-acc
-                (walk-binding-tree (getf cl :init) curr-scope dialect findings-acc)))
-        (let
-            ((step-scope
-               (make-lexical-scope :kind
-                                   (if (equal head-name "loop")
-                                     :loop
-                                     :let*)
-                                   :parent
-                                   curr-scope
-                                   :dialect
-                                   dialect))
-             (bound (extract-param-bindings (getf cl :pattern))))
+          (setf findings-acc (walk-binding-tree (getf cl :init) curr-scope dialect findings-acc)))
+        (let ((step-scope (make-lexical-scope :kind (if (equal head-name "loop") :loop :let*)
+                                              :parent curr-scope
+                                              :dialect dialect))
+              (bound (extract-param-bindings (getf cl :pattern))))
           (dolist (p bound)
-            (setf findings-acc
-                  (check-and-register-binding step-scope (car p) (cdr p) ignored findings-acc)))
+            (setf findings-acc (check-and-register-binding step-scope (car p) (cdr p) ignored findings-acc)))
           (push step-scope created-scopes)
           (setf curr-scope step-scope)))
-      (setf findings-acc
-            (walk-binding-nodes rem-body curr-scope dialect findings-acc))
+      (setf findings-acc (walk-binding-nodes rem-body curr-scope dialect findings-acc))
       (dolist (sc created-scopes findings-acc)
         (setf findings-acc (check-unused-in-scope sc dialect findings-acc))))))
 
-(defun walk-binding-bind-form
-       (kind pattern-child val-child body-children scope dialect findings-acc)
+(defun walk-binding-bind-form (kind pattern-child val-child body-children scope dialect findings-acc)
   "Walk MULTIPLE-VALUE-BIND or DESTRUCTURING-BIND form."
   (setf findings-acc (walk-binding-tree val-child scope dialect findings-acc))
   (multiple-value-bind (ignored rem-body)
                        (get-scope-declarations body-children dialect)
-    (let
-        ((b-scope (make-lexical-scope :kind kind :parent scope :dialect dialect))
-         (bound (extract-param-bindings pattern-child)))
+    (let ((b-scope (make-lexical-scope :kind kind :parent scope :dialect dialect))
+          (bound (extract-param-bindings pattern-child)))
       (dolist (p bound)
-        (setf findings-acc
-              (check-and-register-binding b-scope (car p) (cdr p) ignored findings-acc)))
+        (setf findings-acc (check-and-register-binding b-scope (car p) (cdr p) ignored findings-acc)))
       (setf findings-acc (walk-binding-nodes rem-body b-scope dialect findings-acc))
       (check-unused-in-scope b-scope dialect findings-acc))))
 
-(defun walk-iteration-binding-form
-       (head-name children scope dialect findings-acc)
+(defun walk-iteration-binding-form (head-name children scope dialect findings-acc)
   "Walk DOLIST or DOTIMES form."
-  (let*
-      ((spec-node (second children)) (body-nodes (cddr children)))
+  (let* ((spec-node (second children))
+         (body-nodes (cddr children)))
     (if (and spec-node (compound-node-p spec-node))
-      (let*
-          ((spec-children (get-node-children spec-node))
-           (var-node (first spec-children))
-           (count-or-list (second spec-children))
-           (res-form (third spec-children)))
+      (let* ((spec-children (get-node-children spec-node))
+             (var-node (first spec-children))
+             (count-or-list (second spec-children))
+             (res-form (third spec-children)))
         (when count-or-list
           (setf findings-acc (walk-binding-tree count-or-list scope dialect findings-acc)))
         (multiple-value-bind (ignored rem-body)
                              (get-scope-declarations body-nodes dialect)
-          (let
-              ((loop-scope
-                 (make-lexical-scope :kind
-                                     (if (equal head-name "dolist")
-                                       :dolist
-                                       :dotimes)
-                                     :parent
-                                     scope
-                                     :dialect
-                                     dialect)))
+          (let ((loop-scope (make-lexical-scope :kind (if (equal head-name "dolist") :dolist :dotimes)
+                                                :parent scope
+                                                :dialect dialect)))
             (when (leaf-any-symbol-p var-node)
-              (setf findings-acc
-                    (check-and-register-binding loop-scope
-                                                (leaf-symbol-name var-node)
-                                                (get-node-path var-node)
-                                                ignored
-                                                findings-acc)))
-            (setf findings-acc
-                  (walk-binding-nodes rem-body loop-scope dialect findings-acc))
+              (setf findings-acc (check-and-register-binding loop-scope
+                                                             (leaf-symbol-name var-node)
+                                                             (get-node-path var-node)
+                                                             ignored
+                                                             findings-acc)))
+            (setf findings-acc (walk-binding-nodes rem-body loop-scope dialect findings-acc))
             (when res-form
               (setf findings-acc (walk-binding-tree res-form loop-scope dialect findings-acc)))
             (check-unused-in-scope loop-scope dialect findings-acc))))
       (walk-binding-rest-children children scope dialect findings-acc))))
 
-(defun walk-when-let-form
-       (children scope dialect findings-acc)
+(defun walk-when-let-form (children scope dialect findings-acc)
   "Walk WHEN-LET, IF-LET, WHEN-SOME, or IF-SOME form."
-  (let*
-      ((bindings-node (second children))
-       (body-nodes (cddr children))
-       (clauses (extract-let-clauses bindings-node dialect))
-       (wl-scope (make-lexical-scope :kind :when-let :parent scope :dialect dialect)))
+  (let* ((bindings-node (second children))
+         (body-nodes (cddr children))
+         (clauses (extract-let-clauses bindings-node dialect))
+         (wl-scope (make-lexical-scope :kind :when-let :parent scope :dialect dialect)))
     (dolist (cl clauses)
       (when (getf cl :init)
-        (setf findings-acc
-              (walk-binding-tree (getf cl :init) scope dialect findings-acc)))
-      (let
-          ((bound (extract-param-bindings (getf cl :pattern))))
+        (setf findings-acc (walk-binding-tree (getf cl :init) scope dialect findings-acc)))
+      (let ((bound (extract-param-bindings (getf cl :pattern))))
         (dolist (p bound)
-          (setf findings-acc
-                (check-and-register-binding wl-scope (car p) (cdr p) nil findings-acc)))))
-    (setf findings-acc
-          (walk-binding-nodes body-nodes wl-scope dialect findings-acc))
+          (setf findings-acc (check-and-register-binding wl-scope (car p) (cdr p) nil findings-acc)))))
+    (setf findings-acc (walk-binding-nodes body-nodes wl-scope dialect findings-acc))
     (check-unused-in-scope wl-scope dialect findings-acc)))
 
-(defun walk-flet-labels-def
-       (f-def scope dialect findings-acc)
+(defun walk-flet-labels-def (f-def scope dialect findings-acc)
   "Walk a single function definition inside FLET or LABELS."
   (when (and f-def (compound-node-p f-def))
-    (let*
-        ((f-children (get-node-children f-def))
-         (fn-name-node (first f-children))
-         (fn-name
-           (if (leaf-any-symbol-p fn-name-node)
-             (leaf-symbol-name fn-name-node)
-             "local-fn"))
-         (p-node (second f-children))
-         (b-nodes (cddr f-children)))
+    (let* ((f-children (get-node-children f-def))
+           (fn-name-node (first f-children))
+           (fn-name (if (leaf-any-symbol-p fn-name-node) (leaf-symbol-name fn-name-node) "local-fn"))
+           (p-node (second f-children))
+           (b-nodes (cddr f-children)))
       (when (and p-node (compound-node-p p-node))
         (multiple-value-bind (ignored rem-body)
                              (get-scope-declarations b-nodes dialect)
-          (let*
-              ((loc-scope
-                 (make-lexical-scope :kind
-                                     :function
-                                     :parent
-                                     scope
-                                     :dialect
-                                     dialect
-                                     :enclosing-name
-                                     fn-name))
-               (params (extract-param-bindings p-node)))
+          (let* ((loc-scope (make-lexical-scope :kind :function
+                                                :parent scope
+                                                :dialect dialect
+                                                :enclosing-name fn-name))
+                 (params (extract-param-bindings p-node)))
             (dolist (p params)
-              (setf findings-acc
-                    (check-and-register-binding loc-scope (car p) (cdr p) ignored findings-acc)))
+              (setf findings-acc (check-and-register-binding loc-scope (car p) (cdr p) ignored findings-acc)))
             (setf findings-acc (walk-binding-nodes rem-body loc-scope dialect findings-acc))
             (setf findings-acc (check-unused-in-scope loc-scope dialect findings-acc)))))))
   findings-acc)
 
-(defun walk-flet-labels-form
-       (children scope dialect findings-acc)
+(defun walk-flet-labels-form (children scope dialect findings-acc)
   "Walk FLET or LABELS form."
-  (let*
-      ((fns-node (second children)) (body-nodes (cddr children)))
+  (let* ((fns-node (second children))
+         (body-nodes (cddr children)))
     (when (and fns-node (compound-node-p fns-node))
       (dolist (f-def (get-node-children fns-node))
         (setf findings-acc (walk-flet-labels-def f-def scope dialect findings-acc))))
@@ -2231,57 +1618,38 @@ Returns (values ignored-names remaining-body-nodes)."
 
 (defun binding-ignore-head-p (head-name dialect)
   "Return T if HEAD-NAME represents a non-binding form to ignore."
-  (or
-    (member head-name '("quote" "'" "declare") :test #'string=)
-    (and (not (lisp-1-dialect-p dialect))
-         (member head-name '("function" "#'") :test #'string=))))
+  (or (member head-name '("quote" "'" "declare") :test #'string=)
+      (and (not (lisp-1-dialect-p dialect))
+           (member head-name '("function" "#'") :test #'string=))))
 
-(defun walk-function-definition-form
-       (head-name children scope dialect findings-acc)
+(defun walk-function-definition-form (head-name children scope dialect findings-acc)
   "Walk a function or lambda definition form."
-  (if
-      (member head-name '("lambda" "fn") :test #'string=)
+  (if (member head-name '("lambda" "fn") :test #'string=)
     (walk-lambda-binding-form children scope dialect findings-acc)
     (walk-defun-binding-form head-name children scope dialect findings-acc)))
 
-(defun walk-fallback-binding-form
-       (head-name children scope dialect findings-acc)
+(defun walk-fallback-binding-form (head-name children scope dialect findings-acc)
   "Record Lisp-1 variable usage if applicable, and walk remaining children."
   (let ((head (first children)))
-    (when
-        (and (lisp-1-dialect-p dialect)
-             (leaf-any-symbol-p head)
-             (not (member head-name *lisp-special-operators* :test #'string=)))
+    (when (and (lisp-1-dialect-p dialect)
+               (leaf-any-symbol-p head)
+               (not (member head-name *lisp-special-operators* :test #'string=)))
       (record-variable-usage scope head-name (get-node-path head))))
   (walk-binding-rest-children children scope dialect findings-acc))
 
-(defun sequential-binding-form-p
-       (head-name dialect)
+(defun sequential-binding-form-p (head-name dialect)
   "Return T if HEAD-NAME in DIALECT evaluates bindings sequentially."
-  (or
-    (member head-name '("let*" "letrec") :test #'string=)
-    (and
-      (member head-name '("let" "loop") :test #'string=)
-      (vector-binding-dialect-p dialect))))
+  (or (member head-name '("let*" "letrec") :test #'string=)
+      (and (member head-name '("let" "loop") :test #'string=)
+           (vector-binding-dialect-p dialect))))
 
-(defun walk-bind-form
-       (head-name children scope dialect findings-acc)
+(defun walk-bind-form (head-name children scope dialect findings-acc)
   "Walk multiple-value-bind or destructuring-bind."
-  (let
-      ((kind
-         (if (equal head-name "multiple-value-bind")
-           :multiple-value-bind
-           :destructuring-bind)))
-    (walk-binding-bind-form kind
-                            (second children)
-                            (third children)
-                            (cdddr children)
-                            scope
-                            dialect
-                            findings-acc)))
+  (let ((kind (if (equal head-name "multiple-value-bind") :multiple-value-bind :destructuring-bind)))
+    (walk-binding-bind-form kind (second children) (third children) (cdddr children)
+                            scope dialect findings-acc)))
 
-(defun walk-cond-binding-form
-       (children scope dialect findings-acc)
+(defun walk-cond-binding-form (children scope dialect findings-acc)
   "Walk COND clauses, evaluating both test and body expressions in each clause."
   (if (eq dialect :clojure)
     (walk-binding-rest-children children scope dialect findings-acc)
@@ -2291,16 +1659,13 @@ Returns (values ignored-names remaining-body-nodes)."
           (setf findings-acc (walk-binding-tree expr scope dialect findings-acc)))
         (setf findings-acc (walk-binding-tree clause scope dialect findings-acc))))))
 
-(defun walk-case-binding-form
-       (children scope dialect findings-acc)
+(defun walk-case-binding-form (children scope dialect findings-acc)
   "Walk CASE form: keyform is evaluated, each clause has literals then body expressions."
   (when (second children)
-    (setf findings-acc
-          (walk-binding-tree (second children) scope dialect findings-acc)))
+    (setf findings-acc (walk-binding-tree (second children) scope dialect findings-acc)))
   (dolist (clause (cddr children) findings-acc)
     (when (compound-node-p clause)
-      (dolist
-          (body-form (rest (get-node-children clause)))
+      (dolist (body-form (rest (get-node-children clause)))
         (setf findings-acc (walk-binding-tree body-form scope dialect findings-acc))))))
 
 (defun walk-scope-binding-form
@@ -2338,41 +1703,33 @@ Returns (values ignored-names remaining-body-nodes)."
   "Return symbol name of the first child leaf node if present."
   (when children
     (let ((head (first children)))
-      (when (leaf-any-symbol-p head) (leaf-symbol-name head)))))
+      (when (leaf-any-symbol-p head)
+        (leaf-symbol-name head)))))
 
-(defun walk-binding-tree
-       (node scope dialect findings-acc)
+(defun walk-binding-tree (node scope dialect findings-acc)
   "Recursively walk NODE in SCOPE, updating findings accumulator and resolving variable usages."
   (cond
-    ((null node) findings-acc)
+    ((null node)
+      findings-acc)
     ((eq (get-node-tag node) :leaf)
       (when (leaf-any-symbol-p node)
         (record-variable-usage scope (leaf-symbol-name node) (get-node-path node)))
       findings-acc)
-    ((eq (get-node-tag node) :comment) findings-acc)
+    ((eq (get-node-tag node) :comment)
+      findings-acc)
     ((member (get-node-tag node) '(:paren :square))
       (let ((children (get-node-children node)))
         (if children
-          (walk-compound-binding-form
-            (node-head-leaf-name children)
-            children
-            scope
-            dialect
-            findings-acc)
+          (walk-compound-binding-form (node-head-leaf-name children) children scope dialect findings-acc)
           findings-acc)))
-    (t (walk-binding-nodes (get-node-children node) scope dialect findings-acc))))
+    (t
+      (walk-binding-nodes (get-node-children node) scope dialect findings-acc))))
 
-(defun analyze-bindings
-       (tree &key
-        path
-        (include-unused t)
-        (include-shadowed t)
-        (dialect *current-dialect*))
+(defun analyze-bindings (tree &key path (include-unused t) (include-shadowed t) (dialect *current-dialect*))
   "Analyze variable bindings in TREE (or under PATH) for unused and shadowed variables.
 Returns a list of BINDING-FINDING instances."
-  (let*
-      ((start-node (resolve-tree-scope tree path))
-       (findings (walk-binding-tree start-node nil dialect '())))
+  (let* ((start-node (resolve-tree-scope tree path))
+         (findings (walk-binding-tree start-node nil dialect '())))
     (setf findings (nreverse findings))
     (remove-if-not
       (lambda (f)
@@ -2391,19 +1748,11 @@ Returns a list of BINDING-FINDING instances."
   "Format list of unused variable findings to STREAM."
   (when unused
     (format stream "Unused Variables (~A):~%" (length unused))
-    (loop for
-          f
-          in
-          unused
-          for
-          i
-          from
-          1
+    (loop for f in unused
+          for i from 1
           do
-          (format stream
-                  "  ~A. '~A' in ~A [~{~A~^, ~}]~%"
-                  i
-                  (binding-finding-variable-name f)
+          (format stream "  ~A. '~A' in ~A [~{~A~^, ~}]~%"
+                  i (binding-finding-variable-name f)
                   (binding-finding-scope-kind f)
                   (binding-finding-path f))
           (format-finding-recommendation stream f))
@@ -2413,19 +1762,11 @@ Returns a list of BINDING-FINDING instances."
   "Format list of shadowed variable findings to STREAM."
   (when shadowed
     (format stream "Shadowed Variables (~A):~%" (length shadowed))
-    (loop for
-          f
-          in
-          shadowed
-          for
-          i
-          from
-          1
+    (loop for f in shadowed
+          for i from 1
           do
-          (format stream
-                  "  ~A. '~A' in ~A [~{~A~^, ~}] shadows outer binding at [~{~A~^, ~}]~%"
-                  i
-                  (binding-finding-variable-name f)
+          (format stream "  ~A. '~A' in ~A [~{~A~^, ~}] shadows outer binding at [~{~A~^, ~}]~%"
+                  i (binding-finding-variable-name f)
                   (binding-finding-scope-kind f)
                   (binding-finding-path f)
                   (binding-finding-outer-path f))
@@ -2436,30 +1777,20 @@ Returns a list of BINDING-FINDING instances."
   "Format a list of BINDING-FINDING instances into a human-readable diagnostic report."
   (if (null findings)
     "No unused or shadowed variable bindings detected."
-    (let
-        ((unused
-           (remove-if-not
-             (lambda (f)
-               (eq (binding-finding-kind f) :unused-variable))
-             findings))
-         (shadowed
-           (remove-if-not
-             (lambda (f)
-               (eq (binding-finding-kind f) :shadowed-variable))
-             findings)))
+    (let ((unused (remove-if-not (lambda (f) (eq (binding-finding-kind f) :unused-variable)) findings))
+          (shadowed (remove-if-not (lambda (f) (eq (binding-finding-kind f) :shadowed-variable)) findings)))
       (with-output-to-string (s)
-        (format s
-                "Variable Scope & Binding Report (~A finding~:P):~%~%"
-                (length findings))
+        (format s "Variable Scope & Binding Report (~A finding~:P):~%~%" (length findings))
         (format-unused-bindings s unused)
         (format-shadowed-bindings s shadowed)))))
 
-(defstruct refactoring-suggestion category
-                                  priority
-                                  path
-                                  description
-                                  recommended-tool
-                                  action-plan)
+(defstruct refactoring-suggestion
+  category
+  priority
+  path
+  description
+  recommended-tool
+  action-plan)
 
 (defun priority-rank (p)
   "Return numeric rank for PRIORITY keyword (:high = 3, :medium = 2, :low = 1)."
@@ -2479,264 +1810,169 @@ Returns a list of BINDING-FINDING instances."
 
 (defun parse-category-keyword (val)
   "Parse a category string or keyword into :lint, :complexity, :duplicate, or :binding."
-  (let
-      ((s
-         (if (symbolp val)
-           (symbol-name val)
-           (string val))))
+  (let ((s (if (symbolp val) (symbol-name val) (string val))))
     (intern (string-upcase (string-left-trim ":" s)) :keyword)))
 
-(defun category-active-p
-       (cat-keywords primary-keyword &optional alias)
+(defun category-active-p (cat-keywords primary-keyword &optional alias)
   "Check if PRIMARY-KEYWORD or ALIAS is selected in CAT-KEYWORDS list (or if list is empty)."
   (or (null cat-keywords)
       (member primary-keyword cat-keywords)
       (and alias (member alias cat-keywords))))
 
-(defun collect-lint-suggestions
-       (tree path dialect min-rank)
+(defun collect-lint-suggestions (tree path dialect min-rank)
   "Collect refactoring suggestions generated from the anti-pattern linter."
-  (let
-      ((suggestions '()) (lint-findings (lint-ast tree :path path :dialect dialect)))
+  (let ((suggestions '())
+        (lint-findings (lint-ast tree :path path :dialect dialect)))
     (dolist (f lint-findings)
-      (let*
-          ((rule (lint-finding-rule f))
-           (p
-             (case rule
-               ((:single-clause-cond :if-boolean-redundant) :high)
-               ((:if-progn-to-when :if-nil-to-when
-                                   :if-not-to-unless
-                                   :invert-if-not
-                                   :equal-nil-to-null)
-                 :medium)
-               (t :low)))
-           (tool
-             (case rule
-               (:redundant-progn "ast_remove")
-               (t "ast_modify")))
-           (plan
-             (if (lint-finding-suggested-fix f)
-               (format nil "Apply structural replacement: ~A" (lint-finding-suggested-fix f))
-               "Refactor expression using recommended pattern.")))
+      (let* ((rule (lint-finding-rule f))
+             (p (case rule
+                  ((:single-clause-cond :if-boolean-redundant) :high)
+                  ((:if-progn-to-when :if-nil-to-when :if-not-to-unless :invert-if-not :equal-nil-to-null) :medium)
+                  (t :low)))
+             (tool (case rule
+                     (:redundant-progn "ast_remove")
+                     (t "ast_modify")))
+             (plan (if (lint-finding-suggested-fix f)
+                     (format nil "Apply structural replacement: ~A" (lint-finding-suggested-fix f))
+                     "Refactor expression using recommended pattern.")))
         (when (>= (priority-rank p) min-rank)
-          (push
-            (make-refactoring-suggestion :category
-                                         :lint
-                                         :priority
-                                         p
-                                         :path
-                                         (lint-finding-path f)
-                                         :description
-                                         (lint-finding-message f)
-                                         :recommended-tool
-                                         tool
-                                         :action-plan
-                                         plan)
-            suggestions))))
+          (push (make-refactoring-suggestion
+                  :category :lint
+                  :priority p
+                  :path (lint-finding-path f)
+                  :description (lint-finding-message f)
+                  :recommended-tool tool
+                  :action-plan plan)
+                suggestions))))
     (nreverse suggestions)))
 
 (defun complexity-metric->suggestion (m min-rank)
   "Convert a complexity metric M to a refactoring suggestion if it meets MIN-RANK."
-  (let*
-      ((cc (complexity-metrics-cyclomatic-complexity m))
-       (depth (complexity-metrics-max-nesting-depth m))
-       (p
-         (cond
-           ((or (>= cc 15) (>= depth 8)) :high)
-           ((or (>= cc 10) (>= depth 6)) :medium)
-           (t :low))))
+  (let* ((cc (complexity-metrics-cyclomatic-complexity m))
+         (depth (complexity-metrics-max-nesting-depth m))
+         (p (cond
+              ((or (>= cc 15) (>= depth 8)) :high)
+              ((or (>= cc 10) (>= depth 6)) :medium)
+              (t :low))))
     (when (>= (priority-rank p) min-rank)
-      (let
-          ((tool
-             (if (>= cc 10)
-               "ast_extract_function"
-               "ast_extract_variable"))
-           (plan
-             (format nil
-                     "Decompose ~A ~A: ~{~A~^ ~}"
-                     (complexity-metrics-kind m)
-                     (complexity-metrics-name m)
-                     (complexity-metrics-recommendations m))))
-        (make-refactoring-suggestion :category
-                                     :complexity
-                                     :priority
-                                     p
-                                     :path
-                                     (complexity-metrics-path m)
-                                     :description
-                                     (format nil "Form has cyclomatic complexity ~A and nesting depth ~A." cc depth)
-                                     :recommended-tool
-                                     tool
-                                     :action-plan
-                                     plan)))))
+      (let ((tool (if (>= cc 10) "ast_extract_function" "ast_extract_variable"))
+            (plan (format nil "Decompose ~A ~A: ~{~A~^ ~}"
+                          (complexity-metrics-kind m)
+                          (complexity-metrics-name m)
+                          (complexity-metrics-recommendations m))))
+        (make-refactoring-suggestion
+          :category :complexity
+          :priority p
+          :path (complexity-metrics-path m)
+          :description (format nil "Form has cyclomatic complexity ~A and nesting depth ~A." cc depth)
+          :recommended-tool tool
+          :action-plan plan)))))
 
-(defun collect-complexity-suggestions
-       (tree path dialect min-rank)
+(defun collect-complexity-suggestions (tree path dialect min-rank)
   "Collect refactoring suggestions generated from complexity metrics analysis."
-  (let
-      ((complex-forms
-         (analyze-complexity tree
-                             :path
-                             path
-                             :dialect
-                             dialect
-                             :min-complexity
-                             8
-                             :min-depth
-                             5))
-       (suggestions '()))
+  (let ((complex-forms (analyze-complexity tree :path path :dialect dialect :min-complexity 8 :min-depth 5))
+        (suggestions '()))
     (dolist (m complex-forms (nreverse suggestions))
-      (let
-          ((s (complexity-metric->suggestion m min-rank)))
+      (let ((s (complexity-metric->suggestion m min-rank)))
         (when s (push s suggestions))))))
 
 (defun duplicate-group->suggestion (g min-rank)
   "Convert a duplicate subtree group G to a refactoring suggestion if it meets MIN-RANK."
-  (let*
-      ((savings
-         (* (duplicate-group-node-count g) (1- (duplicate-group-occurrence-count g))))
-       (p
-         (cond
-           ((>= savings 20) :high)
-           ((>= savings 8) :medium)
-           (t :low))))
+  (let* ((savings (* (duplicate-group-node-count g) (1- (duplicate-group-occurrence-count g))))
+         (p (cond
+              ((>= savings 20) :high)
+              ((>= savings 8) :medium)
+              (t :low))))
     (when (>= (priority-rank p) min-rank)
-      (let
-          ((tool
-             (if
-                 (search "ast_extract_variable" (duplicate-group-recommendation g))
-               "ast_extract_variable"
-               "ast_extract_function"))
-           (plan
-             (format nil
-                     "~A (Saves ~A AST nodes across ~A occurrences)"
-                     (duplicate-group-recommendation g)
-                     savings
-                     (duplicate-group-occurrence-count g))))
-        (make-refactoring-suggestion :category
-                                     :duplicate
-                                     :priority
-                                     p
-                                     :path
-                                     (first (duplicate-group-paths g))
-                                     :description
-                                     (format nil
-                                             "Code clone repeated ~A times: ~A"
-                                             (duplicate-group-occurrence-count g)
-                                             (duplicate-group-code-snippet g))
-                                     :recommended-tool
-                                     tool
-                                     :action-plan
-                                     plan)))))
+      (let ((tool (if (search "ast_extract_variable" (duplicate-group-recommendation g))
+                    "ast_extract_variable"
+                    "ast_extract_function"))
+            (plan (format nil "~A (Saves ~A AST nodes across ~A occurrences)"
+                          (duplicate-group-recommendation g)
+                          savings
+                          (duplicate-group-occurrence-count g))))
+        (make-refactoring-suggestion
+          :category :duplicate
+          :priority p
+          :path (first (duplicate-group-paths g))
+          :description (format nil "Code clone repeated ~A times: ~A"
+                               (duplicate-group-occurrence-count g)
+                               (duplicate-group-code-snippet g))
+          :recommended-tool tool
+          :action-plan plan)))))
 
-(defun collect-duplicate-suggestions
-       (tree path min-rank)
+(defun collect-duplicate-suggestions (tree path min-rank)
   "Collect refactoring suggestions generated from AST duplicate subtree detection."
-  (let
-      ((duplicate-groups
-         (find-duplicate-subtrees tree :path path :min-nodes 5 :min-depth 2))
-       (suggestions '()))
-    (dolist
-        (g duplicate-groups (nreverse suggestions))
-      (let
-          ((s (duplicate-group->suggestion g min-rank)))
+  (let ((duplicate-groups (find-duplicate-subtrees tree :path path :min-nodes 5 :min-depth 2))
+        (suggestions '()))
+    (dolist (g duplicate-groups (nreverse suggestions))
+      (let ((s (duplicate-group->suggestion g min-rank)))
         (when s (push s suggestions))))))
 
 (defun binding-finding->suggestion (f min-rank)
   "Convert a binding finding F to a refactoring suggestion if it meets MIN-RANK."
-  (let*
-      ((is-shadowed (eq (binding-finding-kind f) :shadowed-variable))
-       (p
-         (if is-shadowed
-           :high
-           :medium)))
+  (let* ((is-shadowed (eq (binding-finding-kind f) :shadowed-variable))
+         (p (if is-shadowed :high :medium)))
     (when (>= (priority-rank p) min-rank)
-      (let
-          ((tool
-             (if is-shadowed
-               "ast_rename"
-               "ast_remove"))
-           (plan (binding-finding-recommendation f)))
-        (make-refactoring-suggestion :category
-                                     :binding
-                                     :priority
-                                     p
-                                     :path
-                                     (binding-finding-path f)
-                                     :description
-                                     (binding-finding-message f)
-                                     :recommended-tool
-                                     tool
-                                     :action-plan
-                                     plan)))))
+      (let ((tool (if is-shadowed "ast_rename" "ast_remove"))
+            (plan (binding-finding-recommendation f)))
+        (make-refactoring-suggestion
+          :category :binding
+          :priority p
+          :path (binding-finding-path f)
+          :description (binding-finding-message f)
+          :recommended-tool tool
+          :action-plan plan)))))
 
-(defun collect-binding-suggestions
-       (tree path dialect min-rank)
+(defun collect-binding-suggestions (tree path dialect min-rank)
   "Collect refactoring suggestions generated from lexical scope & binding analysis."
-  (let
-      ((binding-findings (analyze-bindings tree :path path :dialect dialect))
-       (suggestions '()))
-    (dolist
-        (f binding-findings (nreverse suggestions))
-      (let
-          ((s (binding-finding->suggestion f min-rank)))
+  (let ((binding-findings (analyze-bindings tree :path path :dialect dialect))
+        (suggestions '()))
+    (dolist (f binding-findings (nreverse suggestions))
+      (let ((s (binding-finding->suggestion f min-rank)))
         (when s (push s suggestions))))))
 
 (defun sort-refactoring-suggestions (suggestions)
   "Sort SUGGESTIONS descending by priority rank, breaking ties alphabetically by category."
   (sort suggestions
         (lambda (a b)
-          (let
-              ((r-a (priority-rank (refactoring-suggestion-priority a)))
-               (r-b (priority-rank (refactoring-suggestion-priority b))))
+          (let ((r-a (priority-rank (refactoring-suggestion-priority a)))
+                (r-b (priority-rank (refactoring-suggestion-priority b))))
             (if (= r-a r-b)
-              (string<
-                (string (refactoring-suggestion-category a))
-                (string (refactoring-suggestion-category b)))
+              (string< (string (refactoring-suggestion-category a))
+                       (string (refactoring-suggestion-category b)))
               (> r-a r-b))))))
 
-(defun suggest-refactorings
-       (tree &key path (min-priority :low) categories (dialect *current-dialect*))
+(defun suggest-refactorings (tree &key path (min-priority :low) categories (dialect *current-dialect*))
   "Aggregate findings from linting, complexity metrics, clone detection, and binding analysis.
 Filters by MIN-PRIORITY (:high, :medium, :low) and CATEGORIES (list of category keywords or strings).
 Returns a list of REFACTORING-SUGGESTION instances sorted by priority."
-  (let*
-      ((min-rank (priority-rank (parse-priority-keyword min-priority)))
-       (cat-keywords (when categories (mapcar #'parse-category-keyword categories)))
-       (suggestions '()))
+  (let* ((min-rank (priority-rank (parse-priority-keyword min-priority)))
+         (cat-keywords (when categories
+                         (mapcar #'parse-category-keyword categories)))
+         (suggestions '()))
     (when (category-active-p cat-keywords :lint)
-      (setf suggestions
-            (nconc (collect-lint-suggestions tree path dialect min-rank) suggestions)))
-    (when
-        (category-active-p cat-keywords :complexity)
-      (setf suggestions
-            (nconc (collect-complexity-suggestions tree path dialect min-rank) suggestions)))
-    (when
-        (category-active-p cat-keywords :duplicate :duplicates)
-      (setf suggestions
-            (nconc (collect-duplicate-suggestions tree path min-rank) suggestions)))
-    (when
-        (category-active-p cat-keywords :binding :bindings)
-      (setf suggestions
-            (nconc (collect-binding-suggestions tree path dialect min-rank) suggestions)))
+      (setf suggestions (nconc (collect-lint-suggestions tree path dialect min-rank) suggestions)))
+    (when (category-active-p cat-keywords :complexity)
+      (setf suggestions (nconc (collect-complexity-suggestions tree path dialect min-rank) suggestions)))
+    (when (category-active-p cat-keywords :duplicate :duplicates)
+      (setf suggestions (nconc (collect-duplicate-suggestions tree path min-rank) suggestions)))
+    (when (category-active-p cat-keywords :binding :bindings)
+      (setf suggestions (nconc (collect-binding-suggestions tree path dialect min-rank) suggestions)))
     (sort-refactoring-suggestions suggestions)))
 
-(defun format-refactoring-suggestions
-       (suggestions)
+(defun format-refactoring-suggestions (suggestions)
   "Format a list of REFACTORING-SUGGESTION instances into an executive refactoring report."
   (if (null suggestions)
     "No refactoring opportunities detected matching criteria."
-    (let*
-        ((total (length suggestions))
-         (high-count (count :high suggestions :key #'refactoring-suggestion-priority))
-         (med-count (count :medium suggestions :key #'refactoring-suggestion-priority))
-         (low-count (count :low suggestions :key #'refactoring-suggestion-priority))
-         (lint-count (count :lint suggestions :key #'refactoring-suggestion-category))
-         (comp-count
-           (count :complexity suggestions :key #'refactoring-suggestion-category))
-         (dup-count
-           (count :duplicate suggestions :key #'refactoring-suggestion-category))
-         (bind-count (count :binding suggestions :key #'refactoring-suggestion-category)))
+    (let* ((total (length suggestions))
+           (high-count (count :high suggestions :key #'refactoring-suggestion-priority))
+           (med-count (count :medium suggestions :key #'refactoring-suggestion-priority))
+           (low-count (count :low suggestions :key #'refactoring-suggestion-priority))
+           (lint-count (count :lint suggestions :key #'refactoring-suggestion-category))
+           (comp-count (count :complexity suggestions :key #'refactoring-suggestion-category))
+           (dup-count (count :duplicate suggestions :key #'refactoring-suggestion-category))
+           (bind-count (count :binding suggestions :key #'refactoring-suggestion-category)))
       (with-output-to-string (s)
         (format s "========================================================~%")
         (format s "    Structural Refactoring Plan (~A Opportunit~:@P)     ~%" total)
@@ -2752,45 +1988,16 @@ Returns a list of REFACTORING-SUGGESTION instances sorted by priority."
         (format s "  - Variable Bindings:     ~A~%~%" bind-count)
         (format s "--------------------------------------------------------~%")
         (format s "Prioritized Action Items:~%~%")
-        (loop for
-              item
-              in
-              suggestions
-              for
-              idx
-              from
-              1
-              for
-              p
-              =
-              (refactoring-suggestion-priority item)
-              for
-              cat
-              =
-              (refactoring-suggestion-category item)
-              for
-              path
-              =
-              (refactoring-suggestion-path item)
-              for
-              desc
-              =
-              (refactoring-suggestion-description item)
-              for
-              tool
-              =
-              (refactoring-suggestion-recommended-tool item)
-              for
-              plan
-              =
-              (refactoring-suggestion-action-plan item)
+        (loop for item in suggestions
+              for idx from 1
+              for p = (refactoring-suggestion-priority item)
+              for cat = (refactoring-suggestion-category item)
+              for path = (refactoring-suggestion-path item)
+              for desc = (refactoring-suggestion-description item)
+              for tool = (refactoring-suggestion-recommended-tool item)
+              for plan = (refactoring-suggestion-action-plan item)
               do
-              (format s
-                      "~A. [~A | ~A] [~{~A~^, ~}]~%   Problem: ~A~%   Tool:    ~A~%   Action:  ~A~%~%"
-                      idx
-                      (string p)
-                      (string cat)
-                      path
-                      desc
-                      tool
-                      plan))))))
+              (format s "~A. [~A | ~A] [~{~A~^, ~}]~%   Problem: ~A~%   Tool:    ~A~%   Action:  ~A~%~%"
+                      idx (string p) (string cat) path desc tool plan))))))
+
+

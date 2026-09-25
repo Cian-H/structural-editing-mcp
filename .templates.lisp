@@ -1,0 +1,7 @@
+("define-mcp-tool" :count 3)
+("with-workspace-context" :count 1)
+("with-workspaces-locked" :count 1)
+("with-lock-held" :count 1)
+("deftest" :count 1)
+("testing" :count 1)
+("ok" :count 0)
