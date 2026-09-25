@@ -32,40 +32,52 @@
                         (ok (equal (gethash "name" info) "structural-editing-mcp")))))))
 
 (deftest test-mcp-tools-list
-         (testing "handle-message parses tools/list and exposes all registered tools"
-                  (let* ((msg (structural-editing-mcp.mcp::dict
-                                "jsonrpc" "2.0"
-                                "id" 2
-                                "method" "tools/list"
-                                "params" (make-hash-table)))
-                         (result-json (call-mcp-msg msg)))
-                    (let* ((res (gethash "result" result-json))
-                           (tools (gethash "tools" res)))
-                      (ok (listp tools))
-                      (ok (= (length tools) 21))
-                      (let ((names (mapcar (lambda (x) (gethash "name" x)) tools)))
-                        (ok (member "read_node" names :test #'equal))
-                        (ok (not (member "read_workspace" names :test #'equal)))
-                        (ok (member "ast_modify" names :test #'equal))
-                        (ok (member "ast_remove" names :test #'equal))
-                        (ok (member "ast_relocate" names :test #'equal))
-                        (ok (member "ast_search" names :test #'equal))
-                        (ok (member "ast_rename" names :test #'equal))
-                        (ok (member "ast_replace_pattern" names :test #'equal))
-                        (ok (member "ast_extract_variable" names :test #'equal))
-                        (ok (member "ast_extract_function" names :test #'equal))
-                        (ok (member "ast_lint" names :test #'equal))
-                        (ok (member "ast_complexity_metrics" names :test #'equal))
-                        (ok (member "ast_find_duplicates" names :test #'equal))
-                        (ok (member "ast_analyze_bindings" names :test #'equal))
-                        (ok (member "ast_suggest_refactorings" names :test #'equal))
-                        (ok (member "workspace_manage" names :test #'equal))
-                        (ok (member "workspace_create_file" names :test #'equal))
-                        (ok (member "workspace_rebase" names :test #'equal))
-                        (ok (member "workspace_status" names :test #'equal))
-                        (ok (member "workspace_diff" names :test #'equal))
-                        (ok (member "workspace_merge" names :test #'equal))
-                        (ok (member "commit_workspace" names :test #'equal)))))))
+         (testing
+           "handle-message parses tools/list and exposes all registered tools"
+           (let*
+               ((msg
+                  (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                    "2.0"
+                                                    "id"
+                                                    2
+                                                    "method"
+                                                    "tools/list"
+                                                    "params"
+                                                    (make-hash-table)))
+                (result-json (call-mcp-msg msg)))
+             (let*
+                 ((res (gethash "result" result-json)) (tools (gethash "tools" res)))
+               (ok (listp tools))
+               (ok (= (length tools) 22))
+               (let
+                   ((names
+                      (mapcar
+                        (lambda (x)
+                          (gethash "name" x))
+                        tools)))
+                 (ok (member "read_node" names :test #'equal))
+                 (ok (member "read_slice" names :test #'equal))
+                 (ok (not (member "read_workspace" names :test #'equal)))
+                 (ok (member "ast_modify" names :test #'equal))
+                 (ok (member "ast_remove" names :test #'equal))
+                 (ok (member "ast_relocate" names :test #'equal))
+                 (ok (member "ast_search" names :test #'equal))
+                 (ok (member "ast_rename" names :test #'equal))
+                 (ok (member "ast_replace_pattern" names :test #'equal))
+                 (ok (member "ast_extract_variable" names :test #'equal))
+                 (ok (member "ast_extract_function" names :test #'equal))
+                 (ok (member "ast_lint" names :test #'equal))
+                 (ok (member "ast_complexity_metrics" names :test #'equal))
+                 (ok (member "ast_find_duplicates" names :test #'equal))
+                 (ok (member "ast_analyze_bindings" names :test #'equal))
+                 (ok (member "ast_suggest_refactorings" names :test #'equal))
+                 (ok (member "workspace_manage" names :test #'equal))
+                 (ok (member "workspace_create_file" names :test #'equal))
+                 (ok (member "workspace_rebase" names :test #'equal))
+                 (ok (member "workspace_status" names :test #'equal))
+                 (ok (member "workspace_diff" names :test #'equal))
+                 (ok (member "workspace_merge" names :test #'equal))
+                 (ok (member "commit_workspace" names :test #'equal)))))))
 
 (deftest test-mcp-ast-operations
          (testing "unified read_node, ast_modify, ast_remove, ast_relocate in memory"
@@ -791,3 +803,175 @@
 
                   (structural-editing-mcp.workspace:delete-workspace "mcp-cf-branch")
                   (structural-editing-mcp.workspace:delete-workspace "mcp-cf-base")))
+(deftest test-mcp-wide-tree-skeleton-and-slice
+         (testing
+           "skeleton mode and read_slice for wide trees"
+           (structural-editing-mcp.workspace:create-workspace "mcp-wide-test")
+           (let*
+               ((wide-code "(progn (defun f1 () 1) (defun f2 () 2) (defun f3 () 3))")
+                (create-msg
+                  (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                    "2.0"
+                                                    "id"
+                                                    9001
+                                                    "method"
+                                                    "tools/call"
+                                                    "params"
+                                                    (structural-editing-mcp.mcp::dict "name"
+                                                                                      "workspace_create_file"
+                                                                                      "arguments"
+                                                                                      (structural-editing-mcp.mcp::dict "workspace_id"
+                                                                                                                        "mcp-wide-test"
+                                                                                                                        "file_path"
+                                                                                                                        "/wide-test.lisp"
+                                                                                                                        "content"
+                                                                                                                        wide-code))))
+                (create-res (call-mcp-msg create-msg)))
+             (ok (null (gethash "isError" (gethash "result" create-res)))))
+           (let*
+               ((skel-msg
+                  (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                    "2.0"
+                                                    "id"
+                                                    9002
+                                                    "method"
+                                                    "tools/call"
+                                                    "params"
+                                                    (structural-editing-mcp.mcp::dict "name"
+                                                                                      "read_node"
+                                                                                      "arguments"
+                                                                                      (structural-editing-mcp.mcp::dict "workspace_id"
+                                                                                                                        "mcp-wide-test"
+                                                                                                                        "path"
+                                                                                                                        (list 0 0)
+                                                                                                                        "mode"
+                                                                                                                        "skeleton"
+                                                                                                                        "limit"
+                                                                                                                        10))))
+                (skel-res (call-mcp-msg skel-msg))
+                (skel-text
+                  (gethash "text" (first (gethash "content" (gethash "result" skel-res))))))
+             (ok (null (gethash "isError" (gethash "result" skel-res))))
+             (ok (search "Mode: SKELETON" skel-text))
+             (ok (search "Metrics:" skel-text))
+             (ok (search "Direct Child Forms:" skel-text)))
+           (let*
+               ((slice-msg
+                  (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                    "2.0"
+                                                    "id"
+                                                    9003
+                                                    "method"
+                                                    "tools/call"
+                                                    "params"
+                                                    (structural-editing-mcp.mcp::dict "name"
+                                                                                      "read_slice"
+                                                                                      "arguments"
+                                                                                      (structural-editing-mcp.mcp::dict "workspace_id"
+                                                                                                                        "mcp-wide-test"
+                                                                                                                        "path"
+                                                                                                                        (list 0 0 0 1)))))
+                (slice-res (call-mcp-msg slice-msg))
+                (slice-text
+                  (gethash "text" (first (gethash "content" (gethash "result" slice-res))))))
+             (ok (null (gethash "isError" (gethash "result" slice-res))))
+             (ok (search "Ancestral Spine" slice-text))
+             (ok (search "Target Node" slice-text))
+             (ok (search "lateral siblings omitted" slice-text)))
+           (let*
+               ((wide-file-code
+                  (format nil
+                          "(progn ~{(item-~D)~%~})"
+                          (loop for
+                                i
+                                from
+                                1
+                                to
+                                60
+                                collect
+                                i)))
+                (add-msg
+                  (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                    "2.0"
+                                                    "id"
+                                                    9004
+                                                    "method"
+                                                    "tools/call"
+                                                    "params"
+                                                    (structural-editing-mcp.mcp::dict "name"
+                                                                                      "workspace_create_file"
+                                                                                      "arguments"
+                                                                                      (structural-editing-mcp.mcp::dict "workspace_id"
+                                                                                                                        "mcp-wide-test"
+                                                                                                                        "file_path"
+                                                                                                                        "/wide-parent.lisp"
+                                                                                                                        "content"
+                                                                                                                        wide-file-code))))
+                (add-res (call-mcp-msg add-msg)))
+             (ok (null (gethash "isError" (gethash "result" add-res)))))
+           (let*
+               ((read-before-msg
+                  (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                    "2.0"
+                                                    "id"
+                                                    9005
+                                                    "method"
+                                                    "tools/call"
+                                                    "params"
+                                                    (structural-editing-mcp.mcp::dict "name"
+                                                                                      "read_node"
+                                                                                      "arguments"
+                                                                                      (structural-editing-mcp.mcp::dict "workspace_id"
+                                                                                                                        "mcp-wide-test"
+                                                                                                                        "path"
+                                                                                                                        (list 0 1)))))
+                (read-before-res (call-mcp-msg read-before-msg)))
+             (ok (null (gethash "isError" (gethash "result" read-before-res)))))
+           (let*
+               ((safeguard-msg
+                  (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                    "2.0"
+                                                    "id"
+                                                    9005
+                                                    "method"
+                                                    "tools/call"
+                                                    "params"
+                                                    (structural-editing-mcp.mcp::dict "name"
+                                                                                      "ast_modify"
+                                                                                      "arguments"
+                                                                                      (structural-editing-mcp.mcp::dict "workspace_id"
+                                                                                                                        "mcp-wide-test"
+                                                                                                                        "path"
+                                                                                                                        (list 0 1 0)
+                                                                                                                        "action"
+                                                                                                                        "overwrite"
+                                                                                                                        "new_node"
+                                                                                                                        "42"))))
+                (safeguard-res (call-mcp-msg safeguard-msg))
+                (res-body (gethash "result" safeguard-res)))
+             (ok (gethash "isError" res-body)))
+           (let*
+               ((force-msg
+                  (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                    "2.0"
+                                                    "id"
+                                                    9006
+                                                    "method"
+                                                    "tools/call"
+                                                    "params"
+                                                    (structural-editing-mcp.mcp::dict "name"
+                                                                                      "ast_modify"
+                                                                                      "arguments"
+                                                                                      (structural-editing-mcp.mcp::dict "workspace_id"
+                                                                                                                        "mcp-wide-test"
+                                                                                                                        "path"
+                                                                                                                        (list 0 1 0)
+                                                                                                                        "action"
+                                                                                                                        "overwrite"
+                                                                                                                        "new_node"
+                                                                                                                        "42"
+                                                                                                                        "force"
+                                                                                                                        t))))
+                (force-res (call-mcp-msg force-msg)))
+             (ok (null (gethash "isError" (gethash "result" force-res)))))
+           (structural-editing-mcp.workspace:delete-workspace "mcp-wide-test")))

@@ -123,12 +123,12 @@ Defined in [`src/mcp.lisp`](file:///home/cianh/Projects/structural-editing-mcp/s
 
 - **Transport**: JSON-RPC 2.0 over standard I/O (stdio).
 - **Initialization Handshake**: Responds to `initialize` and `notifications/initialized`.
-- **Tools Discovery**: Responds to `tools/list` with JSON schema metadata for all 19 structural editing, refactoring, analysis, and multi-workspace lifecycle/merging tools:
-  - **Inspection**: `read_node`
+- **Tools Discovery**: Responds to `tools/list` with JSON schema metadata for all 22 structural editing, refactoring, analysis, and multi-workspace lifecycle/merging tools:
+  - **Inspection**: `read_node` (supports `mode: "skeleton"`), `read_slice` (vertical spine rays)
   - **Structural Surgery**: `ast_modify`, `ast_remove`, `ast_relocate`
   - **Search & Pattern Replacement**: `ast_search`, `ast_rename`, `ast_replace_pattern`
   - **Refactoring & Extraction**: `ast_extract_variable`, `ast_extract_function`, `ast_suggest_refactorings`
   - **Static Analysis**: `ast_lint`, `ast_complexity_metrics`, `ast_find_duplicates`, `ast_analyze_bindings`
-  - **Workspace & Multi-Agent Collaboration**: `commit_workspace`, `workspace_manage`, `workspace_status`, `workspace_diff`, `workspace_merge`
+  - **Workspace & Multi-Agent Collaboration**: `commit_workspace`, `workspace_create_file`, `workspace_manage`, `workspace_rebase`, `workspace_status`, `workspace_diff`, `workspace_merge`
 - **Tool Execution**: Dispatches `tools/call` requests to corresponding Lisp handlers, routing transparently to target workspaces via optional `workspace_id`.
 - **Preview Mechanism**: Mutation tools generate an immediate structural code snippet preview of the modified node and its parent, allowing AI agents to visually verify AST modifications before committing.

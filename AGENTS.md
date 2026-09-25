@@ -136,7 +136,7 @@ When modifying or extending this codebase, adhere strictly to these rules:
 ### 7. Dogfooding: Prefer Structural Editing MCP for Lisp Code
 - When the `structural-editing` MCP tools (or server) are available in your agent environment, you **MUST prioritize using them** over standard text-editing tools (`replace_file_content`, text diffs, ad-hoc file writes) for reading, modifying, refactoring, and persisting all Lisp code (`.lisp`, `.cl`, `.asd`).
 - **Primary Toolchain**:
-  - Inspection: `read_node` (with `load_files: [...]`), `ast_search`
+  - Inspection: `read_node` (with `load_files: [...]`), `read_slice`, `ast_search`
   - Mutation: `ast_modify`, `ast_remove`, `ast_relocate`
   - Refactoring: `ast_rename`, `ast_replace_pattern`, `ast_extract_variable`, `ast_extract_function`
   - Persistence: `commit_workspace`
@@ -170,12 +170,14 @@ When modifying or extending this codebase, adhere strictly to these rules:
 > [!IMPORTANT]
 > **Dogfooding Mandatory**: If the `structural-editing` MCP tools are available in your agent session, you **MUST** use them for all Lisp file inspections, edits, and refactorings in this project. Do not use text-based replacement or diff tools on Lisp files unless the MCP server is unavailable or the target is a non-Lisp file (Markdown, Nix, JSON, shell scripts).
 
-The MCP server provides 19 tools organized into distinct operational tiers. Follow these patterns to edit code reliably without parenthetical corruption or parallel agent collisions:
+The MCP server provides 22 tools organized into distinct operational tiers. Follow these patterns to edit code reliably without parenthetical corruption or parallel agent collisions:
 
 ### 1. The Standard Structural Editing Loop
 Whenever you are asked to read, modify, or refactor code:
 1. **Load & Inspect**:
    - Call `read_node` with `load_files: ["/path/to/project"]` on your first interaction to load target files into the workspace.
+   - **Prefer Skeleton Mode on First Read**: When inspecting unfamiliar or large files/nodes, pass `mode: "skeleton"` on your initial `read_node` call. This gives you a fast structural metadata stub and child signatures manifest without risk of context window explosion on wide or shallow trees.
+   - **Vertical Ray Paths (`read_slice`)**: To inspect deeply nested expressions in wide trees, use `read_slice` instead of wide `read_node` to isolate the ancestral spine without lateral sibling context blowout.
    - Inspect parent forms at depth 2 (e.g. `path: [0, 0, 5]`) to view the entire expression and its child paths simultaneously. Do NOT probe child indices one-by-one.
    - For large directories or files, use `limit` and `offset` in `read_node` to paginate cleanly without blowing up the context window.
    - Use `ast_search` to find symbols, functions, or text across the entire workspace quickly.
@@ -188,6 +190,7 @@ Whenever you are asked to read, modify, or refactor code:
    - `ast_modify`: Use `action: "overwrite"` to replace an entire sub-expression, `action: "insert"` to add forms into bodies or parameter lists, or `action: "wrap"` to enclose an expression in parens or a macro form (e.g. `(when condition)`).
    - `ast_remove`: Use `action: "delete"` to eliminate an unused node, `action: "unwrap"` to peel away an outer wrapper (e.g. removing `progn`), or `action: "promote"` to replace a parent with its child.
    - `ast_relocate`: Use `action: "move"` or `action: "copy"` to reorder top-level definitions or arguments, `action: "swap"` to interchange two expressions, or `action: "merge"` / `action: "split"` for collections.
+   - *Positional Precision*: Always target the exact coordinate path of the child node you wish to modify. Overwriting wide parent nodes directly is guarded to prevent accidental deletion of unrendered siblings.
    - *Instant Preview*: Every mutation tool automatically returns the rendered code snippet of the enclosing parent node. **Do not issue redundant `read_node` calls to verify mutations.**
 4. **Semantic Refactoring & Search**:
    - `ast_rename`: Renames identifiers across the workspace or a subtree while safely ignoring string literals and comments.
@@ -211,7 +214,8 @@ Whenever you are asked to read, modify, or refactor code:
 
 | Tool | Primary Purpose | When to Use |
 | :--- | :--- | :--- |
-| `read_node` | AST & Workspace Inspection | First step to view code and obtain 0-indexed integer paths (supports `limit`/`offset` pagination). |
+| `read_node` | AST & Workspace Inspection | First step to view code and obtain 0-indexed integer paths (supports `limit`/`offset` pagination and `skeleton` mode for wide nodes). |
+| `read_slice` | Vertical Ray/Spine Inspection | Casts a vertical ray down to a specific target path, eliding all lateral siblings to prevent context blowout in wide trees. |
 | `workspace_create_file` | In-memory file creation | Create a new file in memory without touching disk immediately. |
 | `ast_modify` | Insert, overwrite, wrap nodes | Core AST surgery without risking unmatched parentheses. |
 | `ast_remove` | Delete, unwrap, promote nodes | Eliminating dead code, stripping wrappers, promoting children. |
