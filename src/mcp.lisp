@@ -1340,21 +1340,21 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                         :default
                         "auto")
                   (load_files :type :load-files))
-                 (bt:with-lock-held
-                   (structural-editing-mcp.workspace:*workspace-lock*)
-                   (let ((files-to-load (to-list load_files)))
-                     (when files-to-load
-                       (structural-editing-mcp.workspace:load-into-workspace files-to-load)))
-                   (unless
-                       structural-editing-mcp.workspace:*workspace-tree*
-                     (structural-editing-mcp.workspace:init-workspace))
-                   (structural-editing-mcp.workspace:record-agent-read agent-id)
-                   (let
-                       ((node
-                          (structural-editing-mcp.tree:resolve-tree-scope
-                            structural-editing-mcp.workspace:*workspace-tree*
-                            path)))
-                     (format-node-preview node :depth depth :limit limit :offset offset :mode mode))))
+  (bt:with-lock-held
+    (structural-editing-mcp.workspace:*workspace-lock*)
+    (let ((files-to-load (to-list load_files)))
+      (when files-to-load
+        (structural-editing-mcp.workspace:load-into-workspace files-to-load)))
+    (unless
+        structural-editing-mcp.workspace:*workspace-tree*
+      (structural-editing-mcp.workspace:init-workspace))
+    (structural-editing-mcp.workspace:record-agent-read agent-id)
+    (let
+        ((node
+           (structural-editing-mcp.tree:resolve-tree-scope
+             structural-editing-mcp.workspace:*workspace-tree*
+             path)))
+      (format-node-preview node :depth depth :limit limit :offset offset :mode mode))))
 
 (define-mcp-tool "read_slice"
                  (:description
@@ -1394,16 +1394,16 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                         :default
                         "full")
                   (load_files :type :load-files))
-                 (bt:with-lock-held
-                   (structural-editing-mcp.workspace:*workspace-lock*)
-                   (let ((files-to-load (to-list load_files)))
-                     (when files-to-load
-                       (structural-editing-mcp.workspace:load-into-workspace files-to-load)))
-                   (unless
-                       structural-editing-mcp.workspace:*workspace-tree*
-                     (structural-editing-mcp.workspace:init-workspace))
-                   (structural-editing-mcp.workspace:record-agent-read agent-id)
-                   (format-node-slice structural-editing-mcp.workspace:*workspace-tree* path args)))
+  (bt:with-lock-held
+    (structural-editing-mcp.workspace:*workspace-lock*)
+    (let ((files-to-load (to-list load_files)))
+      (when files-to-load
+        (structural-editing-mcp.workspace:load-into-workspace files-to-load)))
+    (unless
+        structural-editing-mcp.workspace:*workspace-tree*
+      (structural-editing-mcp.workspace:init-workspace))
+    (structural-editing-mcp.workspace:record-agent-read agent-id)
+    (format-node-slice structural-editing-mcp.workspace:*workspace-tree* path args)))
 
 (define-mcp-tool "ast_modify"
                  (:description
@@ -1442,30 +1442,30 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                          :boolean
                          :doc
                          "Optional safeguard bypass: set to true to force overwriting a node that has more than 50 children."))
-                 (let
-                     ((tree structural-editing-mcp.workspace:*workspace-tree*))
-                   (when (equal action "overwrite")
-                     (let*
-                         ((target-node (structural-editing-mcp.tree:get-node-at-path tree path))
-                          (child-count
-                            (length (structural-editing-mcp.tree:get-node-children target-node))))
-                       (when (and (> child-count 50) (not force))
-                         (error
-                           "Safeguard: Node at path ~A has ~D children. Overwriting a large parent node directly will delete all its children. To modify an element inside, target the specific child path instead (e.g. append child index to path). If you genuinely intend to overwrite the entire collection, pass 'force': true."
-                           path
-                           child-count))))
-                   (setf
-                     structural-editing-mcp.workspace:*workspace-tree*
-                     (match action
-                            ("insert" (perform-insert tree path new_node index))
-                            ("overwrite"
-                             (structural-editing-mcp.edit:overwrite-expression tree path new_node))
-                            ("wrap" (perform-wrap tree path new_node end_index index))
-                            (_ (error "Unknown action: ~A" action))))
-                   (format-mutation-result
-                     (fmt "Successfully executed ~A at ~A" action path)
-                     path
-                     structural-editing-mcp.workspace:*workspace-tree*)))
+  (let
+      ((tree structural-editing-mcp.workspace:*workspace-tree*))
+    (when (equal action "overwrite")
+      (let*
+          ((target-node (structural-editing-mcp.tree:get-node-at-path tree path))
+           (child-count
+             (length (structural-editing-mcp.tree:get-node-children target-node))))
+        (when (and (> child-count 50) (not force))
+          (error
+            "Safeguard: Node at path ~A has ~D children. Overwriting a large parent node directly will delete all its children. To modify an element inside, target the specific child path instead (e.g. append child index to path). If you genuinely intend to overwrite the entire collection, pass 'force': true."
+            path
+            child-count))))
+    (setf
+      structural-editing-mcp.workspace:*workspace-tree*
+      (match action
+             ("insert" (perform-insert tree path new_node index))
+             ("overwrite"
+              (structural-editing-mcp.edit:overwrite-expression tree path new_node))
+             ("wrap" (perform-wrap tree path new_node end_index index))
+             (_ (error "Unknown action: ~A" action))))
+    (format-mutation-result
+      (fmt "Successfully executed ~A at ~A" action path)
+      path
+      structural-editing-mcp.workspace:*workspace-tree*)))
 
 (define-mcp-tool "ast_remove"
                  (:description
@@ -1490,19 +1490,19 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                             :string
                             :doc
                             "Optional replacement node string (for action 'replace' or fallback)."))
-                 (let
-                     ((tree structural-editing-mcp.workspace:*workspace-tree*))
-                   (setf
-                     structural-editing-mcp.workspace:*workspace-tree*
-                     (match action
-                            ("delete" (structural-editing-mcp.edit:delete-node tree path))
-                            ("unwrap" (structural-editing-mcp.edit:unwrap-node tree path))
-                            ("promote" (structural-editing-mcp.edit:promote-node tree path))
-                            (_ (error "Unknown action: ~A" action))))
-                   (format-mutation-result
-                     (fmt "Successfully executed ~A at ~A" action path)
-                     path
-                     structural-editing-mcp.workspace:*workspace-tree*)))
+  (let
+      ((tree structural-editing-mcp.workspace:*workspace-tree*))
+    (setf
+      structural-editing-mcp.workspace:*workspace-tree*
+      (match action
+             ("delete" (structural-editing-mcp.edit:delete-node tree path))
+             ("unwrap" (structural-editing-mcp.edit:unwrap-node tree path))
+             ("promote" (structural-editing-mcp.edit:promote-node tree path))
+             (_ (error "Unknown action: ~A" action))))
+    (format-mutation-result
+      (fmt "Successfully executed ~A at ~A" action path)
+      path
+      structural-editing-mcp.workspace:*workspace-tree*)))
 
 (define-mcp-tool "ast_relocate"
                  (:description
@@ -1532,21 +1532,21 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                                :doc
                                "For action 'split': the 0-indexed child position at which to split the collection.")
                   (separator :type :string :doc "Optional separator string for merge."))
-                 (let*
-                     ((src (or (to-list source_path) path))
-                      (tgt (to-list target_path))
-                      (idx (or target_index index)))
-                   (setf
-                     structural-editing-mcp.workspace:*workspace-tree*
-                     (perform-relocate-action action
-                                              src
-                                              tgt
-                                              idx
-                                              structural-editing-mcp.workspace:*workspace-tree*))
-                   (format-mutation-result
-                     (fmt "Successfully executed ~A from ~A to ~A" action src tgt)
-                     tgt
-                     structural-editing-mcp.workspace:*workspace-tree*)))
+  (let*
+      ((src (or (to-list source_path) path))
+       (tgt (to-list target_path))
+       (idx (or target_index index)))
+    (setf
+      structural-editing-mcp.workspace:*workspace-tree*
+      (perform-relocate-action action
+                               src
+                               tgt
+                               idx
+                               structural-editing-mcp.workspace:*workspace-tree*))
+    (format-mutation-result
+      (fmt "Successfully executed ~A from ~A to ~A" action src tgt)
+      tgt
+      structural-editing-mcp.workspace:*workspace-tree*)))
 
 (define-mcp-tool "ast_search"
                  (:description
@@ -1563,12 +1563,12 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                         :path
                         :doc
                         "Optional AST path to constrain the search scope. If omitted, searches the entire workspace."))
-                 (let
-                     ((results
-                        (perform-search structural-editing-mcp.workspace:*workspace-tree* path query)))
-                   (if results
-                     (fmt "Found ~A matches. Paths:~%~{~A~^~%~}" (length results) results)
-                     (fmt "No matches found for '~A' at path ~A" query path))))
+  (let
+      ((results
+         (perform-search structural-editing-mcp.workspace:*workspace-tree* path query)))
+    (if results
+      (fmt "Found ~A matches. Paths:~%~{~A~^~%~}" (length results) results)
+      (fmt "No matches found for '~A' at path ~A" query path))))
 
 (define-mcp-tool "ast_rename"
                  (:description
@@ -1591,14 +1591,14 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                         :path
                         :doc
                         "Optional AST path to constrain the bulk rename to a specific subtree. If omitted, renames globally across the workspace."))
-                 (setf
-                   structural-editing-mcp.workspace:*workspace-tree*
-                   (perform-rename
-                     structural-editing-mcp.workspace:*workspace-tree*
-                     path
-                     old_name
-                     new_name))
-                 (fmt "Successfully renamed all occurrences of '~A' to '~A'." old_name new_name))
+  (setf
+    structural-editing-mcp.workspace:*workspace-tree*
+    (perform-rename
+      structural-editing-mcp.workspace:*workspace-tree*
+      path
+      old_name
+      new_name))
+  (fmt "Successfully renamed all occurrences of '~A' to '~A'." old_name new_name))
 
 (define-mcp-tool "ast_replace_pattern"
                  (:description
@@ -1617,13 +1617,13 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                                "The replacement template (e.g. '(make-api-call ?url ?method :headers ?headers :body ?body)')."
                                :required
                                t))
-                 (setf
-                   structural-editing-mcp.workspace:*workspace-tree*
-                   (structural-editing-mcp.refactor:replace-pattern
-                     structural-editing-mcp.workspace:*workspace-tree*
-                     pattern
-                     replacement))
-                 (fmt "Successfully executed pattern replacement across workspace."))
+  (setf
+    structural-editing-mcp.workspace:*workspace-tree*
+    (structural-editing-mcp.refactor:replace-pattern
+      structural-editing-mcp.workspace:*workspace-tree*
+      pattern
+      replacement))
+  (fmt "Successfully executed pattern replacement across workspace."))
 
 (define-mcp-tool "ast_extract_variable"
                  (:description
@@ -1637,17 +1637,17 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                                  "The name of the new variable to bind it to."
                                  :required
                                  t))
-                 (let
-                     ((eff-dialect (or dialect structural-editing-mcp.parser:*current-dialect*)))
-                   (setf
-                     structural-editing-mcp.workspace:*workspace-tree*
-                     (structural-editing-mcp.refactor:extract-variable
-                       structural-editing-mcp.workspace:*workspace-tree*
-                       path
-                       variable_name
-                       :dialect
-                       eff-dialect))
-                   (fmt "Successfully extracted node at ~A into variable '~A'." path variable_name)))
+  (let
+      ((eff-dialect (or dialect structural-editing-mcp.parser:*current-dialect*)))
+    (setf
+      structural-editing-mcp.workspace:*workspace-tree*
+      (structural-editing-mcp.refactor:extract-variable
+        structural-editing-mcp.workspace:*workspace-tree*
+        path
+        variable_name
+        :dialect
+        eff-dialect))
+    (fmt "Successfully extracted node at ~A into variable '~A'." path variable_name)))
 
 (define-mcp-tool "ast_extract_function"
                  (:description
@@ -1665,19 +1665,19 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                           :string-array
                           :doc
                           "Optional list of parameter names for the new function."))
-                 (let
-                     ((eff-dialect (or dialect structural-editing-mcp.parser:*current-dialect*)))
-                   (setf
-                     structural-editing-mcp.workspace:*workspace-tree*
-                     (structural-editing-mcp.refactor:extract-function
-                       structural-editing-mcp.workspace:*workspace-tree*
-                       path
-                       function_name
-                       :params
-                       (to-list params)
-                       :dialect
-                       eff-dialect))
-                   (fmt "Successfully extracted node at ~A into function '~A'." path function_name)))
+  (let
+      ((eff-dialect (or dialect structural-editing-mcp.parser:*current-dialect*)))
+    (setf
+      structural-editing-mcp.workspace:*workspace-tree*
+      (structural-editing-mcp.refactor:extract-function
+        structural-editing-mcp.workspace:*workspace-tree*
+        path
+        function_name
+        :params
+        (to-list params)
+        :dialect
+        eff-dialect))
+    (fmt "Successfully extracted node at ~A into function '~A'." path function_name)))
 
 (define-mcp-tool "ast_lint"
                  (:description
@@ -1693,11 +1693,11 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                          :string-array
                          :doc
                          "Optional list of rule names to run (e.g. ['if-progn-to-when', 'redundant-progn']). If omitted, runs all rules."))
-                 (run-tool-lint
-                   structural-editing-mcp.workspace:*workspace-tree*
-                   path
-                   dialect
-                   args))
+  (run-tool-lint
+    structural-editing-mcp.workspace:*workspace-tree*
+    path
+    dialect
+    args))
 
 (define-mcp-tool "ast_complexity_metrics"
                  (:description
@@ -1721,11 +1721,11 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                              "Minimum parenthetical nesting depth threshold to include in report (default: 1)."
                              :default
                              1))
-                 (run-tool-complexity
-                   structural-editing-mcp.workspace:*workspace-tree*
-                   path
-                   dialect
-                   args))
+  (run-tool-complexity
+    structural-editing-mcp.workspace:*workspace-tree*
+    path
+    dialect
+    args))
 
 (define-mcp-tool "ast_find_duplicates"
                  (:description
@@ -1748,10 +1748,10 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                                    "Minimum number of occurrences to report (default: 2)."
                                    :default
                                    2))
-                 (run-tool-duplicates
-                   structural-editing-mcp.workspace:*workspace-tree*
-                   path
-                   args))
+  (run-tool-duplicates
+    structural-editing-mcp.workspace:*workspace-tree*
+    path
+    args))
 
 (define-mcp-tool "ast_analyze_bindings"
                  (:description
@@ -1763,11 +1763,11 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                         :doc
                         "Optional AST path to analyze. If omitted, analyzes all files in the workspace.")
                   (dialect :type :dialect))
-                 (run-tool-bindings
-                   structural-editing-mcp.workspace:*workspace-tree*
-                   path
-                   dialect
-                   args))
+  (run-tool-bindings
+    structural-editing-mcp.workspace:*workspace-tree*
+    path
+    dialect
+    args))
 
 (define-mcp-tool "ast_suggest_refactorings"
                  (:description
@@ -1787,11 +1787,11 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                                 ("critical" "warning" "suggestion" "style")
                                 :default
                                 "style"))
-                 (run-tool-suggestions
-                   structural-editing-mcp.workspace:*workspace-tree*
-                   path
-                   dialect
-                   args))
+  (run-tool-suggestions
+    structural-editing-mcp.workspace:*workspace-tree*
+    path
+    dialect
+    args))
 
 (define-mcp-tool "workspace_create_file"
                  (:description
@@ -1811,23 +1811,23 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                            :default
                            "")
                   (dialect :type :dialect))
-                 (let*
-                     ((target-ws (or workspace_id "default"))
-                      (file-path (or filepath file_path path))
-                      (ws (structural-editing-mcp.workspace:get-workspace target-ws)))
-                   (unless file-path (error "filepath is required for workspace_create_file"))
-                   (structural-editing-mcp.workspace:add-file-to-workspace
-                     file-path
-                     :content
-                     (or content "")
-                     :dialect
-                     dialect
-                     :ctx
-                     ws)
-                   (fmt
-                     "File ~S created successfully in workspace ~S (staged in memory; uncommitted)."
-                     file-path
-                     target-ws)))
+  (let*
+      ((target-ws (or workspace_id "default"))
+       (file-path (or filepath file_path path))
+       (ws (structural-editing-mcp.workspace:get-workspace target-ws)))
+    (unless file-path (error "filepath is required for workspace_create_file"))
+    (structural-editing-mcp.workspace:add-file-to-workspace
+      file-path
+      :content
+      (or content "")
+      :dialect
+      dialect
+      :ctx
+      ws)
+    (fmt
+      "File ~S created successfully in workspace ~S (staged in memory; uncommitted)."
+      file-path
+      target-ws)))
 
 (define-mcp-tool "workspace_rebase"
                  (:description
@@ -1854,24 +1854,24 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                             ("three-way" "theirs" "ours" "error")
                             :default
                             "three-way"))
-                 (let*
-                     ((ws-id (or source_workspace_id workspace_id "default"))
-                      (onto-id (or target_workspace_id onto_workspace_id "default"))
-                      (strat (intern (string-upcase (or strategy "three-way")) :keyword))
-                      (res
-                        (structural-editing-mcp.workspace:rebase-workspace
-                          ws-id
-                          :onto-id
-                          onto-id
-                          :strategy
-                          strat)))
-                   (if (getf res :conflicts)
-                     (format-rebase-conflict-summary ws-id (getf res :conflicts))
-                     (fmt
-                       "Workspace ~S successfully rebased onto ~S (~A file(s) updated)."
-                       ws-id
-                       onto-id
-                       (length (getf res :updated-files))))))
+  (let*
+      ((ws-id (or source_workspace_id workspace_id "default"))
+       (onto-id (or target_workspace_id onto_workspace_id "default"))
+       (strat (intern (string-upcase (or strategy "three-way")) :keyword))
+       (res
+         (structural-editing-mcp.workspace:rebase-workspace
+           ws-id
+           :onto-id
+           onto-id
+           :strategy
+           strat)))
+    (if (getf res :conflicts)
+      (format-rebase-conflict-summary ws-id (getf res :conflicts))
+      (fmt
+        "Workspace ~S successfully rebased onto ~S (~A file(s) updated)."
+        ws-id
+        onto-id
+        (length (getf res :updated-files))))))
 
 (define-mcp-tool "workspace_manage"
                  (:description
@@ -1919,37 +1919,37 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                          :string-array
                          :doc
                          "Optional file list for reload or selective restore."))
-                 (let*
-                     ((act (string-downcase (or action "list")))
-                      (ws-id (or workspace_id "default"))
-                      (src (or source_id "default"))
-                      (tgt (or target_id workspace_id))
-                      (snap (or snapshot_name "checkpoint"))
-                      (file-list (to-list files)))
-                   (match act
-                          ("list"
-                           (format-workspaces-list (structural-editing-mcp.workspace:list-workspaces)))
-                          ("create"
-                           (unless tgt (error "target_id or workspace_id required for create"))
-                           (structural-editing-mcp.workspace:create-workspace tgt)
-                           (fmt "Workspace ~S created successfully." tgt))
-                          ("delete"
-                           (structural-editing-mcp.workspace:delete-workspace ws-id)
-                           (fmt "Workspace ~S deleted successfully." ws-id))
-                          ("clear"
-                           (let
-                               ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
-                             (structural-editing-mcp.workspace:clear-workspace ws :force force)
-                             (fmt "Workspace ~S cleared successfully." ws-id)))
-                          ("fork"
-                           (unless tgt (error "target_id required for fork"))
-                           (structural-editing-mcp.workspace:fork-workspace src tgt)
-                           (fmt "Workspace ~S successfully forked into ~S." src tgt))
-                          ((or "snapshot" "restore") (manage-snapshot-restore act ws-id snap))
-                          ((or "create_file" "add_file") (manage-create-file args ws-id))
-                          ("rebase" (manage-rebase-workspace args ws-id))
-                          ("reload" (manage-reload-workspace ws-id file-list force))
-                          (_ (error "Unknown workspace_manage action: ~A" act)))))
+  (let*
+      ((act (string-downcase (or action "list")))
+       (ws-id (or workspace_id "default"))
+       (src (or source_id "default"))
+       (tgt (or target_id workspace_id))
+       (snap (or snapshot_name "checkpoint"))
+       (file-list (to-list files)))
+    (match act
+           ("list"
+            (format-workspaces-list (structural-editing-mcp.workspace:list-workspaces)))
+           ("create"
+            (unless tgt (error "target_id or workspace_id required for create"))
+            (structural-editing-mcp.workspace:create-workspace tgt)
+            (fmt "Workspace ~S created successfully." tgt))
+           ("delete"
+            (structural-editing-mcp.workspace:delete-workspace ws-id)
+            (fmt "Workspace ~S deleted successfully." ws-id))
+           ("clear"
+            (let
+                ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+              (structural-editing-mcp.workspace:clear-workspace ws :force force)
+              (fmt "Workspace ~S cleared successfully." ws-id)))
+           ("fork"
+            (unless tgt (error "target_id required for fork"))
+            (structural-editing-mcp.workspace:fork-workspace src tgt)
+            (fmt "Workspace ~S successfully forked into ~S." src tgt))
+           ((or "snapshot" "restore") (manage-snapshot-restore act ws-id snap))
+           ((or "create_file" "add_file") (manage-create-file args ws-id))
+           ("rebase" (manage-rebase-workspace args ws-id))
+           ("reload" (manage-reload-workspace ws-id file-list force))
+           (_ (error "Unknown workspace_manage action: ~A" act)))))
 
 (define-mcp-tool "workspace_status"
                  (:description
@@ -1957,11 +1957,11 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                    :mutation
                    nil)
                  ()
-                 (let*
-                     ((ws-id (or workspace_id "default"))
-                      (ws (structural-editing-mcp.workspace:get-workspace ws-id))
-                      (st (structural-editing-mcp.workspace:workspace-status ws)))
-                   (format-workspace-status-summary st)))
+  (let*
+      ((ws-id (or workspace_id "default"))
+       (ws (structural-editing-mcp.workspace:get-workspace ws-id))
+       (st (structural-editing-mcp.workspace:workspace-status ws)))
+    (format-workspace-status-summary st)))
 
 (define-mcp-tool "workspace_diff"
                  (:description
@@ -1977,11 +1977,11 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                                       :string
                                       :doc
                                       "The workspace ID to compare against (e.g. 'default' or a feature branch)."))
-                 (let*
-                     ((ws-a (or source_workspace_id workspace_id "default"))
-                      (ws-b (or target_workspace_id other_workspace_id "default"))
-                      (diff-plist (structural-editing-mcp.workspace:diff-workspaces ws-a ws-b)))
-                   (format-workspace-diff-summary diff-plist)))
+  (let*
+      ((ws-a (or source_workspace_id workspace_id "default"))
+       (ws-b (or target_workspace_id other_workspace_id "default"))
+       (diff-plist (structural-editing-mcp.workspace:diff-workspaces ws-a ws-b)))
+    (format-workspace-diff-summary diff-plist)))
 
 (define-mcp-tool "workspace_merge"
                  (:description
@@ -2004,22 +2004,22 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                          :string-array
                          :doc
                          "Optional list of specific files to transfer instead of merging all modified files."))
-                 (let*
-                     ((src-id source_workspace_id)
-                      (tgt-id (or target_workspace_id workspace_id "default"))
-                      (file-list (to-list files))
-                      (res
-                        (structural-editing-mcp.workspace:merge-workspaces
-                          src-id
-                          tgt-id
-                          :files
-                          file-list)))
-                   (fmt
-                     "Successfully merged workspace ~S into ~S (~A merge, ~A file(s) transferred)."
-                     src-id
-                     tgt-id
-                     (getf res :action)
-                     (length (getf res :merged-files)))))
+  (let*
+      ((src-id source_workspace_id)
+       (tgt-id (or target_workspace_id workspace_id "default"))
+       (file-list (to-list files))
+       (res
+         (structural-editing-mcp.workspace:merge-workspaces
+           src-id
+           tgt-id
+           :files
+           file-list)))
+    (fmt
+      "Successfully merged workspace ~S into ~S (~A merge, ~A file(s) transferred)."
+      src-id
+      tgt-id
+      (getf res :action)
+      (length (getf res :merged-files)))))
 
 (define-mcp-tool "commit_workspace"
                  (:description
@@ -2030,12 +2030,12 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                          :string-array
                          :doc
                          "Optional list of file paths to persist. If omitted, persists all dirty files in the workspace."))
-                 (let ((file-list (to-list files)))
-                   (structural-editing-mcp.workspace:write-workspace file-list)
-                   (if file-list
-                     (fmt "Committed ~A specified file(s) to disk successfully." (length file-list))
-                     (fmt
-                       "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))))
+  (let ((file-list (to-list files)))
+    (structural-editing-mcp.workspace:write-workspace file-list)
+    (if file-list
+      (fmt "Committed ~A specified file(s) to disk successfully." (length file-list))
+      (fmt
+        "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))))
 
 (defun dispatch-tool-call
        (name path args dialect &optional (agent-id "default"))

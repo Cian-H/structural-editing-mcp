@@ -229,29 +229,29 @@
 
 
 (deftest test-clos-dialect-formatter-protocol
-         (testing
-           "dialect-supports-indentify-p method dispatch"
-           (let
-               ((node (string-to-sexp "(defun foo () (+ 1 2))")))
-             (ok (dialect-supports-indentify-p :common-lisp node))
-             (ok (dialect-supports-indentify-p :emacs-lisp node))
-             (ok (dialect-supports-indentify-p :scheme node))
-             (ok (not (dialect-supports-indentify-p :clojure node)))
-             (ok (not (dialect-supports-indentify-p :fennel node)))))
-         (testing "format-dialect-form method dispatch"
-                  (let*
-                      ((node (string-to-sexp "(fn [x] (+ x 1))"))
-                       (fnl-str (with-output-to-string (s) (format-dialect-form :fennel node s 0)))
-                       (cl-str (with-output-to-string (s) (format-dialect-form :common-lisp node s 0))))
-                    (ok (stringp fnl-str))
-                    (ok (stringp cl-str))
-                    (ok (search "fn" fnl-str))))
-         (testing "collection-delimiters method dispatch"
-                  (multiple-value-bind (open close)
-                                       (collection-delimiters :common-lisp :paren)
-                    (ok (string= open "("))
-                    (ok (string= close ")")))
-                  (multiple-value-bind (open close)
-                                       (collection-delimiters :clojure :square)
-                    (ok (string= open "["))
-                    (ok (string= close "]")))))
+  (testing
+      "dialect-supports-indentify-p method dispatch"
+    (let
+        ((node (string-to-sexp "(defun foo () (+ 1 2))")))
+      (ok (dialect-supports-indentify-p :common-lisp node))
+      (ok (dialect-supports-indentify-p :emacs-lisp node))
+      (ok (dialect-supports-indentify-p :scheme node))
+      (ok (not (dialect-supports-indentify-p :clojure node)))
+      (ok (not (dialect-supports-indentify-p :fennel node)))))
+  (testing "format-dialect-form method dispatch"
+    (let*
+        ((node (string-to-sexp "(fn [x] (+ x 1))"))
+         (fnl-str (with-output-to-string (s) (format-dialect-form :fennel node s 0)))
+         (cl-str (with-output-to-string (s) (format-dialect-form :common-lisp node s 0))))
+      (ok (stringp fnl-str))
+      (ok (stringp cl-str))
+      (ok (search "fn" fnl-str))))
+  (testing "collection-delimiters method dispatch"
+    (multiple-value-bind (open close)
+                         (collection-delimiters :common-lisp :paren)
+      (ok (string= open "("))
+      (ok (string= close ")")))
+    (multiple-value-bind (open close)
+                         (collection-delimiters :clojure :square)
+      (ok (string= open "["))
+      (ok (string= close "]")))))
