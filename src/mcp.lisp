@@ -687,6 +687,41 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
        (name desc props &optional required)
   (dict "name" name "description" desc "inputSchema" (tool-schema props required)))
 
+(defparameter *mutation-tools* '
+  ("ast_modify" "ast_remove"
+   "ast_relocate"
+   "ast_rename"
+   "ast_replace_pattern"
+   "ast_extract_variable"
+   "ast_extract_function")
+  "List of tool names that mutate the AST.")
+
+(defun mutation-tool-p (name)
+  "Return T if tool NAME mutates workspace AST state."
+  (member name *mutation-tools* :test #'string=))
+
+(defvar *mcp-tool-handlers*
+  (make-hash-table :test #'equal)
+  "Registry mapping MCP tool name to handler function: (lambda (args &key path dialect agent-id) ...).")
+
+(defvar *mcp-tool-definitions* '
+  ()
+  "List of tool definitions for tools/list in registration order.")
+
+(defun register-tool-definition (tool-dict)
+  "Register TOOL-DICT into *MCP-TOOL-DEFINITIONS*, preserving order without duplicates."
+  (let ((name (gethash "name" tool-dict)))
+    (setf *mcp-tool-definitions*
+          (nconc
+            (remove name
+                    *mcp-tool-definitions*
+                    :test
+                    #'equal
+                    :key
+                    (lambda (d)
+                      (gethash "name" d)))
+            (list tool-dict)))))
+
 (defparameter +prop-path+
   (prop-path
     "0-indexed array of integers specifying the AST path. Omit or pass [] for the workspace root, [0] for dialect 0 (e.g. :common-lisp), [0, 0] for file 0 in dialect 0, [0, 0, 2] for top-level form 2 in file 0, [0, 0, 3, 1] for child 1 of form 3."))
@@ -707,367 +742,108 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   (prop-string
     "Target workspace identifier (default: 'default'). Use an isolated workspace ID (via workspace_manage 'fork') to branch and stage edits safely without clobbering other agents."))
 
-(defun get-tools-list ()
-  (list
-    (make-tool "read_node"
-               "Inspect any node in the AST or workspace. Returns rendered code and a nested tree of child paths up to 'depth' levels. Supports 'mode': 'skeleton' for compact metadata stubs on wide trees. BEST PRACTICE: Always read parent forms (e.g. [0, 10]) to see the entire expression and its child paths at once—do NOT probe child indices one-by-one. Use 'read_slice' to cast a vertical ray down to a specific nested node without lateral context blowout. Pass 'load_files' on initial call to populate the workspace from disk."
-               (dict "path"
-                     +prop-path+
-                     "depth"
-                     (prop-integer
-                       "Recursion depth for displaying nested children and their paths (default: 2). Use depth 1 for only immediate children, 2 or 3 to inspect deeper sub-expressions.")
-                     "limit"
-                     (prop-integer
-                       "Optional maximum number of child nodes or files to display in preview (default: 50). Use to paginate large collections.")
-                     "offset"
-                     (prop-integer
-                       "Optional 0-indexed child offset to start displaying from (default: 0).")
-                     "mode"
-                     (prop-string
-                       "Display mode: 'full' (default), 'skeleton' (compact metadata stubs for wide trees), or 'auto' (automatic skeleton for massive nodes)."
-                       :enum
-                       (list "full" "skeleton" "auto"))
-                     "load_files"
-                     +prop-load-files+
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+))
-    (make-tool "read_slice"
-               "Inspect a vertical ray/spine path down to a specific target AST node. Renders the ancestral hierarchy (e.g. file, let, defun) leading to the target node while strictly eliding lateral siblings at each level, then hydrates the target node up to 'depth'. Ideal for inspecting deeply nested code in wide trees without context window blowout."
-               (dict "path"
-                     (prop-path
-                       "Target AST path (e.g. [0, 0, 50, 2]) to cast the vertical ray down to.")
-                     "depth"
-                     (prop-integer
-                       "Recursion depth for displaying nested children of the target node (default: 2).")
-                     "limit"
-                     (prop-integer
-                       "Optional maximum number of child nodes to display for the target node (default: 50).")
-                     "offset"
-                     (prop-integer "Optional 0-indexed child offset for the target node.")
-                     "mode"
-                     (prop-string
-                       "Display mode for the target node: 'full' (default) or 'skeleton'."
-                       :enum
-                       (list "full" "skeleton" "auto"))
-                     "load_files"
-                     +prop-load-files+
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+)
-               (list "path"))
-    (make-tool "ast_modify"
-               "Mutate AST nodes in memory. Actions: 'insert' (adds new_node before path, or at child index if index is given), 'overwrite' (replaces node at path with new_node), 'wrap' (wraps node or child range with parens, brackets, or enclosing form). WARNING: Always target the exact, specific child path (e.g. [0, 1, 5, 2]) for your mutation. DO NOT attempt to overwrite a parent node using a truncated child list, as this will delete all un-rendered siblings. NOTE: Automatically returns an updated preview of the enclosing parent node; separate verification reads are unnecessary. To preserve safety in multi-agent workflows, fork a workspace first with 'workspace_manage'."
-               (dict "path"
-                     (prop-path "Target AST path (e.g. [0, 2] to target form 2 in file 0).")
-                     "action"
-                     (prop-string
-                       "The modification action to perform."
-                       :enum
-                       (list "insert" "overwrite" "wrap"))
-                     "new_node"
-                     (prop-string
-                       "For insert/overwrite: the S-expression code string (e.g. '(defun foo () 42)'). For wrap: delimiter keyword (':paren', ':square', ':curly') or enclosing form string (e.g. '(when condition)').")
-                     "index"
-                     (prop-integer
-                       "Optional child index for insert. If omitted when inserting, uses the last element of path.")
-                     "end_index"
-                     (prop-integer
-                       "Optional ending child index for range wrapping with action 'wrap'.")
-                     "force"
-                     (prop-boolean
-                       "Optional safeguard bypass: set to true to force overwriting a node that has more than 50 children.")
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+)
-               (list "path" "action" "new_node"))
-    (make-tool "ast_remove"
-               "Remove, unwrap, or promote AST nodes in memory. Actions: 'delete' (deletes the node at path), 'unwrap' (removes enclosing collection, spilling children into parent), 'promote' (replaces parent node with the child node at path). WARNING: Always target the exact, specific child path for removal. NOTE: Automatically returns an updated preview of the parent form."
-               (dict "path"
-                     (prop-path "The AST path of the node to remove/unwrap/promote.")
-                     "action"
-                     (prop-string "Removal action to perform."
-                                  :enum
-                                  (list "delete" "unwrap" "promote"))
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+)
-               (list "path" "action"))
-    (make-tool "ast_relocate"
-               "Move, copy, swap, merge, or split AST nodes in memory. Actions: 'move' (moves source_path to target_path), 'copy' (duplicates source_path to target_path), 'swap' (swaps nodes at source_path and target_path), 'merge' (merges sibling collection nodes), 'split' (splits target collection node at index into two sibling collections). NOTE: Automatically returns an updated preview."
-               (dict "source_path"
-                     (prop-path "Path to source node (optional for split).")
-                     "target_path"
-                     (prop-path
-                       "Target path for move/copy/swap/merge/split (e.g. [0, 2] places before index 2 in file 0).")
-                     "action"
-                     (prop-string "Relocation action to perform."
-                                  :enum
-                                  (list "move" "copy" "swap" "merge" "split"))
-                     "index"
-                     (prop-integer
-                       "Child index within target collection to split at (action 'split') or destination insertion index (actions 'move', 'copy').")
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+)
-               (list "target_path" "action"))
-    (make-tool "ast_search"
-               "Search the workspace or a subtree for symbols, identifiers, function calls, or literal values. Fast AST-aware token searching that returns matched AST paths."
-               (dict "query"
-                     (prop-string
-                       "Symbol or text to search for (case-insensitive substring/symbol match).")
-                     "path"
-                     (prop-path
-                       "Optional AST path to constrain the search scope. If omitted, searches the entire workspace.")
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+)
-               (list "query"))
-    (make-tool "ast_rename"
-               "Rename all occurrences of an identifier/symbol across the workspace or within a specific subtree. Operates strictly on symbol leaf nodes, preserving comments and string literals."
-               (dict "old_name"
-                     (prop-string "The exact symbol/string to replace (e.g. 'make-api-call').")
-                     "new_name"
-                     (prop-string
-                       "The new symbol/string to replace it with (e.g. 'execute-api-call').")
-                     "path"
-                     (prop-path
-                       "Optional AST path to constrain the bulk rename to a specific subtree. If omitted, renames globally across the workspace.")
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+)
-               (list "old_name" "new_name"))
-    (make-tool "ast_replace_pattern"
-               "Search the workspace for a structural Lisp pattern and replace it with a new pattern, preserving matched variables (e.g. pattern='(foo ?x ?y)', replacement='(bar ?y ?x)'). Ideal for semantic API migrations and structural refactorings."
-               (dict "pattern"
-                     (prop-string
-                       "The pattern to match. Variables start with '?' (e.g. '(make-api-call ?method ?url ?headers ?body)').")
-                     "replacement"
-                     (prop-string
-                       "The replacement template (e.g. '(make-api-call ?url ?method :headers ?headers :body ?body)').")
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+)
-               (list "pattern" "replacement"))
-    (make-tool "ast_extract_variable"
-               "Extracts an AST node into a local `let` binding wrapped around its immediate parent. Preserves sub-expression structure and automatically replaces the node with the bound variable."
-               (dict "path"
-                     (prop-path "AST path of the node to extract.")
-                     "variable_name"
-                     (prop-string "The name of the new variable to bind it to.")
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+)
-               (list "path" "variable_name"))
-    (make-tool "ast_extract_function"
-               "Extracts an AST node into a new top-level function definition and replaces the original node with a call to the new function. Emits the new function right before the current top-level form."
-               (dict "path"
-                     (prop-path "AST path of the node to extract into a function.")
-                     "function_name"
-                     (prop-string "The name of the new function.")
-                     "params"
-                     (prop-string-array "Optional list of parameter names for the new function.")
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+)
-               (list "path" "function_name"))
-    (make-tool "ast_lint"
-               "Run static analysis and structural linting to identify code smells, anti-patterns, and opportunities for refactoring. Returns a list of findings with AST paths, messages, severity, and suggested quick-fixes."
-               (dict "path"
-                     (prop-path
-                       "Optional AST path to lint a specific node or file. If omitted, lints the entire workspace.")
-                     "dialect"
-                     +prop-dialect+
-                     "rules"
-                     (prop-string-array
-                       "Optional list of rule IDs to filter by (e.g. ['if-progn-to-when', 'single-clause-cond']).")
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+))
-    (make-tool "ast_complexity_metrics"
-               "Calculate structural and cyclomatic complexity metrics for functions and top-level forms. Reports branch complexity, maximum nesting depth, AST node counts, and automated recommendations for code extraction."
-               (dict "path"
-                     (prop-path
-                       "Optional AST path to evaluate a specific form, file, or subtree. If omitted, analyzes all forms across the workspace.")
-                     "min_complexity"
-                     (prop-integer
-                       "Optional minimum cyclomatic complexity threshold to filter results (default: 1).")
-                     "min_depth"
-                     (prop-integer
-                       "Optional minimum parenthetical nesting depth threshold to filter results (default: 1).")
-                     "dialect"
-                     +prop-dialect+
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+))
-    (make-tool "ast_find_duplicates"
-               "Find repeated expressions and structural code clones across the workspace or within a file. Groups duplicate subtrees, filters redundant child occurrences, and recommends extraction into helper functions or local variables."
-               (dict "path"
-                     (prop-path
-                       "Optional AST path to constrain the duplicate search to a specific file or subtree. If omitted, searches the entire workspace.")
-                     "min_nodes"
-                     (prop-integer
-                       "Optional minimum AST node count threshold for subtrees (default: 4).")
-                     "min_depth"
-                     (prop-integer
-                       "Optional minimum parenthetical nesting depth threshold for subtrees (default: 2).")
-                     "exact"
-                     (prop-boolean
-                       "If true (default), matches exact identical code. If false, matches structural clones where variables/literals can vary.")
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+))
-    (make-tool "ast_analyze_bindings"
-               "Analyze lexical scope and variable bindings to detect unused variables and shadowed bindings across dialects. Recommends removals via ast_remove or renamings via ast_rename."
-               (dict "path"
-                     (prop-path
-                       "Optional AST path to constrain analysis to a specific file or subtree. If omitted, analyzes all files in the workspace.")
-                     "include_unused"
-                     (prop-boolean
-                       "If true (default), reports variables defined but never used in their lexical scope.")
-                     "include_shadowed"
-                     (prop-boolean
-                       "If true (default), reports local variables that shadow outer bindings with the same name.")
-                     "dialect"
-                     +prop-dialect+
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+))
-    (make-tool "ast_suggest_refactorings"
-               "Multi-engine refactoring advisor. Aggregates and prioritizes findings from anti-pattern linting, structural complexity metrics, duplicate code clones, and variable binding analysis into an actionable refactoring plan."
-               (dict "path"
-                     (prop-path
-                       "Optional AST path to evaluate a specific form, file, or subtree. If omitted, audits the entire workspace.")
-                     "min_priority"
-                     (prop-string
-                       "Optional minimum priority filter ('high', 'medium', 'low', defaults to 'low').")
-                     "categories"
-                     (prop-string-array
-                       "Optional list of categories to include ('lint', 'complexity', 'duplicate', 'binding').")
-                     "dialect"
-                     +prop-dialect+
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+))
-    (make-tool "workspace_create_file"
-               "Create a new file in memory within the specified workspace without writing to disk immediately. Staged in memory as dirty/uncommitted until committed with commit_workspace."
-               (dict "filepath"
-                     (prop-string "Path of the new file (e.g. 'src/foo.lisp').")
-                     "content"
-                     (prop-string "Initial S-expression or code content (default: empty).")
-                     "dialect"
-                     +prop-dialect+
-                     "workspace_id"
-                     +prop-workspace-id+
-                     "agent_id"
-                     +prop-agent-id+)
-               (list "filepath"))
-    (make-tool "workspace_rebase"
-               "Rebase a branch workspace onto an updated upstream workspace (e.g. 'default'). Transfers newly added upstream files, applies non-conflicting upstream changes, and performs 3-way AST-level form merges on modified files. Supports optional conflict resolution strategies: 'error' (default), 'theirs' (accept upstream), or 'ours' (keep branch changes)."
-               (dict "source_workspace_id"
-                     (prop-string "The branch workspace to rebase (e.g. 'agent-1').")
-                     "target_workspace_id"
-                     (prop-string "The upstream workspace to rebase onto (default: 'default').")
-                     "strategy"
-                     (prop-string
-                       "Conflict resolution strategy if AST collisions occur: 'error', 'theirs', or 'ours' (default: 'error')."
-                       :enum
-                       (list "error" "theirs" "ours"))
-                     "agent_id"
-                     +prop-agent-id+)
-               (list "source_workspace_id"))
-    (make-tool "workspace_manage"
-               "Manage isolated multi-agent workspace lifecycle. Actions:
-- 'create': Create an empty named workspace (requires target_id).
-- 'create_file': Create a new file in memory in workspace_id (requires filepath, optional content/dialect).
-- 'list': List all active workspace IDs and their parent/revision metadata.
-- 'delete': Delete a named workspace (requires workspace_id, cannot delete 'default').
-- 'clear': Reset a workspace to empty state (requires force: true if dirty).
-- 'fork': Branch source_id into new target_id for isolated parallel editing (recommended checkpoint mechanism).
-- 'rebase': Rebase workspace_id onto source_id (incorporates upstream changes).
-- 'snapshot': Save an in-memory named checkpoint of workspace_id (requires snapshot_name).
-- 'restore': Roll back workspace_id to a previously saved checkpoint (requires snapshot_name).
-- 'reload': Re-read files from disk into memory (requires force: true if dirty)."
-               (dict "action"
-                     (dict "type"
-                           "string"
-                           "description"
-                           "Action to perform: 'create', 'create_file', 'list', 'delete', 'clear', 'fork', 'rebase', 'snapshot', 'restore', or 'reload'.")
-                     "workspace_id"
-                     (prop-string "Target workspace identifier for the action.")
-                     "source_id"
-                     (prop-string "Source workspace identifier (for 'fork' or 'rebase').")
-                     "target_id"
-                     (prop-string "New workspace identifier (for 'fork' or 'create').")
-                     "filepath"
-                     (prop-string "File path for 'create_file'.")
-                     "content"
-                     (prop-string "Initial file content for 'create_file'.")
-                     "strategy"
-                     (prop-string
-                       "Conflict resolution strategy for 'rebase': 'error', 'theirs', or 'ours' (default: 'error').")
-                     "snapshot_name"
-                     (prop-string "Snapshot name for 'snapshot' or 'restore'.")
-                     "files"
-                     (prop-string-array "Optional subset of file paths to reload (for 'reload').")
-                     "force"
-                     (prop-boolean
-                       "If true, discards uncommitted in-memory edits when clearing or reloading.")
-                     "agent_id"
-                     +prop-agent-id+))
-    (make-tool "workspace_status"
-               "Inspect the live status of a workspace: revision counter, dirty uncommitted files, clean files, and available snapshot checkpoints. Always run this before committing or merging to verify what has changed."
-               (dict "workspace_id"
-                     (prop-string "Target workspace identifier (default: 'default').")
-                     "agent_id"
-                     +prop-agent-id+))
-    (make-tool "workspace_diff"
-               "Compare AST contents and file states between two workspaces. Categorizes source-only files, target-only files, disjoint modified files (safe to auto-merge), and colliding modified files (conflicts). Always run this before workspace_merge."
-               (dict "source_workspace_id"
-                     (prop-string "Source workspace identifier (e.g. your agent branch).")
-                     "target_workspace_id"
-                     (prop-string "Target workspace identifier (default: 'default').")
-                     "agent_id"
-                     +prop-agent-id+))
-    (make-tool "workspace_merge"
-               "Merge changes from source workspace into target workspace. Automatically performs fast-forward, disjoint file merging, and 3-way AST-level form merging for files modified in both workspaces. If unresolvable AST collisions exist, signals an error unless specific non-conflicting files are passed in 'files', or use workspace_rebase to reconcile. Run workspace_diff first to verify safety."
-               (dict "source_workspace_id"
-                     (dict "type"
-                           "string"
-                           "description"
-                           "Source workspace identifier containing changes to merge.")
-                     "target_workspace_id"
-                     (prop-string
-                       "Target workspace identifier receiving changes (default: 'default').")
-                     "files"
-                     (prop-string-array
-                       "Optional list of specific files to transfer instead of merging all modified files.")
-                     "agent_id"
-                     +prop-agent-id+))
-    (make-tool "commit_workspace"
-               "Persists in-memory workspace modifications back to their respective files on disk using dialect-aware pretty printing. Pass 'files' to selectively persist specific files, or omit to persist all dirty files in the workspace."
-               (dict "files"
-                     (prop-string-array
-                       "Optional list of specific files to persist. If omitted, all modified files are written.")
-                     "workspace_id"
-                     (prop-string "Target workspace identifier (default: 'default').")
-                     "agent_id"
-                     +prop-agent-id+))))
+(defun build-prop-schema (spec)
+  "Build JSON schema property dict from parameter spec (pname &key type doc enum default items required)."
+  (let*
+      ((ptype (getf (cdr spec) :type :string))
+       (pdoc (or (getf (cdr spec) :doc) (getf (cdr spec) :description) ""))
+       (penum (getf (cdr spec) :enum)))
+    (cond
+      ((eq ptype :path)
+        (if (and pdoc (plusp (length pdoc)))
+          (prop-path pdoc)
+          +prop-path+))
+      ((eq ptype :load-files) +prop-load-files+)
+      ((eq ptype :dialect) +prop-dialect+)
+      ((eq ptype :workspace-id) +prop-workspace-id+)
+      ((eq ptype :agent-id) +prop-agent-id+)
+      ((eq ptype :string-array) (prop-string-array pdoc))
+      ((eq ptype :integer) (prop-integer pdoc))
+      ((eq ptype :boolean) (prop-boolean pdoc))
+      ((eq ptype :string) (prop-string pdoc :enum penum))
+      (t (dict "type" (string-downcase (string ptype)) "description" pdoc)))))
+
+(defmacro define-mcp-tool
+          (name (&key description mutation) params &body body)
+  "Define an MCP tool, registering its JSON schema in *MCP-TOOL-DEFINITIONS*
+and its execution handler in *MCP-TOOL-HANDLERS*."
+  (let
+      ((handler-fn
+         (intern
+           (string-upcase (format nil "DISPATCH-MCP-TOOL-~A" (substitute #\- #\_ name)))))
+       (props-var (gensym "PROPS"))
+       (reqs-var (gensym "REQS")))
+    `
+    (progn
+      (let
+          ((,props-var (make-hash-table :test #'equal)) (,reqs-var '()))
+        ,@
+        (loop for
+              p
+              in
+              params
+              for
+              pname
+              =
+              (first p)
+              for
+              key-str
+              =
+              (string-downcase (substitute #\_ #\- (string pname)))
+              for
+              req-p
+              =
+              (getf (cdr p) :required)
+              collect
+              `
+              (setf (gethash ,key-str ,props-var) (build-prop-schema ',p))
+              when
+              req-p
+              collect
+              `
+              (push ,key-str ,reqs-var))
+        (register-tool-definition
+          (make-tool ,name ,description ,props-var (nreverse ,reqs-var))))
+      (defun ,handler-fn
+             (args &key (path nil) (dialect nil) (agent-id "default") &allow-other-keys)
+        (declare (ignorable args path dialect agent-id))
+        (let*
+            ((path (or path (to-list (gethash "path" args))))
+             (dialect (or dialect (parse-dialect-arg (gethash "dialect" args))))
+             (agent-id
+               (or (gethash "agent_id" args) (gethash "agent-id" args) agent-id "default"))
+             ,@
+             (loop for
+                   p
+                   in
+                   params
+                   for
+                   pname
+                   =
+                   (first p)
+                   unless
+                   (member pname '(path dialect agent-id agent_id))
+                   collect
+                   (let
+                       ((key-str (string-downcase (substitute #\_ #\- (string pname))))
+                        (default (getf (cdr p) :default)))
+                     (if default
+                       `
+                       (,pname (or (gethash ,key-str args) ,default))
+                       `
+                       (,pname (gethash ,key-str args))))))
+          (declare (ignorable path dialect agent-id ,@ (mapcar #'first params)))
+          ,@body))
+      (setf (gethash ,name *mcp-tool-handlers*) #',handler-fn)
+      ,@
+      (when mutation
+        `
+        ((unless
+             (member ,name *mutation-tools* :test #'string=)
+           (setf *mutation-tools* (append *mutation-tools* (list ,name))))))
+      ',handler-fn)))
+
+(defun get-tools-list () *mcp-tool-definitions*)
 
 ;;; Handlers
 
@@ -1484,19 +1260,6 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
            ("ast_suggest_refactorings" (run-tool-suggestions tree path eff-dialect args))
            (_ (error "Unknown analysis tool: ~A" name)))))
 
-(defparameter *mutation-tools* '
-  ("ast_modify" "ast_remove"
-   "ast_relocate"
-   "ast_rename"
-   "ast_replace_pattern"
-   "ast_extract_variable"
-   "ast_extract_function")
-  "List of tool names that mutate the AST.")
-
-(defun mutation-tool-p (name)
-  "Return T if tool NAME mutates workspace AST state."
-  (member name *mutation-tools* :test #'string=))
-
 (defun format-workspaces-list (list)
   "Format list of workspace plists into readable string summary."
   (with-output-to-string (s)
@@ -1525,6 +1288,66 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
             (structural-editing-mcp.workspace:restore-workspace snap-name ws)
             (fmt "Workspace ~S restored from snapshot ~S." ws-id snap-name))
            (_ (error "Unknown snapshot action: ~A" action)))))
+
+(defun manage-create-file (args ws-id)
+  "Create or add a file in the given workspace."
+  (let*
+      ((filepath
+         (or (href args "filepath") (href args "file_path") (href args "file")))
+       (content (or (href args "content") ""))
+       (ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+    (unless filepath (error "filepath is required for create_file"))
+    (structural-editing-mcp.workspace:add-file-to-workspace
+      filepath
+      :content
+      content
+      :dialect
+      (or (href args "dialect")
+          (structural-editing-mcp.workspace:file-dialect filepath))
+      :ctx
+      ws)
+    (fmt
+      "File ~S created successfully in workspace ~S (staged in memory)."
+      filepath
+      ws-id)))
+
+(defun manage-rebase-workspace (args ws-id)
+  "Rebase a workspace onto another workspace."
+  (let*
+      ((onto-id
+         (or (href args "source_id")
+             (href args "target_id")
+             (href args "target_workspace_id")
+             (href args "onto")
+             "default"))
+       (strategy (or (href args "strategy") "error"))
+       (res
+         (structural-editing-mcp.workspace:rebase-workspace
+           ws-id
+           :onto-id
+           onto-id
+           :strategy
+           strategy)))
+    (fmt
+      "Workspace ~S successfully rebased onto ~S (~A file(s) updated)."
+      ws-id
+      onto-id
+      (length (getf res :updated-files)))))
+
+(defun manage-reload-workspace
+       (ws-id files force)
+  "Reload workspace files from disk."
+  (let*
+      ((ws (structural-editing-mcp.workspace:get-workspace ws-id))
+       (reloaded
+         (structural-editing-mcp.workspace:reload-workspace
+           :ctx
+           ws
+           :files
+           files
+           :force
+           force)))
+    (fmt "Workspace ~S reloaded ~A file(s) from disk." ws-id (length reloaded))))
 
 (defun handle-tool-workspace-manage (args)
   "Handle workspace_manage lifecycle actions: create, list, delete, clear, fork, snapshot, restore, reload."
@@ -1729,42 +1552,534 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
         onto-id
         (length (getf res :updated-files))))))
 
+(define-mcp-tool "read_node"
+                 (:description
+                   "Inspect any node in the AST or workspace. Returns rendered code and a nested tree of child paths up to 'depth' levels. Supports 'mode': 'skeleton' for compact metadata stubs on wide trees. BEST PRACTICE: Always read parent forms (e.g. [0, 10]) to see the entire expression and its child paths at once—do NOT probe child indices one-by-one. Use 'read_slice' to cast a vertical ray down to a specific nested node without lateral context blowout. Pass 'load_files' on initial call to populate the workspace from disk."
+                   :mutation
+                   nil)
+                 ((path :type :path)
+                  (depth :type
+                         :integer
+                         :doc
+                         "Recursion depth for displaying nested children and their paths (default: 2). Use depth 1 for only immediate children, 2 or 3 to inspect deeper sub-expressions.")
+                  (limit :type
+                         :integer
+                         :doc
+                         "Optional maximum number of child nodes or files to display in preview (default: 50). Use to paginate large collections.")
+                  (offset :type
+                          :integer
+                          :doc
+                          "Optional 0-indexed child offset to start displaying from (default: 0).")
+                  (mode :type
+                        :string
+                        :doc
+                        "Display mode: 'full' (default), 'skeleton' (compact metadata stubs for wide trees), or 'auto' (automatic skeleton for massive nodes)."
+                        :enum
+                        ("full" "skeleton" "auto"))
+                  (load_files :type :load-files)
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-read-node path args agent-id))
+
+(define-mcp-tool "read_slice"
+                 (:description
+                   "Inspect a vertical ray/spine path down to a specific target AST node. Renders the ancestral hierarchy (e.g. file, let, defun) leading to the target node while strictly eliding lateral siblings at each level, then hydrates the target node up to 'depth'. Ideal for inspecting deeply nested code in wide trees without context window blowout."
+                   :mutation
+                   nil)
+                 ((path :type
+                        :path
+                        :doc
+                        "Target AST path (e.g. [0, 0, 50, 2]) to cast the vertical ray down to."
+                        :required
+                        t)
+                  (depth :type
+                         :integer
+                         :doc
+                         "Recursion depth for displaying nested children of the target node (default: 2).")
+                  (limit :type
+                         :integer
+                         :doc
+                         "Optional maximum number of child nodes to display for the target node (default: 50).")
+                  (offset :type
+                          :integer
+                          :doc
+                          "Optional 0-indexed child offset for the target node.")
+                  (mode :type
+                        :string
+                        :doc
+                        "Display mode for the target node: 'full' (default) or 'skeleton'."
+                        :enum
+                        ("full" "skeleton" "auto"))
+                  (load_files :type :load-files)
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-read-slice path args agent-id))
+
+(define-mcp-tool "ast_modify"
+                 (:description
+                   "Mutate AST nodes in memory. Actions: 'insert' (adds new_node before path, or at child index if index is given), 'overwrite' (replaces node at path with new_node), 'wrap' (wraps node or child range with parens, brackets, or enclosing form). WARNING: Always target the exact, specific child path (e.g. [0, 1, 5, 2]) for your mutation. DO NOT attempt to overwrite a parent node using a truncated child list, as this will delete all un-rendered siblings. NOTE: Automatically returns an updated preview of the enclosing parent node; separate verification reads are unnecessary. To preserve safety in multi-agent workflows, fork a workspace first with 'workspace_manage'."
+                   :mutation
+                   t)
+                 ((path :type
+                        :path
+                        :doc
+                        "Target AST path (e.g. [0, 2] to target form 2 in file 0)."
+                        :required
+                        t)
+                  (action :type
+                          :string
+                          :doc
+                          "The modification action to perform."
+                          :enum
+                          ("insert" "overwrite" "wrap")
+                          :required
+                          t)
+                  (new_node :type
+                            :string
+                            :doc
+                            "For insert/overwrite: the S-expression code string (e.g. '(defun foo () 42)'). For wrap: delimiter keyword (':paren', ':square', ':curly') or enclosing form string (e.g. '(when condition)')."
+                            :required
+                            t)
+                  (index :type
+                         :integer
+                         :doc
+                         "Optional child index for insert. If omitted when inserting, uses the last element of path.")
+                  (end_index :type
+                             :integer
+                             :doc
+                             "Optional ending child index for range wrapping with action 'wrap'.")
+                  (force :type
+                         :boolean
+                         :doc
+                         "Optional safeguard bypass: set to true to force overwriting a node that has more than 50 children.")
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-ast-modify path args))
+
+(define-mcp-tool "ast_remove"
+                 (:description
+                   "Remove, unwrap, or promote AST nodes in memory. Actions: 'delete' (deletes the node at path), 'unwrap' (removes enclosing collection, spilling children into parent), 'promote' (replaces parent node with the child node at path). WARNING: Always target the exact, specific child path for removal. NOTE: Automatically returns an updated preview of the parent form."
+                   :mutation
+                   t)
+                 ((path :type
+                        :path
+                        :doc
+                        "The AST path of the node to remove/unwrap/promote."
+                        :required
+                        t)
+                  (action :type
+                          :string
+                          :doc
+                          "Removal action to perform."
+                          :enum
+                          ("delete" "unwrap" "promote")
+                          :required
+                          t)
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-ast-remove path args))
+
+(define-mcp-tool "ast_relocate"
+                 (:description
+                   "Move, copy, swap, merge, or split AST nodes in memory. Actions: 'move' (moves source_path to target_path), 'copy' (duplicates source_path to target_path), 'swap' (swaps nodes at source_path and target_path), 'merge' (merges sibling collection nodes), 'split' (splits target collection node at index into two sibling collections). NOTE: Automatically returns an updated preview."
+                   :mutation
+                   t)
+                 ((source_path :type :path :doc "Path to source node (optional for split).")
+                  (target_path :type
+                               :path
+                               :doc
+                               "Target path for move/copy/swap/merge/split (e.g. [0, 2] places before index 2 in file 0)."
+                               :required
+                               t)
+                  (action :type
+                          :string
+                          :doc
+                          "Relocation action to perform."
+                          :enum
+                          ("move" "copy" "swap" "merge" "split")
+                          :required
+                          t)
+                  (index :type
+                         :integer
+                         :doc
+                         "Child index within target collection to split at (action 'split') or destination insertion index (actions 'move', 'copy').")
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-ast-relocate args))
+
+(define-mcp-tool "ast_search"
+                 (:description
+                   "Search the workspace or a subtree for symbols, identifiers, function calls, or literal values. Fast AST-aware token searching that returns matched AST paths."
+                   :mutation
+                   nil)
+                 ((query :type
+                         :string
+                         :doc
+                         "Symbol or text to search for (case-insensitive substring/symbol match)."
+                         :required
+                         t)
+                  (path :type
+                        :path
+                        :doc
+                        "Optional AST path to constrain the search scope. If omitted, searches the entire workspace.")
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-ast-refactor "ast_search" path args dialect))
+
+(define-mcp-tool "ast_rename"
+                 (:description
+                   "Rename all occurrences of an identifier/symbol across the workspace or within a specific subtree. Operates strictly on symbol leaf nodes, preserving comments and string literals."
+                   :mutation
+                   t)
+                 ((old_name :type
+                            :string
+                            :doc
+                            "The exact symbol/string to replace (e.g. 'make-api-call')."
+                            :required
+                            t)
+                  (new_name :type
+                            :string
+                            :doc
+                            "The new symbol/string to replace it with (e.g. 'execute-api-call')."
+                            :required
+                            t)
+                  (path :type
+                        :path
+                        :doc
+                        "Optional AST path to constrain the bulk rename to a specific subtree. If omitted, renames globally across the workspace.")
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-ast-refactor "ast_rename" path args dialect))
+
+(define-mcp-tool "ast_replace_pattern"
+                 (:description
+                   "Search the workspace for a structural Lisp pattern and replace it with a new pattern, preserving matched variables (e.g. pattern='(foo ?x ?y)', replacement='(bar ?y ?x)'). Ideal for semantic API migrations and structural refactorings."
+                   :mutation
+                   t)
+                 ((pattern :type
+                           :string
+                           :doc
+                           "The pattern to match. Variables start with '?' (e.g. '(make-api-call ?method ?url ?headers ?body)')."
+                           :required
+                           t)
+                  (replacement :type
+                               :string
+                               :doc
+                               "The replacement template (e.g. '(make-api-call ?url ?method :headers ?headers :body ?body)')."
+                               :required
+                               t)
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-ast-refactor "ast_replace_pattern" path args dialect))
+
+(define-mcp-tool "ast_extract_variable"
+                 (:description
+                   "Extracts an AST node into a local `let` binding wrapped around its immediate parent. Preserves sub-expression structure and automatically replaces the node with the bound variable."
+                   :mutation
+                   t)
+                 ((path :type :path :doc "AST path of the node to extract." :required t)
+                  (variable_name :type
+                                 :string
+                                 :doc
+                                 "The name of the new variable to bind it to."
+                                 :required
+                                 t)
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-ast-refactor "ast_extract_variable" path args dialect))
+
+(define-mcp-tool "ast_extract_function"
+                 (:description
+                   "Extracts an AST node into a new top-level function definition and replaces the original node with a call to the new function. Emits the new function right before the current top-level form."
+                   :mutation
+                   t)
+                 ((path :type
+                        :path
+                        :doc
+                        "AST path of the node to extract into a function."
+                        :required
+                        t)
+                  (function_name :type :string :doc "The name of the new function." :required t)
+                  (params :type
+                          :string-array
+                          :doc
+                          "Optional list of parameter names for the new function.")
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-ast-refactor "ast_extract_function" path args dialect))
+
+(define-mcp-tool "ast_lint"
+                 (:description
+                   "Run static analysis and structural linting to identify code smells, anti-patterns, and opportunities for refactoring. Returns a list of findings with AST paths, messages, severity, and suggested quick-fixes."
+                   :mutation
+                   nil)
+                 ((path :type
+                        :path
+                        :doc
+                        "Optional AST path to lint a specific node or file. If omitted, lints the entire workspace.")
+                  (dialect :type :dialect)
+                  (rules :type
+                         :string-array
+                         :doc
+                         "Optional list of rule IDs to filter by (e.g. ['if-progn-to-when', 'single-clause-cond']).")
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-ast-analysis "ast_lint" path args dialect))
+
+(define-mcp-tool "ast_complexity_metrics"
+                 (:description
+                   "Calculate structural and cyclomatic complexity metrics for functions and top-level forms. Reports branch complexity, maximum nesting depth, AST node counts, and automated recommendations for code extraction."
+                   :mutation
+                   nil)
+                 ((path :type
+                        :path
+                        :doc
+                        "Optional AST path to evaluate a specific form, file, or subtree. If omitted, analyzes all forms across the workspace.")
+                  (min_complexity :type
+                                  :integer
+                                  :doc
+                                  "Optional minimum cyclomatic complexity threshold to filter results (default: 1).")
+                  (min_depth :type
+                             :integer
+                             :doc
+                             "Optional minimum parenthetical nesting depth threshold to filter results (default: 1).")
+                  (dialect :type :dialect)
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-ast-analysis "ast_complexity_metrics" path args dialect))
+
+(define-mcp-tool "ast_find_duplicates"
+                 (:description
+                   "Find repeated expressions and structural code clones across the workspace or within a file. Groups duplicate subtrees, filters redundant child occurrences, and recommends extraction into helper functions or local variables."
+                   :mutation
+                   nil)
+                 ((path :type
+                        :path
+                        :doc
+                        "Optional AST path to constrain the duplicate search to a specific file or subtree. If omitted, searches the entire workspace.")
+                  (min_nodes :type
+                             :integer
+                             :doc
+                             "Optional minimum AST node count threshold for subtrees (default: 4).")
+                  (min_depth :type
+                             :integer
+                             :doc
+                             "Optional minimum parenthetical nesting depth threshold for subtrees (default: 2).")
+                  (exact :type
+                         :boolean
+                         :doc
+                         "If true (default), matches exact identical code. If false, matches structural clones where variables/literals can vary.")
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-ast-analysis "ast_find_duplicates" path args dialect))
+
+(define-mcp-tool "ast_analyze_bindings"
+                 (:description
+                   "Analyze lexical scope and variable bindings to detect unused variables and shadowed bindings across dialects. Recommends removals via ast_remove or renamings via ast_rename."
+                   :mutation
+                   nil)
+                 ((path :type
+                        :path
+                        :doc
+                        "Optional AST path to constrain analysis to a specific file or subtree. If omitted, analyzes all files in the workspace.")
+                  (include_unused :type
+                                  :boolean
+                                  :doc
+                                  "If true (default), reports variables defined but never used in their lexical scope.")
+                  (include_shadowed :type
+                                    :boolean
+                                    :doc
+                                    "If true (default), reports local variables that shadow outer bindings with the same name.")
+                  (dialect :type :dialect)
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-ast-analysis "ast_analyze_bindings" path args dialect))
+
+(define-mcp-tool "ast_suggest_refactorings"
+                 (:description
+                   "Multi-engine refactoring advisor. Aggregates and prioritizes findings from anti-pattern linting, structural complexity metrics, duplicate code clones, and variable binding analysis into an actionable refactoring plan."
+                   :mutation
+                   nil)
+                 ((path :type
+                        :path
+                        :doc
+                        "Optional AST path to evaluate a specific form, file, or subtree. If omitted, audits the entire workspace.")
+                  (min_priority :type
+                                :string
+                                :doc
+                                "Optional minimum priority filter ('high', 'medium', 'low', defaults to 'low').")
+                  (categories :type
+                              :string-array
+                              :doc
+                              "Optional list of categories to include ('lint', 'complexity', 'duplicate', 'binding').")
+                  (dialect :type :dialect)
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-ast-analysis "ast_suggest_refactorings" path args dialect))
+
+(define-mcp-tool "workspace_create_file"
+                 (:description
+                   "Create a new file in memory within the specified workspace without writing to disk immediately. Staged in memory as dirty/uncommitted until committed with commit_workspace."
+                   :mutation
+                   nil)
+                 ((filepath :type
+                            :string
+                            :doc
+                            "Path of the new file (e.g. 'src/foo.lisp')."
+                            :required
+                            t)
+                  (content :type
+                           :string
+                           :doc
+                           "Initial S-expression or code content (default: empty).")
+                  (dialect :type :dialect)
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (handle-tool-workspace-create-file args dialect))
+
+(define-mcp-tool "workspace_rebase"
+                 (:description
+                   "Rebase a branch workspace onto an updated upstream workspace (e.g. 'default'). Transfers newly added upstream files, applies non-conflicting upstream changes, and performs 3-way AST-level form merges on modified files. Supports optional conflict resolution strategies: 'error' (default), 'theirs' (accept upstream), or 'ours' (keep branch changes)."
+                   :mutation
+                   nil)
+                 ((source_workspace_id :type
+                                       :string
+                                       :doc
+                                       "The branch workspace to rebase (e.g. 'agent-1')."
+                                       :required
+                                       t)
+                  (target_workspace_id :type
+                                       :string
+                                       :doc
+                                       "The upstream workspace to rebase onto (default: 'default').")
+                  (strategy :type
+                            :string
+                            :doc
+                            "Conflict resolution strategy if AST collisions occur: 'error', 'theirs', or 'ours' (default: 'error')."
+                            :enum
+                            ("error" "theirs" "ours"))
+                  (agent_id :type :agent-id))
+                 (handle-tool-workspace-rebase args))
+
+(define-mcp-tool "workspace_manage"
+                 (:description
+                   "Manage isolated multi-agent workspace lifecycle. Actions:
+- 'create': Create an empty named workspace (requires target_id).
+- 'create_file': Create a new file in memory in workspace_id (requires filepath, optional content/dialect).
+- 'list': List all active workspace IDs and their parent/revision metadata.
+- 'delete': Delete a named workspace (requires workspace_id, cannot delete 'default').
+- 'clear': Reset a workspace to empty state (requires force: true if dirty).
+- 'fork': Branch source_id into new target_id for isolated parallel editing (recommended checkpoint mechanism).
+- 'rebase': Rebase workspace_id onto source_id (incorporates upstream changes).
+- 'snapshot': Save an in-memory named checkpoint of workspace_id (requires snapshot_name).
+- 'restore': Roll back workspace_id to a previously saved checkpoint (requires snapshot_name).
+- 'reload': Re-read files from disk into memory (requires force: true if dirty)."
+                   :mutation
+                   nil)
+                 ((action :type
+                          :string
+                          :doc
+                          "Action to perform: 'create', 'create_file', 'list', 'delete', 'clear', 'fork', 'rebase', 'snapshot', 'restore', or 'reload'.")
+                  (workspace_id :type :string :doc "Target workspace identifier for the action.")
+                  (source_id :type
+                             :string
+                             :doc
+                             "Source workspace identifier (for 'fork' or 'rebase').")
+                  (target_id :type
+                             :string
+                             :doc
+                             "New workspace identifier (for 'fork' or 'create').")
+                  (filepath :type :string :doc "File path for 'create_file'.")
+                  (content :type :string :doc "Initial file content for 'create_file'.")
+                  (strategy :type
+                            :string
+                            :doc
+                            "Conflict resolution strategy for 'rebase': 'error', 'theirs', or 'ours' (default: 'error').")
+                  (snapshot_name :type :string :doc "Snapshot name for 'snapshot' or 'restore'.")
+                  (files :type
+                         :string-array
+                         :doc
+                         "Optional subset of file paths to reload (for 'reload').")
+                  (force :type
+                         :boolean
+                         :doc
+                         "If true, discards uncommitted in-memory edits when clearing or reloading.")
+                  (agent_id :type :agent-id))
+                 (handle-tool-workspace-manage args))
+
+(define-mcp-tool "workspace_status"
+                 (:description
+                   "Inspect the live status of a workspace: revision counter, dirty uncommitted files, clean files, and available snapshot checkpoints. Always run this before committing or merging to verify what has changed."
+                   :mutation
+                   nil)
+                 ((workspace_id :type :workspace-id) (agent_id :type :agent-id))
+                 (handle-tool-workspace-status args))
+
+(define-mcp-tool "workspace_diff"
+                 (:description
+                   "Compare AST contents and file states between two workspaces. Categorizes source-only files, target-only files, disjoint modified files (safe to auto-merge), and colliding modified files (conflicts). Always run this before workspace_merge."
+                   :mutation
+                   nil)
+                 ((source_workspace_id :type
+                                       :string
+                                       :doc
+                                       "Source workspace identifier (e.g. your agent branch).")
+                  (target_workspace_id :type
+                                       :string
+                                       :doc
+                                       "Target workspace identifier (default: 'default').")
+                  (agent_id :type :agent-id))
+                 (handle-tool-workspace-diff args))
+
+(define-mcp-tool "workspace_merge"
+                 (:description
+                   "Merge changes from source workspace into target workspace. Automatically performs fast-forward, disjoint file merging, and 3-way AST-level form merging for files modified in both workspaces. If unresolvable AST collisions exist, signals an error unless specific non-conflicting files are passed in 'files', or use workspace_rebase to reconcile. Run workspace_diff first to verify safety."
+                   :mutation
+                   nil)
+                 ((source_workspace_id :type
+                                       :string
+                                       :doc
+                                       "Source workspace identifier containing changes to merge.")
+                  (target_workspace_id :type
+                                       :string
+                                       :doc
+                                       "Target workspace identifier receiving changes (default: 'default').")
+                  (files :type
+                         :string-array
+                         :doc
+                         "Optional list of specific files to transfer instead of merging all modified files.")
+                  (agent_id :type :agent-id))
+                 (handle-tool-workspace-merge args))
+
+(define-mcp-tool "commit_workspace"
+                 (:description
+                   "Persists in-memory workspace modifications back to their respective files on disk using dialect-aware pretty printing. Pass 'files' to selectively persist specific files, or omit to persist all dirty files in the workspace."
+                   :mutation
+                   nil)
+                 ((files :type
+                         :string-array
+                         :doc
+                         "Optional list of specific files to persist. If omitted, all modified files are written.")
+                  (workspace_id :type :workspace-id)
+                  (agent_id :type :agent-id))
+                 (let ((file-list (to-list files)))
+                   (structural-editing-mcp.workspace:write-workspace file-list)
+                   (if file-list
+                     (fmt "Committed ~A specified file(s) to disk successfully." (length file-list))
+                     (fmt
+                       "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))))
+
 (defun dispatch-tool-call
        (name path args dialect &optional (agent-id "default"))
-  "Dispatch tool invocation by tool NAME to appropriate handler."
-  (match name
-         ("read_node" (handle-tool-read-node path args agent-id))
-         ("read_slice" (handle-tool-read-slice path args agent-id))
-         ("ast_modify" (handle-tool-ast-modify path args))
-         ("ast_remove" (handle-tool-ast-remove path args))
-         ("ast_relocate" (handle-tool-ast-relocate args))
-         ((or "ast_search"
-              "ast_rename"
-              "ast_replace_pattern"
-              "ast_extract_variable"
-              "ast_extract_function")
-          (handle-tool-ast-refactor name path args dialect))
-         ((or "ast_lint"
-              "ast_complexity_metrics"
-              "ast_find_duplicates"
-              "ast_analyze_bindings"
-              "ast_suggest_refactorings")
-          (handle-tool-ast-analysis name path args dialect))
-         ("workspace_manage" (handle-tool-workspace-manage args))
-         ((or "workspace_create_file" "workspace_add_file")
-          (handle-tool-workspace-create-file args dialect))
-         ("workspace_rebase" (handle-tool-workspace-rebase args))
-         ("workspace_status" (handle-tool-workspace-status args))
-         ("workspace_diff" (handle-tool-workspace-diff args))
-         ("workspace_merge" (handle-tool-workspace-merge args))
-         ("commit_workspace"
-          (let ((files (to-list (href args "files"))))
-            (structural-editing-mcp.workspace:write-workspace files)
-            (if files
-              (fmt "Committed ~A specified file(s) to disk successfully." (length files))
-              (fmt
-                "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))))
-         (_ (error "Tool not found: ~A" name))))
+  "Dispatch tool invocation by tool NAME to registered handler."
+  (let
+      ((handler
+         (or (gethash name *mcp-tool-handlers*)
+             (when (equal name "workspace_add_file")
+               (gethash "workspace_create_file" *mcp-tool-handlers*)))))
+    (if handler
+      (funcall handler args :path path :dialect dialect :agent-id agent-id)
+      (error "Tool not found: ~A" name))))
 
 (defun send-tool-error-response
        (id message error-code error-type &optional extra-fields)
