@@ -1645,39 +1645,36 @@ Returns (values ignored-names remaining-body-nodes)."
       (dolist (body-form (rest (get-node-children clause)))
         (setf findings-acc (walk-binding-tree body-form scope dialect findings-acc))))))
 
-(defun walk-scope-binding-form (head-name children scope dialect findings-acc)
+(defun walk-scope-binding-form
+       (head-name children scope dialect findings-acc)
   "Walk lexical bindings, iteration, or fallback forms."
-  (cond
-    ((and (equal head-name "let") (not (vector-binding-dialect-p dialect)))
-      (walk-cl-let-form children scope dialect findings-acc))
-    ((sequential-binding-form-p head-name dialect)
-      (walk-sequential-let-form head-name children scope dialect findings-acc))
-    ((equal head-name "loop")
-      (walk-binding-rest-children children scope dialect findings-acc))
-    ((equal head-name "cond")
-      (walk-cond-binding-form children scope dialect findings-acc))
-    ((member head-name '("case" "ccase" "ecase" "typecase" "ctypecase" "etypecase") :test #'string=)
-      (walk-case-binding-form children scope dialect findings-acc))
-    ((member head-name '("multiple-value-bind" "destructuring-bind") :test #'string=)
-      (walk-bind-form head-name children scope dialect findings-acc))
-    ((member head-name '("dolist" "dotimes") :test #'string=)
-      (walk-iteration-binding-form head-name children scope dialect findings-acc))
-    ((member head-name '("when-let" "if-let" "when-some" "if-some") :test #'string=)
-      (walk-when-let-form children scope dialect findings-acc))
-    ((member head-name '("flet" "labels") :test #'string=)
-      (walk-flet-labels-form children scope dialect findings-acc))
-    (t
-      (walk-fallback-binding-form head-name children scope dialect findings-acc))))
+  (match head-name
+         ((guard _ (and (equal head-name "let") (not (vector-binding-dialect-p dialect))))
+          (walk-cl-let-form children scope dialect findings-acc))
+         ((guard _ (sequential-binding-form-p head-name dialect))
+          (walk-sequential-let-form head-name children scope dialect findings-acc))
+         ("loop" (walk-binding-rest-children children scope dialect findings-acc))
+         ("cond" (walk-cond-binding-form children scope dialect findings-acc))
+         ((or "case" "ccase" "ecase" "typecase" "ctypecase" "etypecase")
+          (walk-case-binding-form children scope dialect findings-acc))
+         ((or "multiple-value-bind" "destructuring-bind")
+          (walk-bind-form head-name children scope dialect findings-acc))
+         ((or "dolist" "dotimes")
+          (walk-iteration-binding-form head-name children scope dialect findings-acc))
+         ((or "when-let" "if-let" "when-some" "if-some")
+          (walk-when-let-form children scope dialect findings-acc))
+         ((or "flet" "labels")
+          (walk-flet-labels-form children scope dialect findings-acc))
+         (_ (walk-fallback-binding-form head-name children scope dialect findings-acc))))
 
-(defun walk-compound-binding-form (head-name children scope dialect findings-acc)
+(defun walk-compound-binding-form
+       (head-name children scope dialect findings-acc)
   "Dispatch binding analysis for compound forms by operator head name."
-  (cond
-    ((binding-ignore-head-p head-name dialect)
-      findings-acc)
-    ((member head-name '("defun" "defmacro" "defmethod" "defn" "defn-" "define" "lambda" "fn") :test #'string=)
-      (walk-function-definition-form head-name children scope dialect findings-acc))
-    (t
-      (walk-scope-binding-form head-name children scope dialect findings-acc))))
+  (match head-name
+         ((guard _ (binding-ignore-head-p head-name dialect)) findings-acc)
+         ((or "defun" "defmacro" "defmethod" "defn" "defn-" "define" "lambda" "fn")
+          (walk-function-definition-form head-name children scope dialect findings-acc))
+         (_ (walk-scope-binding-form head-name children scope dialect findings-acc))))
 
 (defun node-head-leaf-name (children)
   "Return symbol name of the first child leaf node if present."

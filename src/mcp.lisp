@@ -1242,12 +1242,12 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
             child-count))))
     (setf
       structural-editing-mcp.workspace:*workspace-tree*
-      (cond
-        ((equal action "insert") (perform-insert tree path new-node-str index))
-        ((equal action "overwrite")
-          (structural-editing-mcp.edit:overwrite-expression tree path new-node-str))
-        ((equal action "wrap") (perform-wrap tree path new-node-str end-index index))
-        (t (error "Unknown action: ~A" action))))
+      (match action
+             ("insert" (perform-insert tree path new-node-str index))
+             ("overwrite"
+              (structural-editing-mcp.edit:overwrite-expression tree path new-node-str))
+             ("wrap" (perform-wrap tree path new-node-str end-index index))
+             (_ (error "Unknown action: ~A" action))))
     (format-mutation-result
       (fmt "Successfully executed ~A at ~A" action path)
       path
@@ -1260,11 +1260,11 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
        (tree structural-editing-mcp.workspace:*workspace-tree*))
     (setf
       structural-editing-mcp.workspace:*workspace-tree*
-      (cond
-        ((equal action "delete") (structural-editing-mcp.edit:delete-node tree path))
-        ((equal action "unwrap") (structural-editing-mcp.edit:unwrap-node tree path))
-        ((equal action "promote") (structural-editing-mcp.edit:promote-node tree path))
-        (t (error "Unknown action: ~A" action))))
+      (match action
+             ("delete" (structural-editing-mcp.edit:delete-node tree path))
+             ("unwrap" (structural-editing-mcp.edit:unwrap-node tree path))
+             ("promote" (structural-editing-mcp.edit:promote-node tree path))
+             (_ (error "Unknown action: ~A" action))))
     (format-mutation-result
       (fmt "Successfully executed ~A at ~A" action path)
       path
@@ -1280,20 +1280,20 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 (defun perform-relocate-action
        (action src tgt index tree)
   "Dispatch relocation mutation and return the updated tree."
-  (cond
-    ((or (equal action "move") (equal action "copy"))
-      (multiple-value-bind (tgt-parent tgt-idx)
-                           (resolve-parent-and-index tree tgt index)
-        (if (equal action "move")
-          (structural-editing-mcp.edit:move-node tree src tgt-parent tgt-idx)
-          (structural-editing-mcp.edit:copy-node tree src tgt-parent tgt-idx))))
-    ((equal action "swap") (structural-editing-mcp.edit:swap-nodes tree src tgt))
-    ((equal action "merge") (structural-editing-mcp.edit:merge-nodes tree src tgt))
-    ((equal action "split")
-      (structural-editing-mcp.edit:split-node tree
-                                              tgt
-                                              (resolve-split-index tgt index)))
-    (t (error "Unknown action: ~A" action))))
+  (match action
+         ((or "move" "copy")
+          (multiple-value-bind (tgt-parent tgt-idx)
+                               (resolve-parent-and-index tree tgt index)
+            (if (equal action "move")
+              (structural-editing-mcp.edit:move-node tree src tgt-parent tgt-idx)
+              (structural-editing-mcp.edit:copy-node tree src tgt-parent tgt-idx))))
+         ("swap" (structural-editing-mcp.edit:swap-nodes tree src tgt))
+         ("merge" (structural-editing-mcp.edit:merge-nodes tree src tgt))
+         ("split"
+          (structural-editing-mcp.edit:split-node tree
+                                                  tgt
+                                                  (resolve-split-index tgt index)))
+         (_ (error "Unknown action: ~A" action))))
 
 (defun handle-tool-ast-relocate (args)
   "Handle the ast_relocate tool execution."
@@ -1320,53 +1320,54 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   (let
       ((tree structural-editing-mcp.workspace:*workspace-tree*)
        (eff-dialect (or dialect structural-editing-mcp.parser:*current-dialect*)))
-    (cond
-      ((equal name "ast_search")
-        (let*
-            ((query (gethash "query" args)) (results (perform-search tree path query)))
-          (if results
-            (fmt "Found ~A matches. Paths:~%~{~A~^~%~}" (length results) results)
-            (fmt "No matches found for '~A' at path ~A" query path))))
-      ((equal name "ast_rename")
-        (let
-            ((old (gethash "old_name" args)) (new (gethash "new_name" args)))
-          (setf
-            structural-editing-mcp.workspace:*workspace-tree*
-            (perform-rename tree path old new))
-          (fmt "Successfully renamed all occurrences of '~A' to '~A'." old new)))
-      ((equal name "ast_replace_pattern")
-        (let
-            ((pat (gethash "pattern" args)) (rep (gethash "replacement" args)))
-          (setf
-            structural-editing-mcp.workspace:*workspace-tree*
-            (structural-editing-mcp.refactor:replace-pattern tree pat rep))
-          (fmt "Successfully executed pattern replacement across workspace.")))
-      ((equal name "ast_extract_variable")
-        (let ((var-name (gethash "variable_name" args)))
-          (setf
-            structural-editing-mcp.workspace:*workspace-tree*
-            (structural-editing-mcp.refactor:extract-variable
-              tree
-              path
-              var-name
-              :dialect
-              eff-dialect))
-          (fmt "Successfully extracted node at ~A into variable '~A'." path var-name)))
-      ((equal name "ast_extract_function")
-        (let
-            ((func-name (gethash "function_name" args))
-             (fn-params (to-list (gethash "params" args))))
-          (setf
-            structural-editing-mcp.workspace:*workspace-tree*
-            (structural-editing-mcp.refactor:extract-function
-              tree
-              path
-              func-name
-              :params
-              fn-params
-              :dialect
-              eff-dialect))
-          (fmt "Successfully extracted node at ~A into function '~A'." path func-name))))))
+    (match name
+           ("ast_search"
+            (let*
+                ((query (gethash "query" args)) (results (perform-search tree path query)))
+              (if results
+                (fmt "Found ~A matches. Paths:~%~{~A~^~%~}" (length results) results)
+                (fmt "No matches found for '~A' at path ~A" query path))))
+           ("ast_rename"
+            (let
+                ((old (gethash "old_name" args)) (new (gethash "new_name" args)))
+              (setf
+                structural-editing-mcp.workspace:*workspace-tree*
+                (perform-rename tree path old new))
+              (fmt "Successfully renamed all occurrences of '~A' to '~A'." old new)))
+           ("ast_replace_pattern"
+            (let
+                ((pat (gethash "pattern" args)) (rep (gethash "replacement" args)))
+              (setf
+                structural-editing-mcp.workspace:*workspace-tree*
+                (structural-editing-mcp.refactor:replace-pattern tree pat rep))
+              (fmt "Successfully executed pattern replacement across workspace.")))
+           ("ast_extract_variable"
+            (let ((var-name (gethash "variable_name" args)))
+              (setf
+                structural-editing-mcp.workspace:*workspace-tree*
+                (structural-editing-mcp.refactor:extract-variable
+                  tree
+                  path
+                  var-name
+                  :dialect
+                  eff-dialect))
+              (fmt "Successfully extracted node at ~A into variable '~A'." path var-name)))
+           ("ast_extract_function"
+            (let
+                ((func-name (gethash "function_name" args))
+                 (fn-params (to-list (gethash "params" args))))
+              (setf
+                structural-editing-mcp.workspace:*workspace-tree*
+                (structural-editing-mcp.refactor:extract-function
+                  tree
+                  path
+                  func-name
+                  :params
+                  fn-params
+                  :dialect
+                  eff-dialect))
+              (fmt "Successfully extracted node at ~A into function '~A'." path func-name)))
+           (_ (error "Unknown refactor tool: ~A" name)))))
 
 (defun run-tool-lint (tree path dialect args)
   "Run AST linter and return formatted findings."
@@ -1475,15 +1476,13 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   (let
       ((tree structural-editing-mcp.workspace:*workspace-tree*)
        (eff-dialect (or dialect structural-editing-mcp.parser:*current-dialect*)))
-    (cond
-      ((equal name "ast_lint") (run-tool-lint tree path dialect args))
-      ((equal name "ast_complexity_metrics")
-        (run-tool-complexity tree path dialect args))
-      ((equal name "ast_find_duplicates") (run-tool-duplicates tree path args))
-      ((equal name "ast_analyze_bindings")
-        (run-tool-bindings tree path eff-dialect args))
-      ((equal name "ast_suggest_refactorings")
-        (run-tool-suggestions tree path eff-dialect args)))))
+    (match name
+           ("ast_lint" (run-tool-lint tree path dialect args))
+           ("ast_complexity_metrics" (run-tool-complexity tree path dialect args))
+           ("ast_find_duplicates" (run-tool-duplicates tree path args))
+           ("ast_analyze_bindings" (run-tool-bindings tree path eff-dialect args))
+           ("ast_suggest_refactorings" (run-tool-suggestions tree path eff-dialect args))
+           (_ (error "Unknown analysis tool: ~A" name)))))
 
 (defparameter *mutation-tools* '
   ("ast_modify" "ast_remove"
@@ -1518,13 +1517,14 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   "Handle snapshot and restore actions for workspace WS-ID."
   (let
       ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
-    (cond
-      ((equal action "snapshot")
-        (structural-editing-mcp.workspace:snapshot-workspace snap-name ws)
-        (fmt "Snapshot ~S created for workspace ~S." snap-name ws-id))
-      ((equal action "restore")
-        (structural-editing-mcp.workspace:restore-workspace snap-name ws)
-        (fmt "Workspace ~S restored from snapshot ~S." ws-id snap-name)))))
+    (match action
+           ("snapshot"
+            (structural-editing-mcp.workspace:snapshot-workspace snap-name ws)
+            (fmt "Snapshot ~S created for workspace ~S." snap-name ws-id))
+           ("restore"
+            (structural-editing-mcp.workspace:restore-workspace snap-name ws)
+            (fmt "Workspace ~S restored from snapshot ~S." ws-id snap-name))
+           (_ (error "Unknown snapshot action: ~A" action)))))
 
 (defun handle-tool-workspace-manage (args)
   "Handle workspace_manage lifecycle actions: create, list, delete, clear, fork, snapshot, restore, reload."
@@ -1536,32 +1536,30 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
        (snap-name (or (href args "snapshot_name") "checkpoint"))
        (force (href args "force"))
        (files (to-list (href args "files"))))
-    (cond
-      ((equal action "list")
-        (format-workspaces-list (structural-editing-mcp.workspace:list-workspaces)))
-      ((equal action "create")
-        (unless target-id (error "target_id or workspace_id required for create"))
-        (structural-editing-mcp.workspace:create-workspace target-id)
-        (fmt "Workspace ~S created successfully." target-id))
-      ((equal action "delete")
-        (structural-editing-mcp.workspace:delete-workspace ws-id)
-        (fmt "Workspace ~S deleted successfully." ws-id))
-      ((equal action "clear")
-        (let
-            ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
-          (structural-editing-mcp.workspace:clear-workspace ws :force force)
-          (fmt "Workspace ~S cleared successfully." ws-id)))
-      ((equal action "fork")
-        (unless target-id (error "target_id required for fork"))
-        (structural-editing-mcp.workspace:fork-workspace source-id target-id)
-        (fmt "Workspace ~S successfully forked into ~S." source-id target-id))
-      ((or (equal action "snapshot") (equal action "restore"))
-        (manage-snapshot-restore action ws-id snap-name))
-      ((or (equal action "create_file") (equal action "add_file"))
-        (manage-create-file args ws-id))
-      ((equal action "rebase") (manage-rebase-workspace args ws-id))
-      ((equal action "reload") (manage-reload-workspace ws-id files force))
-      (t (error "Unknown workspace_manage action: ~A" action)))))
+    (match action
+           ("list"
+            (format-workspaces-list (structural-editing-mcp.workspace:list-workspaces)))
+           ("create"
+            (unless target-id (error "target_id or workspace_id required for create"))
+            (structural-editing-mcp.workspace:create-workspace target-id)
+            (fmt "Workspace ~S created successfully." target-id))
+           ("delete"
+            (structural-editing-mcp.workspace:delete-workspace ws-id)
+            (fmt "Workspace ~S deleted successfully." ws-id))
+           ("clear"
+            (let
+                ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+              (structural-editing-mcp.workspace:clear-workspace ws :force force)
+              (fmt "Workspace ~S cleared successfully." ws-id)))
+           ("fork"
+            (unless target-id (error "target_id required for fork"))
+            (structural-editing-mcp.workspace:fork-workspace source-id target-id)
+            (fmt "Workspace ~S successfully forked into ~S." source-id target-id))
+           ((or "snapshot" "restore") (manage-snapshot-restore action ws-id snap-name))
+           ((or "create_file" "add_file") (manage-create-file args ws-id))
+           ("rebase" (manage-rebase-workspace args ws-id))
+           ("reload" (manage-reload-workspace ws-id files force))
+           (_ (error "Unknown workspace_manage action: ~A" action)))))
 
 (defun format-workspace-status-summary (st)
   "Format workspace status plist ST into a readable summary string."
@@ -1734,45 +1732,39 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 (defun dispatch-tool-call
        (name path args dialect &optional (agent-id "default"))
   "Dispatch tool invocation by tool NAME to appropriate handler."
-  (cond
-    ((equal name "read_node") (handle-tool-read-node path args agent-id))
-    ((equal name "read_slice") (handle-tool-read-slice path args agent-id))
-    ((equal name "ast_modify") (handle-tool-ast-modify path args))
-    ((equal name "ast_remove") (handle-tool-ast-remove path args))
-    ((equal name "ast_relocate") (handle-tool-ast-relocate args))
-    ((member name
-             '
-             ("ast_search" "ast_rename"
+  (match name
+         ("read_node" (handle-tool-read-node path args agent-id))
+         ("read_slice" (handle-tool-read-slice path args agent-id))
+         ("ast_modify" (handle-tool-ast-modify path args))
+         ("ast_remove" (handle-tool-ast-remove path args))
+         ("ast_relocate" (handle-tool-ast-relocate args))
+         ((or "ast_search"
+              "ast_rename"
               "ast_replace_pattern"
               "ast_extract_variable"
               "ast_extract_function")
-             :test
-             #'string=)
-      (handle-tool-ast-refactor name path args dialect))
-    ((member name
-             '
-             ("ast_lint" "ast_complexity_metrics"
+          (handle-tool-ast-refactor name path args dialect))
+         ((or "ast_lint"
+              "ast_complexity_metrics"
               "ast_find_duplicates"
               "ast_analyze_bindings"
               "ast_suggest_refactorings")
-             :test
-             #'string=)
-      (handle-tool-ast-analysis name path args dialect))
-    ((equal name "workspace_manage") (handle-tool-workspace-manage args))
-    ((or (equal name "workspace_create_file") (equal name "workspace_add_file"))
-      (handle-tool-workspace-create-file args dialect))
-    ((equal name "workspace_rebase") (handle-tool-workspace-rebase args))
-    ((equal name "workspace_status") (handle-tool-workspace-status args))
-    ((equal name "workspace_diff") (handle-tool-workspace-diff args))
-    ((equal name "workspace_merge") (handle-tool-workspace-merge args))
-    ((equal name "commit_workspace")
-      (let ((files (to-list (href args "files"))))
-        (structural-editing-mcp.workspace:write-workspace files)
-        (if files
-          (fmt "Committed ~A specified file(s) to disk successfully." (length files))
-          (fmt
-            "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))))
-    (t (error "Tool not found: ~A" name))))
+          (handle-tool-ast-analysis name path args dialect))
+         ("workspace_manage" (handle-tool-workspace-manage args))
+         ((or "workspace_create_file" "workspace_add_file")
+          (handle-tool-workspace-create-file args dialect))
+         ("workspace_rebase" (handle-tool-workspace-rebase args))
+         ("workspace_status" (handle-tool-workspace-status args))
+         ("workspace_diff" (handle-tool-workspace-diff args))
+         ("workspace_merge" (handle-tool-workspace-merge args))
+         ("commit_workspace"
+          (let ((files (to-list (href args "files"))))
+            (structural-editing-mcp.workspace:write-workspace files)
+            (if files
+              (fmt "Committed ~A specified file(s) to disk successfully." (length files))
+              (fmt
+                "Workspace committed to disk successfully.~%TIP: Remember to run bash test/verification commands to confirm your changes compile and pass tests!"))))
+         (_ (error "Tool not found: ~A" name))))
 
 (defun send-tool-error-response
        (id message error-code error-type &optional extra-fields)
@@ -1897,13 +1889,13 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
        (id (href msg "id"))
        (method (href msg "method"))
        (params (href msg "params")))
-    (unless (equal jsonrpc "2.0") (return-from handle-message nil))
-    (cond
-      ((equal method "initialize") (handle-initialize id params))
-      ((equal method "notifications/initialized") nil)
-      ((equal method "tools/list") (handle-tools-list id params))
-      ((equal method "tools/call") (handle-tools-call id params))
-      (id (send-error id -32601 (fmt "Method not found: ~A" method))))))
+    (when (equal jsonrpc "2.0")
+      (match method
+             ("initialize" (handle-initialize id params))
+             ("notifications/initialized" nil)
+             ("tools/list" (handle-tools-list id params))
+             ("tools/call" (handle-tools-call id params))
+             (_ (when id (send-error id -32601 (fmt "Method not found: ~A" method))))))))
 
 (defun start-server ()
   "Start the MCP server loop over stdin/stdout with worker thread pool."
