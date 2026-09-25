@@ -274,16 +274,16 @@ The file is immediately marked as uncommitted (dirty) until committed."
   (let* ((canonical-path (or (safe-truename filepath) filepath))
          (eff-dialect (or dialect (file-dialect canonical-path) :common-lisp)))
     (with-workspace-context (ctx)
-      (bt:with-lock-held ((workspace-context-lock ctx))
-        (when (find-file-path-coords canonical-path)
-          (error 'workspace-error :message (format nil "File ~A already exists in workspace ~A"
-                                                  filepath (workspace-context-id ctx))))
-        (multiple-value-bind (parsed-file-node sources)
-            (string-to-sexp content :dialect eff-dialect)
-          (setf (gethash canonical-path *file-clean-sources*) sources)
-          (let ((id (insert-file-into-workspace parsed-file-node canonical-path eff-dialect)))
-            (incf (workspace-context-revision ctx))
-            (values id (find-file-path-coords canonical-path))))))))
+                            (bt:with-lock-held ((workspace-context-lock ctx))
+                                               (when (find-file-path-coords canonical-path)
+                                                 (error 'workspace-error :message (format nil "File ~A already exists in workspace ~A"
+                                                                                          filepath (workspace-context-id ctx))))
+                                               (multiple-value-bind (parsed-file-node sources)
+                                                                    (string-to-sexp content :dialect eff-dialect)
+                                                 (setf (gethash canonical-path *file-clean-sources*) sources)
+                                                 (let ((id (insert-file-into-workspace parsed-file-node canonical-path eff-dialect)))
+                                                   (incf (workspace-context-revision ctx))
+                                                   (values id (find-file-path-coords canonical-path))))))))
 
 (defun list-workspaces ()
   "Return a list of plists describing all registered workspaces."

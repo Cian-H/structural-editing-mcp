@@ -283,7 +283,7 @@
                       (ok (equal "disjoint" (getf merge-res :action)))
                       (ok (= 1 (length (getf merge-res :merged-files))))
                       (ok (= 2 (hash-table-count (workspace-context-clean-state ws-a)))))
-                     ;; Verify self-merge is rejected
+                    ;; Verify self-merge is rejected
                     (ok (signals (merge-workspaces "merge-ws-a" "merge-ws-a") 'workspace-error))
                     (delete-workspace "merge-ws-a")
                     (delete-workspace "merge-ws-b"))))
@@ -305,7 +305,7 @@
                             (ok (not (probe-file test-path))))
                           ;; 2. Write workspace to disk
                           (with-workspace-context (ws)
-                            (write-workspace (list test-path)))
+                                                  (write-workspace (list test-path)))
                           ;; 3. File exists on disk now and is clean
                           (ok (probe-file test-path))
                           (ok (null (workspace-dirty-files-list ws))))
@@ -321,7 +321,7 @@
                     (unwind-protect
                         (progn
                           (with-workspace-context (ws-base)
-                            (read-workspace-file file-path))
+                                                  (read-workspace-file file-path))
                           ;; Fork two branches
                           (fork-workspace "merge-base" "branch-a")
                           (fork-workspace "merge-base" "branch-b")
@@ -329,12 +329,12 @@
                                 (ws-b (get-workspace "branch-b")))
                             ;; Branch A modifies form 0 (fn-one)
                             (with-workspace-context (ws-a)
-                              (setf *workspace-tree*
-                                    (structural-editing-mcp.edit:overwrite-expression *workspace-tree* '(0 0 0) "(defun fn-one () 100)")))
+                                                    (setf *workspace-tree*
+                                                          (structural-editing-mcp.edit:overwrite-expression *workspace-tree* '(0 0 0) "(defun fn-one () 100)")))
                             ;; Branch B modifies form 1 (fn-two)
                             (with-workspace-context (ws-b)
-                              (setf *workspace-tree*
-                                    (structural-editing-mcp.edit:overwrite-expression *workspace-tree* '(0 0 1) "(defun fn-two () 200)")))
+                                                    (setf *workspace-tree*
+                                                          (structural-editing-mcp.edit:overwrite-expression *workspace-tree* '(0 0 1) "(defun fn-two () 200)")))
                             ;; Diff shows ast-mergeable
                             (let ((df (diff-workspaces "branch-a" "branch-b")))
                               (ok (member (safe-truename file-path) (getf df :ast-mergeable) :test #'equal))
@@ -344,10 +344,10 @@
                               (ok (equal "disjoint-and-ast-merge" (getf merge-res :action)))
                               ;; Verify merged AST in branch-b has both modifications!
                               (with-workspace-context (ws-b)
-                                (let* ((node (get-node-at-path *workspace-tree* '(0 0)))
-                                       (code (structural-editing-mcp.parser:sexp-to-string node)))
-                                  (ok (search "100" code))
-                                  (ok (search "200" code)))))))
+                                                      (let* ((node (get-node-at-path *workspace-tree* '(0 0)))
+                                                             (code (structural-editing-mcp.parser:sexp-to-string node)))
+                                                        (ok (search "100" code))
+                                                        (ok (search "200" code)))))))
                       (when (probe-file file-path) (delete-file file-path))
                       (delete-workspace "branch-a")
                       (delete-workspace "branch-b")
@@ -361,19 +361,19 @@
                     (unwind-protect
                         (progn
                           (with-workspace-context (ws-base)
-                            (read-workspace-file file-path))
+                                                  (read-workspace-file file-path))
                           (fork-workspace "rebase-base" "branch-upstream")
                           (fork-workspace "rebase-base" "branch-feature")
                           (let ((ws-up (get-workspace "branch-upstream"))
                                 (ws-feat (get-workspace "branch-feature")))
                             ;; Upstream changes conflict-fn to :upstream-val
                             (with-workspace-context (ws-up)
-                              (setf *workspace-tree*
-                                    (structural-editing-mcp.edit:overwrite-expression *workspace-tree* '(0 0 0) "(defun conflict-fn () :upstream-val)")))
+                                                    (setf *workspace-tree*
+                                                          (structural-editing-mcp.edit:overwrite-expression *workspace-tree* '(0 0 0) "(defun conflict-fn () :upstream-val)")))
                             ;; Feature branch changes conflict-fn to :feature-val
                             (with-workspace-context (ws-feat)
-                              (setf *workspace-tree*
-                                    (structural-editing-mcp.edit:overwrite-expression *workspace-tree* '(0 0 0) "(defun conflict-fn () :feature-val)")))
+                                                    (setf *workspace-tree*
+                                                          (structural-editing-mcp.edit:overwrite-expression *workspace-tree* '(0 0 0) "(defun conflict-fn () :feature-val)")))
                             ;; Diff shows colliding modifications
                             (let ((df (diff-workspaces "branch-feature" "branch-upstream")))
                               (ok (member (safe-truename file-path) (getf df :modified-in-both) :test #'equal))
@@ -388,8 +388,8 @@
                             (let ((rebase-res (rebase-workspace "branch-feature" :onto-id "branch-upstream" :strategy :theirs)))
                               (ok (equal "rebase" (getf rebase-res :action)))
                               (with-workspace-context (ws-feat)
-                                (let ((code (structural-editing-mcp.parser:sexp-to-string (get-node-at-path *workspace-tree* '(0 0 0)))))
-                                  (ok (search "upstream-val" code :test #'char-equal)))))))
+                                                      (let ((code (structural-editing-mcp.parser:sexp-to-string (get-node-at-path *workspace-tree* '(0 0 0)))))
+                                                        (ok (search "upstream-val" code :test #'char-equal)))))))
                       (when (probe-file file-path) (delete-file file-path))
                       (delete-workspace "branch-feature")
                       (delete-workspace "branch-upstream")
