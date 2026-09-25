@@ -425,110 +425,143 @@ If FORCE is nil and uncommitted dirty files would be overwritten, signals WORKSP
     (when coords
       (get-node-at-path (workspace-context-tree ctx) coords))))
 
-(defun merge-file-ast (base-file src-file tgt-file)
+(defun reconcile-file-forms
+       (max-len base-forms src-forms tgt-forms)
+  (let
+      ((merged-forms '()) (conflicts '()) (conflict-p nil))
+    (dotimes (i max-len)
+      (let
+          ((b (nth i base-forms)) (s (nth i src-forms)) (tg (nth i tgt-forms)))
+        (cond
+          ((and (equal s b) (equal tg b)) (when b (push (copy-tree b) merged-forms)))
+          ((and (not (equal s b)) (equal tg b))
+            (when s (push (copy-tree s) merged-forms)))
+          ((and (equal s b) (not (equal tg b)))
+            (when tg (push (copy-tree tg) merged-forms)))
+          ((equal s tg) (when s (push (copy-tree s) merged-forms)))
+          (t (setf conflict-p t) (push i conflicts)))))
+    (values merged-forms conflict-p conflicts)))
+
+(defun merge-file-ast
+       (base-file src-file tgt-file)
   "Perform a 3-way AST merge of SRC-FILE and TGT-FILE against BASE-FILE at the top-level form level.
 Returns (values merged-file-node conflict-p conflicting-indices)."
   (cond
-    ((equal src-file tgt-file)
-     (values (copy-tree src-file) nil nil))
-    ((null base-file)
-     (values nil t '(:no-base)))
+    ((equal src-file tgt-file) (values (copy-tree src-file) nil nil))
+    ((null base-file) (values nil t '(:no-base)))
     (t
-     (let* ((base-forms (get-node-children base-file))
-            (src-forms (get-node-children src-file))
-            (tgt-forms (get-node-children tgt-file))
-            (path (or (get-node-path tgt-file) (get-node-path src-file) '()))
-            (tag (or (get-node-tag tgt-file) (get-node-tag src-file) :file))
-            (max-len (max (length base-forms) (length src-forms) (length tgt-forms)))
-            (merged-forms '())
-            (conflicts '())
-            (conflict-p nil))
-       (dotimes (i max-len)
-         (let ((b (nth i base-forms))
-               (s (nth i src-forms))
-               (tg (nth i tgt-forms)))
-           (cond
-             ((and (equal s b) (equal tg b))
-              (when b (push (copy-tree b) merged-forms)))
-             ((and (not (equal s b)) (equal tg b))
-              (when s (push (copy-tree s) merged-forms)))
-             ((and (equal s b) (not (equal tg b)))
-              (when tg (push (copy-tree tg) merged-forms)))
-             ((equal s tg)
-              (when s (push (copy-tree s) merged-forms)))
-             (t
-              (setf conflict-p t)
-              (push i conflicts)))))
-       (if conflict-p
-           (values nil t (nreverse conflicts))
-           (let ((merged-node (list* :path path tag (nreverse merged-forms))))
-             (values (reindex-paths merged-node path) nil nil)))))))
+      (let*
+          ((base-forms (get-node-children base-file))
+           (src-forms (get-node-children src-file))
+           (tgt-forms (get-node-children tgt-file))
+           (path (or (get-node-path tgt-file) (get-node-path src-file) '()))
+           (tag (or (get-node-tag tgt-file) (get-node-tag src-file) :file))
+           (max-len (max (length base-forms) (length src-forms) (length tgt-forms))))
+        (multiple-value-bind
+            (merged-forms conflict-p conflicts)
+            (reconcile-file-forms max-len base-forms src-forms tgt-forms)
+          (if conflict-p
+            (values nil t (nreverse conflicts))
+            (let
+                ((merged-node (list* :path path tag (nreverse merged-forms))))
+              (values (reindex-paths merged-node path) nil nil))))))))
 
 (defun diff-workspaces-unlocked (src tgt)
   "Compare workspaces SRC and TGT without acquiring locks (caller must hold locks). Returns a plist summarizing discrepancies."
-  (let* ((src-files (workspace-all-files-list src))
-         (tgt-files (workspace-all-files-list tgt))
-         (src-dirty (workspace-dirty-files-list src))
-         (tgt-dirty (workspace-dirty-files-list tgt))
-         (source-only (set-difference src-files tgt-files :test #'equal))
-         (target-only (set-difference tgt-files src-files :test #'equal))
-         (common-files (intersection src-files tgt-files :test #'equal))
-         (both-dirty (intersection src-dirty tgt-dirty :test #'equal))
-         (source-modified-only (intersection src-dirty (set-difference common-files tgt-dirty :test #'equal) :test #'equal))
-         (target-modified-only (intersection tgt-dirty (set-difference common-files src-dirty :test #'equal) :test #'equal))
-         (ast-differing '())
-         (ast-mergeable '())
-         (colliding '())
-         (conflict-details '()))
+  (let*
+      ((src-files (workspace-all-files-list src))
+       (tgt-files (workspace-all-files-list tgt))
+       (src-dirty (workspace-dirty-files-list src))
+       (tgt-dirty (workspace-dirty-files-list tgt))
+       (source-only (set-difference src-files tgt-files :test #'equal))
+       (target-only (set-difference tgt-files src-files :test #'equal))
+       (common-files (intersection src-files tgt-files :test #'equal))
+       (both-dirty (intersection src-dirty tgt-dirty :test #'equal))
+       (source-modified-only
+         (intersection src-dirty
+                       (set-difference common-files tgt-dirty :test #'equal)
+                       :test
+                       #'equal))
+       (target-modified-only
+         (intersection tgt-dirty
+                       (set-difference common-files src-dirty :test #'equal)
+                       :test
+                       #'equal))
+       (ast-differing '())
+       (ast-mergeable '())
+       (colliding '())
+       (conflict-details '()))
     (dolist (f common-files)
-      (let ((node-src (get-file-node-in-workspace src f))
-            (node-tgt (get-file-node-in-workspace tgt f)))
-        (when (and node-src node-tgt (not (equal node-src node-tgt)))
+      (let
+          ((node-src (get-file-node-in-workspace src f))
+           (node-tgt (get-file-node-in-workspace tgt f)))
+        (when
+            (and node-src node-tgt (not (equal node-src node-tgt)))
           (push f ast-differing))))
     (dolist (f both-dirty)
-      (let ((base-node (or (gethash f (workspace-context-clean-state tgt))
-                           (gethash f (workspace-context-clean-state src))))
-            (src-node (get-file-node-in-workspace src f))
-            (tgt-node (get-file-node-in-workspace tgt f)))
-        (multiple-value-bind (merged-node conflict-p conflict-indices)
+      (let
+          ((base-node
+             (or
+               (gethash f (workspace-context-clean-state tgt))
+               (gethash f (workspace-context-clean-state src))))
+           (src-node (get-file-node-in-workspace src f))
+           (tgt-node (get-file-node-in-workspace tgt f)))
+        (multiple-value-bind
+            (merged-node conflict-p conflict-indices)
             (merge-file-ast base-node src-node tgt-node)
           (declare (ignore merged-node))
           (if conflict-p
-              (progn
-                (push f colliding)
-                (push (list :file f :conflicts conflict-indices) conflict-details))
-              (push f ast-mergeable)))))
-    (list :source-id (workspace-context-id src)
-          :target-id (workspace-context-id tgt)
-          :source-only source-only
-          :target-only target-only
-          :source-modified-only source-modified-only
-          :target-modified-only target-modified-only
-          :ast-mergeable ast-mergeable
-          :modified-in-both colliding
-          :conflict-details conflict-details
-          :ast-differing-files ast-differing)))
+            (progn (push f colliding)
+                   (push (list :file f :conflicts conflict-indices) conflict-details))
+            (push f ast-mergeable)))))
+    (list :source-id
+          (workspace-context-id src)
+          :target-id
+          (workspace-context-id tgt)
+          :source-only
+          source-only
+          :target-only
+          target-only
+          :source-modified-only
+          source-modified-only
+          :target-modified-only
+          target-modified-only
+          :ast-mergeable
+          ast-mergeable
+          :modified-in-both
+          colliding
+          :conflict-details
+          conflict-details
+          :ast-differing-files
+          ast-differing)))
 
 (defun diff-workspaces (source-id target-id)
   "Compare workspaces SOURCE-ID and TARGET-ID. Returns a plist summarizing discrepancies."
-  (let* ((src (get-workspace source-id))
-         (tgt (get-workspace target-id)))
-    (with-workspaces-locked (src tgt)
-                            (diff-workspaces-unlocked src tgt))))
+  (let*
+      ((src (get-workspace source-id)) (tgt (get-workspace target-id)))
+    (with-workspaces-locked (src tgt) (diff-workspaces-unlocked src tgt))))
 
-(defun copy-file-between-workspaces (src-ctx tgt-ctx filepath)
+(defun copy-file-between-workspaces
+       (src-ctx tgt-ctx filepath)
   "Transfer file FILEPATH from SRC-CTX into TGT-CTX."
-  (let ((node (get-file-node-in-workspace src-ctx filepath))
-        (dialect (or (file-dialect filepath) :common-lisp))
-        (clean-sources (gethash filepath (workspace-context-clean-sources src-ctx)))
-        (clean-state (gethash filepath (workspace-context-clean-state src-ctx))))
+  (let
+      ((node (get-file-node-in-workspace src-ctx filepath))
+       (dialect (or (file-dialect filepath) :common-lisp))
+       (clean-sources (gethash filepath (workspace-context-clean-sources src-ctx)))
+       (clean-state (gethash filepath (workspace-context-clean-state src-ctx))))
     (unless node
-      (error 'workspace-error :message (format nil "File ~A not found in workspace ~A" filepath (workspace-context-id src-ctx))))
+      (error 'workspace-error
+             :message
+             (format nil
+                     "File ~A not found in workspace ~A"
+                     filepath
+                     (workspace-context-id src-ctx))))
     (with-workspace-context (tgt-ctx)
                             (let ((coords (find-file-path-coords filepath)))
                               (if coords
                                 (progn
-                                  (setf *workspace-tree* (overwrite-node *workspace-tree* coords (copy-tree node)))
+                                  (setf *workspace-tree*
+                                        (overwrite-node *workspace-tree* coords (copy-tree node)))
                                   (setf (gethash filepath *file-clean-sources*) clean-sources))
                                 (multiple-value-bind (parsed-node sources)
                                                      (string-to-sexp (sexp-to-string node :dialect dialect) :dialect dialect)
@@ -540,119 +573,175 @@ Returns (values merged-file-node conflict-p conflicting-indices)."
                                 (remhash filepath *file-clean-state*)))
                             (setf *workspace-tree* (reindex-paths *workspace-tree*)))))
 
-(defun merge-workspaces (source-id target-id &key files (strategy :fast-forward-or-disjoint))
+(defun merge-ast-files-into-workspace
+       (tgt src ast-merge-files)
+  "Merge 3-way AST nodes for AST-MERGE-FILES from SRC into TGT workspace."
+  (dolist (f ast-merge-files)
+    (let*
+        ((base-node
+           (or
+             (gethash f (workspace-context-clean-state tgt))
+             (gethash f (workspace-context-clean-state src))))
+         (src-node (get-file-node-in-workspace src f))
+         (tgt-node (get-file-node-in-workspace tgt f))
+         (merged-node (merge-file-ast base-node src-node tgt-node)))
+      (with-workspace-context (tgt)
+                              (let ((coords (find-file-path-coords f)))
+                                (when coords
+                                  (setf *workspace-tree* (overwrite-node *workspace-tree* coords merged-node))
+                                  (setf *workspace-tree* (reindex-paths *workspace-tree*))))))))
+
+(defun merge-workspaces
+       (source-id target-id &key files (strategy :fast-forward-or-disjoint))
   "Merge SOURCE-ID into TARGET-ID.
 If FILES is provided, transfers only those files.
 Otherwise performs fast-forward or disjoint/AST-level merge, signaling WORKSPACE-MERGE-CONFLICT-ERROR on conflicting modifications."
-  (let* ((src (get-workspace source-id))
-         (tgt (get-workspace target-id)))
-    (when (equal (workspace-context-id src) (workspace-context-id tgt))
-      (error 'workspace-error :message (format nil "Cannot merge workspace ~S into itself" (workspace-context-id src))))
+  (declare (ignore strategy))
+  (let*
+      ((src (get-workspace source-id)) (tgt (get-workspace target-id)))
+    (when
+        (equal (workspace-context-id src) (workspace-context-id tgt))
+      (error 'workspace-error
+             :message
+             (format nil "Cannot merge workspace ~S into itself" (workspace-context-id src))))
     (with-workspaces-locked (src tgt)
                             (let ((diff (diff-workspaces-unlocked src tgt)))
                               (cond
                                 ;; Selective file merge
                                 (files
-                                  (let ((target-files (mapcar (lambda (f) (or (safe-truename f) f)) (ensure-list files))))
-                                    (dolist (f target-files)
-                                      (copy-file-between-workspaces src tgt f))
+                                  (let
+                                      ((target-files
+                                         (mapcar
+                                           (lambda (f)
+                                             (or (safe-truename f) f))
+                                           (ensure-list files))))
+                                    (dolist (f target-files) (copy-file-between-workspaces src tgt f))
                                     (incf (workspace-context-revision tgt))
                                     (list :action "selective" :merged-files target-files)))
                                 ;; Fast-forward: target has not moved since fork and has not loaded new files or changes
-                                ((and (equal (workspace-context-parent-id src) (workspace-context-id tgt))
-                                      (= (workspace-context-revision tgt) (workspace-context-base-revision src))
-                                      (null (workspace-dirty-files-list tgt))
-                                      (null (getf diff :target-only)))
+                                ((and
+                                   (equal (workspace-context-parent-id src) (workspace-context-id tgt))
+                                   (= (workspace-context-revision tgt) (workspace-context-base-revision src))
+                                   (null (workspace-dirty-files-list tgt))
+                                   (null (getf diff :target-only)))
                                   (setf (workspace-context-tree tgt) (copy-tree (workspace-context-tree src)))
-                                  (setf (workspace-context-file-registry tgt) (copy-hash-table (workspace-context-file-registry src)))
-                                  (setf (workspace-context-clean-state tgt) (copy-hash-table (workspace-context-clean-state src) :test 'equal))
-                                  (setf (workspace-context-clean-sources tgt) (copy-hash-table (workspace-context-clean-sources src) :test 'equal))
+                                  (setf (workspace-context-file-registry tgt)
+                                        (copy-hash-table (workspace-context-file-registry src)))
+                                  (setf (workspace-context-clean-state tgt)
+                                        (copy-hash-table (workspace-context-clean-state src) :test 'equal))
+                                  (setf (workspace-context-clean-sources tgt)
+                                        (copy-hash-table (workspace-context-clean-sources src) :test 'equal))
                                   (setf (workspace-context-next-file-id tgt) (workspace-context-next-file-id src))
                                   (setf (workspace-context-revision tgt) (workspace-context-revision src))
-                                  (list :action "fast-forward" :merged-files (or (getf diff :source-modified-only) (getf diff :source-only))))
+                                  (list :action
+                                        "fast-forward"
+                                        :merged-files
+                                        (or (getf diff :source-modified-only) (getf diff :source-only))))
                                 ;; Disjoint files and AST-mergeable files
                                 (t
                                   (when (getf diff :modified-in-both)
                                     (error 'workspace-merge-conflict-error
-                                           :source-id (workspace-context-id src)
-                                           :target-id (workspace-context-id tgt)
-                                           :conflicting-files (getf diff :modified-in-both)
-                                           :conflicting-details (getf diff :conflict-details)))
-                                  (let ((files-to-merge (append (getf diff :source-only) (getf diff :source-modified-only)))
-                                        (ast-merge-files (getf diff :ast-mergeable)))
-                                    (dolist (f files-to-merge)
-                                      (copy-file-between-workspaces src tgt f))
-                                    (dolist (f ast-merge-files)
-                                      (let* ((base-node (or (gethash f (workspace-context-clean-state tgt))
-                                                            (gethash f (workspace-context-clean-state src))))
-                                             (src-node (get-file-node-in-workspace src f))
-                                             (tgt-node (get-file-node-in-workspace tgt f))
-                                             (merged-node (merge-file-ast base-node src-node tgt-node)))
-                                        (with-workspace-context (tgt)
-                                          (let ((coords (find-file-path-coords f)))
-                                            (when coords
-                                              (setf *workspace-tree* (overwrite-node *workspace-tree* coords merged-node))
-                                              (setf *workspace-tree* (reindex-paths *workspace-tree*)))))))
+                                           :source-id
+                                           (workspace-context-id src)
+                                           :target-id
+                                           (workspace-context-id tgt)
+                                           :conflicting-files
+                                           (getf diff :modified-in-both)
+                                           :conflicting-details
+                                           (getf diff :conflict-details)))
+                                  (let
+                                      ((files-to-merge
+                                         (append (getf diff :source-only) (getf diff :source-modified-only)))
+                                       (ast-merge-files (getf diff :ast-mergeable)))
+                                    (dolist (f files-to-merge) (copy-file-between-workspaces src tgt f))
+                                    (merge-ast-files-into-workspace tgt src ast-merge-files)
                                     (incf (workspace-context-revision tgt))
-                                    (list :action (if ast-merge-files "disjoint-and-ast-merge" "disjoint")
-                                          :merged-files (append files-to-merge ast-merge-files)))))))))
+                                    (list :action
+                                          (if ast-merge-files
+                                            "disjoint-and-ast-merge"
+                                            "disjoint")
+                                          :merged-files
+                                          (append files-to-merge ast-merge-files)))))))))
 
-(defun rebase-workspace (source-id &key (onto-id "default") (strategy :error))
+(defun rebase-workspace
+       (source-id &key (onto-id "default") (strategy :error))
   "Rebase SOURCE-ID workspace onto ONTO-ID workspace.
 Transfers upstream files, applies non-conflicting upstream changes, and performs 3-way AST merges on modified files.
 STRATEGY can be :error (signal on collision), :theirs (accept onto version), or :ours (keep source version)."
-  (let* ((src (get-workspace source-id))
-         (onto (get-workspace onto-id))
-         (norm-strategy (if (stringp strategy) (intern (string-upcase strategy) :keyword) strategy)))
-    (when (equal (workspace-context-id src) (workspace-context-id onto))
-      (error 'workspace-error :message (format nil "Cannot rebase workspace ~S onto itself" (workspace-context-id src))))
+  (let*
+      ((src (get-workspace source-id))
+       (onto (get-workspace onto-id))
+       (norm-strategy
+         (if (stringp strategy)
+           (intern (string-upcase strategy) :keyword)
+           strategy)))
+    (when
+        (equal (workspace-context-id src) (workspace-context-id onto))
+      (error 'workspace-error
+             :message
+             (format nil "Cannot rebase workspace ~S onto itself" (workspace-context-id src))))
     (with-workspaces-locked (src onto)
-      (let* ((diff (diff-workspaces-unlocked src onto))
-             (onto-only (getf diff :target-only))
-             (onto-modified (getf diff :target-modified-only))
-             (both-modified (append (getf diff :ast-mergeable) (getf diff :modified-in-both)))
-             (conflicts (getf diff :modified-in-both))
-             (conflict-details (getf diff :conflict-details))
-             (updated-files '()))
-        (when (and conflicts (eq norm-strategy :error))
-          (error 'workspace-merge-conflict-error
-                 :source-id (workspace-context-id src)
-                 :target-id (workspace-context-id onto)
-                 :conflicting-files conflicts
-                 :conflicting-details conflict-details))
-        (dolist (f onto-only)
-          (copy-file-between-workspaces onto src f)
-          (push f updated-files))
-        (dolist (f onto-modified)
-          (copy-file-between-workspaces onto src f)
-          (push f updated-files))
-        (dolist (f both-modified)
-          (let* ((base-node (or (gethash f (workspace-context-clean-state onto))
-                                (gethash f (workspace-context-clean-state src))))
-                 (src-node (get-file-node-in-workspace src f))
-                 (onto-node (get-file-node-in-workspace onto f)))
-            (multiple-value-bind (merged-node conflict-p)
-                (merge-file-ast base-node src-node onto-node)
-              (let ((chosen-node
-                      (cond
-                        ((not conflict-p) merged-node)
-                        ((eq norm-strategy :theirs) (copy-tree onto-node))
-                        ((eq norm-strategy :ours) (copy-tree src-node))
-                        (t (copy-tree onto-node)))))
-                (with-workspace-context (src)
-                  (let ((coords (find-file-path-coords f)))
-                    (when coords
-                      (setf *workspace-tree* (overwrite-node *workspace-tree* coords chosen-node))
-                      (setf *workspace-tree* (reindex-paths *workspace-tree*))))
-                  (push f updated-files))))))
-        (setf (workspace-context-parent-id src) (workspace-context-id onto))
-        (setf (workspace-context-base-revision src) (workspace-context-revision onto))
-        (incf (workspace-context-revision src))
-        (list :action "rebase"
-              :source-id (workspace-context-id src)
-              :onto-id (workspace-context-id onto)
-              :updated-files (remove-duplicates updated-files :test #'equal)
-              :strategy norm-strategy)))))
+                            (let*
+                                ((diff (diff-workspaces-unlocked src onto))
+                                 (onto-only (getf diff :target-only))
+                                 (onto-modified (getf diff :target-modified-only))
+                                 (both-modified
+                                   (append (getf diff :ast-mergeable) (getf diff :modified-in-both)))
+                                 (conflicts (getf diff :modified-in-both))
+                                 (conflict-details (getf diff :conflict-details))
+                                 (updated-files '()))
+                              (when (and conflicts (eq norm-strategy :error))
+                                (error 'workspace-merge-conflict-error
+                                       :source-id
+                                       (workspace-context-id src)
+                                       :target-id
+                                       (workspace-context-id onto)
+                                       :conflicting-files
+                                       conflicts
+                                       :conflicting-details
+                                       conflict-details))
+                              (dolist (f onto-only)
+                                (copy-file-between-workspaces onto src f)
+                                (push f updated-files))
+                              (dolist (f onto-modified)
+                                (copy-file-between-workspaces onto src f)
+                                (push f updated-files))
+                              (dolist (f both-modified)
+                                (let*
+                                    ((base-node
+                                       (or
+                                         (gethash f (workspace-context-clean-state onto))
+                                         (gethash f (workspace-context-clean-state src))))
+                                     (src-node (get-file-node-in-workspace src f))
+                                     (onto-node (get-file-node-in-workspace onto f)))
+                                  (multiple-value-bind (merged-node conflict-p)
+                                                       (merge-file-ast base-node src-node onto-node)
+                                    (let
+                                        ((chosen-node
+                                           (cond
+                                             ((not conflict-p) merged-node)
+                                             ((eq norm-strategy :theirs) (copy-tree onto-node))
+                                             ((eq norm-strategy :ours) (copy-tree src-node))
+                                             (t (copy-tree onto-node)))))
+                                      (with-workspace-context (src)
+                                                              (let ((coords (find-file-path-coords f)))
+                                                                (when coords
+                                                                  (setf *workspace-tree* (overwrite-node *workspace-tree* coords chosen-node))
+                                                                  (setf *workspace-tree* (reindex-paths *workspace-tree*))))
+                                                              (push f updated-files))))))
+                              (setf (workspace-context-parent-id src) (workspace-context-id onto))
+                              (setf (workspace-context-base-revision src) (workspace-context-revision onto))
+                              (incf (workspace-context-revision src))
+                              (list :action
+                                    "rebase"
+                                    :source-id
+                                    (workspace-context-id src)
+                                    :onto-id
+                                    (workspace-context-id onto)
+                                    :updated-files
+                                    (remove-duplicates updated-files :test #'equal)
+                                    :strategy
+                                    norm-strategy)))))
 
 (defun normalize-agent-id (agent-id)
   "Return AGENT-ID, defaulting to \"default\" if nil or empty string."
@@ -675,27 +764,37 @@ STRATEGY can be :error (signal on collision), :theirs (accept onto version), or 
     ((>= (length target-path) 2) (subseq target-path 0 2))
     (t target-path)))
 
-(defun record-agent-read (&optional (agent-id "default"))
+(defun record-agent-read
+       (&optional (agent-id "default"))
   "Record that AGENT-ID has observed the current *WORKSPACE-REVISION*."
   (let ((id (normalize-agent-id agent-id)))
     (setf (gethash id *agent-views*) *workspace-revision*)))
 
-(defun validate-agent-edit (&key (agent-id "default") target-path)
+(defun validate-agent-edit
+       (&key (agent-id "default") target-path)
   "Validate that AGENT-ID is editing against the current *WORKSPACE-REVISION*.
 Signals OCC-CONFLICT-ERROR if the workspace has changed since the agent's last read or edit."
-  (let* ((id (normalize-agent-id agent-id))
-         (agent-rev (gethash id *agent-views*)))
-    (when (or (and agent-rev (/= agent-rev *workspace-revision*))
-              (and (null agent-rev) (> *workspace-revision* 1)))
+  (let*
+      ((id (normalize-agent-id agent-id)) (agent-rev (gethash id *agent-views*)))
+    (when
+        (or
+          (and agent-rev (/= agent-rev *workspace-revision*))
+          (and (null agent-rev) (> *workspace-revision* 1)))
       (error 'occ-conflict-error
-             :agent-id id
-             :target-path target-path
-             :suggested-read-path (compute-suggested-read-path target-path)
-             :current-revision *workspace-revision*
-             :agent-revision agent-rev))
+             :agent-id
+             id
+             :target-path
+             target-path
+             :suggested-read-path
+             (compute-suggested-read-path target-path)
+             :current-revision
+             *workspace-revision*
+             :agent-revision
+             agent-rev))
     t))
 
-(defun commit-agent-edit (&optional (agent-id "default"))
+(defun commit-agent-edit
+       (&optional (agent-id "default"))
   "Advance *WORKSPACE-REVISION* and update AGENT-ID's view to the new revision."
   (let ((id (normalize-agent-id agent-id)))
     (incf *workspace-revision*)
@@ -704,15 +803,19 @@ Signals OCC-CONFLICT-ERROR if the workspace has changed since the agent's last r
 
 (defun get-filepath (id-or-path)
   "Get the filepath associated with numerical ID or tree path."
-  (let ((key (if (vectorp id-or-path) (coerce id-or-path 'list) id-or-path)))
+  (let
+      ((key
+         (if (vectorp id-or-path)
+           (coerce id-or-path 'list)
+           id-or-path)))
     (or (gethash key *file-registry*)
         (when (and (listp key) (>= (length key) 2))
           (gethash (subseq key 0 2) *file-registry*)))))
 
 (defun file-dialect (pathname-or-string)
   "Return the dialect keyword (:common-lisp, :clojure, etc.) for PATHNAME-OR-STRING, or NIL if unrecognized."
-  (let* ((p (pathname pathname-or-string))
-         (type (pathname-type p)))
+  (let*
+      ((p (pathname pathname-or-string)) (type (pathname-type p)))
     (when type
       (cdr (assoc (string-downcase type) *dialect-extensions* :test #'string=)))))
 
@@ -722,23 +825,25 @@ Signals OCC-CONFLICT-ERROR if the workspace has changed since the agent's last r
 
 (defun ignored-dir-p (dir-pathname)
   "Return T if DIR-PATHNAME should be ignored when walking directories."
-  (let ((name (lastcar (pathname-directory dir-pathname))))
+  (let
+      ((name (lastcar (pathname-directory dir-pathname))))
     (and name
          (or (string-prefix-p "." name)
              (member (string-downcase name)
-                     '("target" "node_modules" "fasl" "dist" "build" "bin" "obj")
-                     :test #'string=)))))
+                     '
+                     ("target" "node_modules" "fasl" "dist" "build" "bin" "obj")
+                     :test
+                     #'string=)))))
 
 (defun scan-directory-lisp-files (dir)
   "Recursively scan DIR for all Lisp files, skipping ignored directories."
   (let ((result '()))
-    (labels ((walk (d)
-               (unless (ignored-dir-p d)
-                 (dolist (f (uiop:directory-files d))
-                   (when (lisp-file-p f)
-                     (push (namestring (truename f)) result)))
-                 (dolist (sub (uiop:subdirectories d))
-                   (walk sub)))))
+    (labels
+        ((walk (d)
+           (unless (ignored-dir-p d)
+             (dolist (f (uiop:directory-files d))
+               (when (lisp-file-p f) (push (namestring (truename f)) result)))
+             (dolist (sub (uiop:subdirectories d)) (walk sub)))))
       (walk dir)
       (nreverse result))))
 
@@ -748,92 +853,119 @@ Non-Lisp files, ignored directories, and non-existent paths return NIL."
   (let ((p (probe-file path)))
     (cond
       ((null p) nil)
-      ((uiop:directory-pathname-p p)
-        (scan-directory-lisp-files p))
-      ((lisp-file-p p)
-        (list (namestring (truename p))))
+      ((uiop:directory-pathname-p p) (scan-directory-lisp-files p))
+      ((lisp-file-p p) (list (namestring (truename p))))
       (t nil))))
 
 (defun file-loaded-p (filepath)
   "Return T if FILEPATH is already tracked in *FILE-REGISTRY*."
   (let ((true-target (safe-truename filepath)))
-    (some (lambda (path)
-            (and (stringp path)
-                 (or (string= filepath path)
-                     (and true-target
-                          (let ((true-path (safe-truename path)))
-                            (and true-path (string= true-target true-path)))))))
-          (hash-table-values *file-registry*))))
+    (some
+      (lambda (path)
+        (and (stringp path)
+             (or (string= filepath path)
+                 (and true-target
+                      (let ((true-path (safe-truename path)))
+                        (and true-path (string= true-target true-path)))))))
+      (hash-table-values *file-registry*))))
 
 (defun find-loaded-file-id (canonical-path)
   "Return existing file ID for CANONICAL-PATH from *FILE-REGISTRY*, or NIL."
-  (find-if (lambda (id)
-             (let ((path (gethash id *file-registry*)))
-               (string= canonical-path (or (safe-truename path) path))))
-           (remove-if-not #'integerp (hash-table-keys *file-registry*))))
+  (find-if
+    (lambda (id)
+      (let ((path (gethash id *file-registry*)))
+        (string= canonical-path (or (safe-truename path) path))))
+    (remove-if-not #'integerp (hash-table-keys *file-registry*))))
 
-(defun insert-file-into-workspace (parsed-file-node canonical-path dialect)
+(defun insert-file-into-workspace
+       (parsed-file-node canonical-path dialect)
   "Register and insert PARSED-FILE-NODE into *WORKSPACE-TREE* under DIALECT partition.
 Returns the newly assigned numerical file ID."
-  (let* ((workspace-children (get-node-children *workspace-tree*))
-         (new-id *next-file-id*)
-         (dialect-pos (position dialect workspace-children :key #'get-node-tag))
-         (d-idx (or dialect-pos (length workspace-children)))
-         (dialect-node (if dialect-pos
-                         (nth dialect-pos workspace-children)
-                         `(:path () ,dialect)))
-         (dialect-files (get-node-children dialect-node))
-         (f-idx (length dialect-files))
-         (updated-dialect-node `(:path () ,dialect ,@dialect-files ,parsed-file-node)))
+  (let*
+      ((workspace-children (get-node-children *workspace-tree*))
+       (new-id *next-file-id*)
+       (dialect-pos (position dialect workspace-children :key #'get-node-tag))
+       (d-idx (or dialect-pos (length workspace-children)))
+       (dialect-node
+         (if dialect-pos
+           (nth dialect-pos workspace-children)
+           `
+           (:path () ,dialect)))
+       (dialect-files (get-node-children dialect-node))
+       (f-idx (length dialect-files))
+       (updated-dialect-node ` (:path () ,dialect ,@dialect-files ,parsed-file-node)))
     (incf *next-file-id*)
     (setf (gethash new-id *file-registry*) canonical-path)
     (setf (gethash (list d-idx f-idx) *file-registry*) canonical-path)
     (if dialect-pos
-      (let ((new-children (copy-list workspace-children)))
+      (let
+          ((new-children (copy-list workspace-children)))
         (setf (nth dialect-pos new-children) updated-dialect-node)
-        (setf *workspace-tree* `(:path () :workspace ,@new-children)))
-      (setf *workspace-tree* `(:path () :workspace ,@workspace-children ,updated-dialect-node)))
+        (setf *workspace-tree* ` (:path () :workspace ,@new-children)))
+      (setf *workspace-tree*
+            `
+            (:path () :workspace ,@workspace-children ,updated-dialect-node)))
     (setf *workspace-tree* (reindex-paths *workspace-tree*))
     new-id))
 
 (defun find-file-path-coords (canonical-path)
   "Locate the workspace tree coordinate path for CANONICAL-PATH."
-  (loop for k being the hash-keys of *file-registry*
-        using (hash-value v)
-        when (and (listp k) (equal v canonical-path))
-        return k))
+  (loop for
+        k
+        being
+        the
+        hash-keys
+        of
+        *file-registry*
+        using
+        (hash-value v)
+        when
+        (and (listp k) (equal v canonical-path))
+        return
+        k))
 
-(defun register-clean-file-state (canonical-path parsed-file-node)
+(defun register-clean-file-state
+       (canonical-path parsed-file-node)
   "Record clean snapshot of PARSED-FILE-NODE for CANONICAL-PATH."
-  (let* ((coords (find-file-path-coords canonical-path))
-         (reindexed (and coords (get-node-at-path *workspace-tree* coords))))
+  (let*
+      ((coords (find-file-path-coords canonical-path))
+       (reindexed (and coords (get-node-at-path *workspace-tree* coords))))
     (setf (gethash canonical-path *file-clean-state*)
           (copy-tree (or reindexed parsed-file-node)))))
 
-(defun parse-and-register-file (canonical-path text dialect)
+(defun parse-and-register-file
+       (canonical-path text dialect)
   "Parse TEXT into AST, insert into workspace, and record clean source state."
-  (multiple-value-bind (parsed-file-node toplevel-sources)
-                       (string-to-sexp text :dialect dialect)
+  (multiple-value-bind
+      (parsed-file-node toplevel-sources)
+      (string-to-sexp text :dialect dialect)
     (setf (gethash canonical-path *file-clean-sources*) toplevel-sources)
-    (let ((id (insert-file-into-workspace parsed-file-node canonical-path dialect)))
+    (let
+        ((id (insert-file-into-workspace parsed-file-node canonical-path dialect)))
       (register-clean-file-state canonical-path parsed-file-node)
       id)))
 
-(defun try-load-file-text (canonical-path filepath dialect)
+(defun try-load-file-text
+       (canonical-path filepath dialect)
   "Read and register file contents, returning file ID or NIL on failure."
   (handler-case
-      (let ((text (uiop:read-file-string canonical-path)))
+      (let
+          ((text (uiop:read-file-string canonical-path)))
         (parse-and-register-file canonical-path text dialect))
     (error (c)
-      (format *error-output* "~&[Workspace] Warning: failed to load ~A: ~A~%" filepath c)
+      (format *error-output*
+              "~&[Workspace] Warning: failed to load ~A: ~A~%"
+              filepath
+              c)
      nil)))
 
 (defun read-workspace-file (filepath)
   "Read a file from disk, parse it, add it to the dialect partition in the workspace tree, and return its ID.
 If the file is already loaded, returns its existing ID. Gracefully returns NIL on parse/read failure."
   (ensure-workspace)
-  (let* ((canonical-path (or (safe-truename filepath) filepath))
-         (dialect (or (file-dialect canonical-path) :common-lisp)))
+  (let*
+      ((canonical-path (or (safe-truename filepath) filepath))
+       (dialect (or (file-dialect canonical-path) :common-lisp)))
     (or (find-loaded-file-id canonical-path)
         (try-load-file-text canonical-path filepath dialect))))
 
@@ -842,46 +974,71 @@ If the file is already loaded, returns its existing ID. Gracefully returns NIL o
 filter for Lisp files, and load them into the workspace tree.
 Returns a list of loaded numerical file IDs."
   (ensure-workspace)
-  (let ((files (remove-duplicates (mappend #'collect-lisp-files (ensure-list paths)) :test #'equal)))
+  (let
+      ((files
+         (remove-duplicates
+           (mappend #'collect-lisp-files (ensure-list paths))
+           :test
+           #'equal)))
     (filter-map #'read-workspace-file files)))
 
-(defun file-clean-p (file-node &optional fallback-path)
+(defun file-clean-p
+       (file-node &optional fallback-path)
   "Return T if FILE-NODE is structurally identical to its clean loaded state."
-  (let* ((path (get-node-path file-node))
-         (filepath (or (get-filepath path) (when fallback-path (get-filepath fallback-path)))))
+  (let*
+      ((path (get-node-path file-node))
+       (filepath
+         (or (get-filepath path) (when fallback-path (get-filepath fallback-path)))))
     (and filepath
-         (let ((clean-node (gethash filepath *file-clean-state*)))
+         (let
+             ((clean-node (gethash filepath *file-clean-state*)))
            (and clean-node (equal file-node clean-node))))))
 
-(defun update-written-file-clean-state (filepath file-node dialect)
+(defun update-written-file-clean-state
+       (filepath file-node dialect)
   "Re-parse written file on disk to update clean state and clean sources."
-  (let ((written-text (uiop:read-file-string filepath)))
+  (let
+      ((written-text (uiop:read-file-string filepath)))
     (multiple-value-bind (re-parsed new-sources)
                          (string-to-sexp written-text :dialect dialect)
       (declare (ignore re-parsed))
       (setf (gethash filepath *file-clean-state*) (copy-tree file-node))
       (setf (gethash filepath *file-clean-sources*) new-sources))))
 
-(defun write-file-node-to-disk (file-node dialect &optional fallback-path)
+(defun write-file-node-to-disk
+       (file-node dialect &optional fallback-path)
   "Write a single :file node to its registered filepath on disk."
-  (let* ((path (get-node-path file-node))
-         (filepath (or (get-filepath path) (when fallback-path (get-filepath fallback-path)))))
+  (let*
+      ((path (get-node-path file-node))
+       (filepath
+         (or (get-filepath path) (when fallback-path (get-filepath fallback-path)))))
     (when filepath
-      (let ((clean-node (gethash filepath *file-clean-state*))
-            (clean-sources (gethash filepath *file-clean-sources*)))
-        (uiop:with-output-file (out filepath :if-exists :supersede :if-does-not-exist :create)
-                               (if (and clean-node clean-sources)
-                                 (structural-editing-mcp.parser:print-file-with-clean-sources file-node clean-node clean-sources out dialect)
-                                 (print-sexp file-node out 0 :dialect dialect)))
+      (let
+          ((clean-node (gethash filepath *file-clean-state*))
+           (clean-sources (gethash filepath *file-clean-sources*)))
+        (uiop:with-output-file
+          (out filepath :if-exists :supersede :if-does-not-exist :create)
+          (if (and clean-node clean-sources)
+            (structural-editing-mcp.parser:print-file-with-clean-sources
+              file-node
+              clean-node
+              clean-sources
+              out
+              dialect)
+            (print-sexp file-node out 0 :dialect dialect)))
         (update-written-file-clean-state filepath file-node dialect)))))
 
-(defun write-dirty-dialect-files (dialect-node dialect &optional allowed-files)
+(defun write-dirty-dialect-files
+       (dialect-node dialect &optional allowed-files)
   "Write modified file nodes under DIALECT-NODE to disk, filtering by ALLOWED-FILES if non-nil."
-  (dolist (file-node (get-node-children dialect-node))
-    (let ((fp (get-filepath (get-node-path file-node))))
-      (when (and fp
-                 (or (null allowed-files) (member fp allowed-files :test #'equal))
-                 (not (file-clean-p file-node)))
+  (dolist
+      (file-node (get-node-children dialect-node))
+    (let
+        ((fp (get-filepath (get-node-path file-node))))
+      (when
+          (and fp
+               (or (null allowed-files) (member fp allowed-files :test #'equal))
+               (not (file-clean-p file-node)))
         (write-file-node-to-disk file-node dialect)))))
 
 (defun write-workspace (&optional files)
@@ -889,17 +1046,27 @@ Returns a list of loaded numerical file IDs."
 If FILES is provided, commits only matching files."
   (unless *workspace-tree*
     (error 'workspace-error :message "No workspace initialized."))
-  (let ((allowed (when files
-                   (mapcar (lambda (f) (or (safe-truename f) f)) (ensure-list files)))))
-    (dolist (child (get-node-children *workspace-tree*))
+  (let
+      ((allowed
+         (when files
+           (mapcar
+             (lambda (f)
+               (or (safe-truename f) f))
+             (ensure-list files)))))
+    (dolist
+        (child (get-node-children *workspace-tree*))
       (let ((child-tag (get-node-tag child)))
         (cond
           ((member child-tag *known-dialects*)
             (write-dirty-dialect-files child child-tag allowed))
           ((eq child-tag :file)
-            (let* ((fallback (first (get-node-path child)))
-                   (fp (or (get-filepath (get-node-path child)) (when fallback (get-filepath fallback)))))
-              (when (and fp
-                         (or (null allowed) (member fp allowed :test #'equal))
-                         (not (file-clean-p child fallback)))
+            (let*
+                ((fallback (first (get-node-path child)))
+                 (fp
+                   (or (get-filepath (get-node-path child))
+                       (when fallback (get-filepath fallback)))))
+              (when
+                  (and fp
+                       (or (null allowed) (member fp allowed :test #'equal))
+                       (not (file-clean-p child fallback)))
                 (write-file-node-to-disk child :common-lisp fallback)))))))))

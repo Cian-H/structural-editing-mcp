@@ -394,6 +394,18 @@
                 "  ... (~A more files; use limit and offset in read_node to paginate)~%"
                 (- total end))))))
 
+(defun format-node-code-and-metrics
+       (s node code children skeleton-p)
+  "Format either SKELETON metrics or full rendered CODE to stream S."
+  (if skeleton-p
+    (progn
+      (format s "Mode: SKELETON (full code suppressed to prevent context blowout)~%")
+      (format s "Metrics:~%")
+      (format s "  Direct Child Forms: ~D~%" (length children))
+      (format s "  Total Subtree Nodes: ~D~%" (count-subtree-nodes node))
+      (format s "  Approx Code Length: ~D characters~%" (length code)))
+    (format s "Code:~%~A~%" code)))
+
 (defun format-node-preview
        (node &key (depth 2) (limit 50) (offset 0) (mode "full"))
   "Format a node with its path, tag, rendered code, and summary of children up to DEPTH with pagination. Supports 'skeleton' mode to prevent context blowout on wide nodes."
@@ -427,14 +439,7 @@
             (let
                 ((filepath (structural-editing-mcp.workspace:get-filepath path)))
               (when filepath (format s "File: ~A~%" filepath)))
-            (if skeleton-p
-              (progn
-                (format s "Mode: SKELETON (full code suppressed to prevent context blowout)~%")
-                (format s "Metrics:~%")
-                (format s "  Direct Child Forms: ~D~%" (length children))
-                (format s "  Total Subtree Nodes: ~D~%" (count-subtree-nodes node))
-                (format s "  Approx Code Length: ~D characters~%" (length code)))
-              (format s "Code:~%~A~%" code))
+            (format-node-code-and-metrics s node code children skeleton-p)
             (format-children-preview s
                                      children
                                      path
@@ -447,14 +452,7 @@
                                      :skeleton
                                      skeleton-p))
           (t
-            (if skeleton-p
-              (progn
-                (format s "Mode: SKELETON (full code suppressed to prevent context blowout)~%")
-                (format s "Metrics:~%")
-                (format s "  Direct Child Forms: ~D~%" (length children))
-                (format s "  Total Subtree Nodes: ~D~%" (count-subtree-nodes node))
-                (format s "  Approx Code Length: ~D characters~%" (length code)))
-              (format s "Code:~%~A~%" code))
+            (format-node-code-and-metrics s node code children skeleton-p)
             (format-children-preview s
                                      children
                                      path
@@ -1515,65 +1513,18 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                 "YES"
                 "no")))))
 
-(defun manage-create-file (args ws-id)
-  "Create or add a file in the given workspace."
-  (let*
-      ((filepath
-         (or (href args "filepath") (href args "file_path") (href args "file")))
-       (content (or (href args "content") ""))
-       (ws (structural-editing-mcp.workspace:get-workspace ws-id)))
-    (unless filepath (error "filepath is required for create_file"))
-    (structural-editing-mcp.workspace:add-file-to-workspace
-      filepath
-      :content
-      content
-      :dialect
-      (or (href args "dialect")
-          (structural-editing-mcp.workspace:file-dialect filepath))
-      :ctx
-      ws)
-    (fmt
-      "File ~S created successfully in workspace ~S (staged in memory)."
-      filepath
-      ws-id)))
-
-(defun manage-rebase-workspace (args ws-id)
-  "Rebase a workspace onto another workspace."
-  (let*
-      ((onto-id
-         (or (href args "source_id")
-             (href args "target_id")
-             (href args "target_workspace_id")
-             (href args "onto")
-             "default"))
-       (strategy (or (href args "strategy") "error"))
-       (res
-         (structural-editing-mcp.workspace:rebase-workspace
-           ws-id
-           :onto-id
-           onto-id
-           :strategy
-           strategy)))
-    (fmt
-      "Workspace ~S successfully rebased onto ~S (~A file(s) updated)."
-      ws-id
-      onto-id
-      (length (getf res :updated-files)))))
-
-(defun manage-reload-workspace
-       (ws-id files force)
-  "Reload workspace files from disk."
-  (let*
-      ((ws (structural-editing-mcp.workspace:get-workspace ws-id))
-       (reloaded
-         (structural-editing-mcp.workspace:reload-workspace
-           :ctx
-           ws
-           :files
-           files
-           :force
-           force)))
-    (fmt "Workspace ~S reloaded ~A file(s) from disk." ws-id (length reloaded))))
+(defun manage-snapshot-restore
+       (action ws-id snap-name)
+  "Handle snapshot and restore actions for workspace WS-ID."
+  (let
+      ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+    (cond
+      ((equal action "snapshot")
+        (structural-editing-mcp.workspace:snapshot-workspace snap-name ws)
+        (fmt "Snapshot ~S created for workspace ~S." snap-name ws-id))
+      ((equal action "restore")
+        (structural-editing-mcp.workspace:restore-workspace snap-name ws)
+        (fmt "Workspace ~S restored from snapshot ~S." ws-id snap-name)))))
 
 (defun handle-tool-workspace-manage (args)
   "Handle workspace_manage lifecycle actions: create, list, delete, clear, fork, snapshot, restore, reload."
@@ -1604,16 +1555,8 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
         (unless target-id (error "target_id required for fork"))
         (structural-editing-mcp.workspace:fork-workspace source-id target-id)
         (fmt "Workspace ~S successfully forked into ~S." source-id target-id))
-      ((equal action "snapshot")
-        (let
-            ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
-          (structural-editing-mcp.workspace:snapshot-workspace snap-name ws)
-          (fmt "Snapshot ~S created for workspace ~S." snap-name ws-id)))
-      ((equal action "restore")
-        (let
-            ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
-          (structural-editing-mcp.workspace:restore-workspace snap-name ws)
-          (fmt "Workspace ~S restored from snapshot ~S." ws-id snap-name)))
+      ((or (equal action "snapshot") (equal action "restore"))
+        (manage-snapshot-restore action ws-id snap-name))
       ((or (equal action "create_file") (equal action "add_file"))
         (manage-create-file args ws-id))
       ((equal action "rebase") (manage-rebase-workspace args ws-id))
@@ -1637,6 +1580,25 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (format s "  Clean Files (~A):~%~{    - ~A~%~}" (length clean) clean)
       (format s "  Snapshots (~A):~%~{    - ~A~%~}" (length snaps) snaps))))
 
+(defun format-diff-section
+       (s label items &optional prefix)
+  "Format a list of ITEMS under LABEL to stream S with optional line PREFIX."
+  (when items
+    (if prefix
+      (format s
+              "  ~A (~A):~%~{    ~A ~A~%~}"
+              label
+              (length items)
+              (loop for
+                    x
+                    in
+                    items
+                    collect
+                    prefix
+                    collect
+                    x))
+      (format s "  ~A (~A):~%~{    ~A~%~}" label (length items) items))))
+
 (defun format-workspace-diff-summary (df)
   "Format workspace diff plist DF into a readable summary string."
   (with-output-to-string (s)
@@ -1653,19 +1615,13 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
          (both (getf df :modified-in-both))
          (details (getf df :conflict-details))
          (ast-diff (getf df :ast-differing-files)))
-      (when so
-        (format s "  Files only in source (~A):~%~{    + ~A~%~}" (length so) so))
-      (when to
-        (format s "  Files only in target (~A):~%~{    - ~A~%~}" (length to) to))
-      (when smo
-        (format s "  Source modified only (~A):~%~{    * ~A~%~}" (length smo) smo))
-      (when tmo
-        (format s "  Target modified only (~A):~%~{    * ~A~%~}" (length tmo) tmo))
-      (when ast-merge
-        (format s
-                "  AST-mergeable disjoint files (safe to auto-merge) (~A):~%~{    ~A~%~}"
-                (length ast-merge)
-                ast-merge))
+      (format-diff-section s "Files only in source" so "+")
+      (format-diff-section s "Files only in target" to "-")
+      (format-diff-section s "Source modified only" smo "*")
+      (format-diff-section s "Target modified only" tmo "*")
+      (format-diff-section s
+                           "AST-mergeable disjoint files (safe to auto-merge)"
+                           ast-merge)
       (when both
         (format s
                 "  COLLIDING MODIFICATIONS in both (~A):~%~{    ! ~A~%~}"
@@ -1677,11 +1633,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                     "      File: ~A (conflicting form indices: ~{~A~^, ~})~%"
                     (getf d :file)
                     (getf d :conflicts)))))
-      (when ast-diff
-        (format s
-                "  AST differing files (~A):~%~{    ~A~%~}"
-                (length ast-diff)
-                ast-diff))
+      (format-diff-section s "AST differing files" ast-diff)
       (when
           (and (null so)
                (null to)
