@@ -15,8 +15,12 @@
            :*current-dialect*
            :*supported-dialects*
            :supported-dialect-p
-           :peek-char-ahead)
-  (:documentation "Lexer, parser, and pretty-printer serializer for s-expressions."))
+           :peek-char-ahead
+           :dialect-supports-indentify-p
+           :format-dialect-form
+           :collection-delimiters)
+  (:documentation
+    "Lexer, parser, and pretty-printer serializer for s-expressions."))
 
 (in-package :structural-editing-mcp.parser)
 
@@ -903,22 +907,69 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
               do
               (setf start (1+ pos)))))))
 
-(defun use-cl-indentify-p (node dialect)
-  "Return T if NODE should be formatted with cl-indentify for DIALECT."
+(defgeneric collection-delimiters (dialect tag)
+  (:documentation
+    "Return (values open-string close-string) for collection TAG in DIALECT."))
+
+(defmethod collection-delimiters (dialect tag)
+  (declare (ignore dialect))
+  (collection-delims tag))
+
+(defgeneric dialect-supports-indentify-p
+            (dialect node)
+  (:documentation "Return T if DIALECT can format NODE with cl-indentify."))
+
+(defmethod dialect-supports-indentify-p
+           (dialect node)
   (and (member dialect *cl-indentify-dialects*) (not (node-has-braces-p node))))
 
-(defun print-formatted-form (node stream indent)
-  "Render NODE to STREAM with cl-indentify, or the generic fallback for brace dialects."
-  (let*
-      ((dialect (or *current-dialect* :common-lisp))
-       (text
-         (if (use-cl-indentify-p node dialect)
+(defmethod dialect-supports-indentify-p
+           ((dialect (eql :clojure)) node)
+  (declare (ignore node))
+  nil)
+
+(defmethod dialect-supports-indentify-p
+           ((dialect (eql :fennel)) node)
+  (declare (ignore node))
+  nil)
+
+(defgeneric format-dialect-form
+            (dialect node stream indent)
+  (:documentation
+    "Render NODE to STREAM according to DIALECT formatting rules at INDENT."))
+
+(defmethod format-dialect-form
+           (dialect node stream indent)
+  "Default formatting implementation delegating to cl-indentify or generic-form-text."
+  (let
+      ((text
+         (if (dialect-supports-indentify-p dialect node)
            (let ((raw (raw-form-text node)))
              (if (find #\newline raw)
                (cl-indentify-text raw)
                raw))
            (generic-form-text node indent))))
     (write-string (shift-indent-text text indent) stream)))
+
+(defmethod format-dialect-form
+           ((dialect (eql :clojure)) node stream indent)
+  (let ((text (generic-form-text node indent)))
+    (write-string (shift-indent-text text indent) stream)))
+
+(defmethod format-dialect-form
+           ((dialect (eql :fennel)) node stream indent)
+  (let ((text (generic-form-text node indent)))
+    (write-string (shift-indent-text text indent) stream)))
+
+(defun use-cl-indentify-p (node dialect)
+  "Return T if NODE should be formatted with cl-indentify for DIALECT."
+  (dialect-supports-indentify-p dialect node))
+
+(defun print-formatted-form (node stream indent)
+  "Render NODE to STREAM with cl-indentify, or the generic fallback for brace dialects."
+  (let
+      ((dialect (or *current-dialect* :common-lisp)))
+    (format-dialect-form dialect node stream indent)))
 
 (defun print-toplevel-sequence
        (children stream indent dialect)

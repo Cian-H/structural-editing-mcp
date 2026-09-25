@@ -378,3 +378,60 @@
 
 
 
+(deftest test-clos-lint-rule-protocol
+         (testing
+           "lint-rule instantiation and generic dispatch"
+           (let
+               ((rule
+                  (make-lint-rule :custom-test-rule
+                                  (lambda (node path dialect)
+                                    (declare (ignore node dialect))
+                                    (make-lint-finding :rule
+                                                       :custom-test-rule
+                                                       :path
+                                                       path
+                                                       :message
+                                                       "Custom rule match"
+                                                       :severity
+                                                       :warning))
+                                  :dialects
+                                  '
+                                  (:common-lisp :clojure)
+                                  :description
+                                  "Test custom lint rule")))
+             (ok (typep rule 'lint-rule))
+             (ok (eq (rule-id rule) :custom-test-rule))
+             (ok (rule-applicable-p rule :common-lisp))
+             (ok (rule-applicable-p rule :clojure))
+             (ok (not (rule-applicable-p rule :scheme)))
+             (let
+                 ((finding (check-rule rule '(:leaf nil foo) '(0 1) :common-lisp)))
+               (ok finding)
+               (ok (eq (lint-finding-rule finding) :custom-test-rule))
+               (ok (equal (lint-finding-path finding) '(0 1))))))
+         (testing
+           "backward-compatibility list method for rule-applicable-p and check-rule"
+           (let
+               ((plist-rule
+                  (list :id
+                        :plist-rule
+                        :check
+                        (lambda (node path dialect)
+                          (declare (ignore node dialect))
+                          (make-lint-finding :rule
+                                             :plist-rule
+                                             :path
+                                             path
+                                             :message
+                                             "Plist rule match"
+                                             :severity
+                                             :info))
+                        :dialects
+                        '
+                        (:emacs-lisp))))
+             (ok (rule-applicable-p plist-rule :emacs-lisp))
+             (ok (not (rule-applicable-p plist-rule :common-lisp)))
+             (let
+                 ((finding (check-rule plist-rule '(:leaf nil bar) '(0 2) :emacs-lisp)))
+               (ok finding)
+               (ok (eq (lint-finding-rule finding) :plist-rule))))))
