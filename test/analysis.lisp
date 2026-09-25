@@ -17,29 +17,39 @@
         (ok (equal sub-paths '((0 3 2 1))))))))
 
 (deftest test-pattern-matching-and-search
-  (testing "variable-node-p identification"
-    (let ((var-ast (first (get-node-children (string-to-sexp "?x"))))
-          (non-var-ast (first (get-node-children (string-to-sexp "x")))))
-      (ok (variable-node-p var-ast))
-      (ok (not (variable-node-p non-var-ast)))))
-
-  (testing "match-pattern basic bindings"
-    (let ((pat (first (get-node-children (string-to-sexp "(foo ?x ?y)"))))
-          (target (first (get-node-children (string-to-sexp "(foo 10 (+ 1 2))")))))
-      (multiple-value-bind (matched bindings) (match-pattern pat target nil)
-        (ok matched)
-        (ok (= (length bindings) 2))
-        (let ((inst (instantiate-pattern
-                      (first (get-node-children (string-to-sexp "(bar ?y ?x)")))
-                      bindings)))
-          (ok (string= (sexp-to-string inst) "(bar (+ 1 2) 10)"))))))
-
-  (testing "find-pattern-matches across tree"
-    (let ((ast (string-to-sexp "(defun foo () (+ 1 2) (bar (+ 3 4)))")))
-      (let ((matches (find-pattern-matches ast "(+ ?a ?b)")))
-        (ok (= (length matches) 2))
-        (ok (equal (mapcar (lambda (m) (getf m :path)) matches)
-                   '((0 3) (0 4 1))))))))
+         (testing "variable-node-p identification"
+                  (let
+                      ((var-ast (first (get-node-children (string-to-sexp "?x"))))
+                       (non-var-ast (first (get-node-children (string-to-sexp "x")))))
+                    (ok (variable-node-p var-ast))
+                    (ok (not (variable-node-p non-var-ast)))))
+         (testing "match-pattern basic bindings"
+                  (let
+                      ((pat (first (get-node-children (string-to-sexp "(foo ?x ?y)"))))
+                       (target (first (get-node-children (string-to-sexp "(foo 10 (+ 1 2))")))))
+                    (multiple-value-bind (matched bindings)
+                                         (match-pattern pat target nil)
+                      (ok matched)
+                      (ok (= (length bindings) 2))
+                      (let
+                          ((inst
+                             (instantiate-pattern
+                               (first (get-node-children (string-to-sexp "(bar ?y ?x)")))
+                               bindings)))
+                        (ok (string= (sexp-to-string inst) "(bar (+ 1 2) 10)"))))))
+         (testing "find-pattern-matches across tree"
+                  (let*
+                      ((ast (string-to-sexp "(defun foo () (+ 1 2) (bar (+ 3 4)))"))
+                       (matches (find-pattern-matches ast "(+ ?a ?b)")))
+                    (ok (= (length matches) 2))
+                    (ok
+                      (equal
+                        (mapcar
+                          (lambda (m)
+                            (getf m :path))
+                          matches)
+                        '
+                        ((0 3) (0 4 1)))))))
 
 (deftest test-lint-if-rules
   (testing "if-progn-to-when detection"
