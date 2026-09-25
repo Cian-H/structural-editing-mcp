@@ -1515,6 +1515,66 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
                 "YES"
                 "no")))))
 
+(defun manage-create-file (args ws-id)
+  "Create or add a file in the given workspace."
+  (let*
+      ((filepath
+         (or (href args "filepath") (href args "file_path") (href args "file")))
+       (content (or (href args "content") ""))
+       (ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+    (unless filepath (error "filepath is required for create_file"))
+    (structural-editing-mcp.workspace:add-file-to-workspace
+      filepath
+      :content
+      content
+      :dialect
+      (or (href args "dialect")
+          (structural-editing-mcp.workspace:file-dialect filepath))
+      :ctx
+      ws)
+    (fmt
+      "File ~S created successfully in workspace ~S (staged in memory)."
+      filepath
+      ws-id)))
+
+(defun manage-rebase-workspace (args ws-id)
+  "Rebase a workspace onto another workspace."
+  (let*
+      ((onto-id
+         (or (href args "source_id")
+             (href args "target_id")
+             (href args "target_workspace_id")
+             (href args "onto")
+             "default"))
+       (strategy (or (href args "strategy") "error"))
+       (res
+         (structural-editing-mcp.workspace:rebase-workspace
+           ws-id
+           :onto-id
+           onto-id
+           :strategy
+           strategy)))
+    (fmt
+      "Workspace ~S successfully rebased onto ~S (~A file(s) updated)."
+      ws-id
+      onto-id
+      (length (getf res :updated-files)))))
+
+(defun manage-reload-workspace
+       (ws-id files force)
+  "Reload workspace files from disk."
+  (let*
+      ((ws (structural-editing-mcp.workspace:get-workspace ws-id))
+       (reloaded
+         (structural-editing-mcp.workspace:reload-workspace
+           :ctx
+           ws
+           :files
+           files
+           :force
+           force)))
+    (fmt "Workspace ~S reloaded ~A file(s) from disk." ws-id (length reloaded))))
+
 (defun handle-tool-workspace-manage (args)
   "Handle workspace_manage lifecycle actions: create, list, delete, clear, fork, snapshot, restore, reload."
   (let*
@@ -1555,58 +1615,9 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
           (structural-editing-mcp.workspace:restore-workspace snap-name ws)
           (fmt "Workspace ~S restored from snapshot ~S." ws-id snap-name)))
       ((or (equal action "create_file") (equal action "add_file"))
-        (let*
-            ((filepath
-               (or (href args "filepath") (href args "file_path") (href args "file")))
-             (content (or (href args "content") ""))
-             (ws (structural-editing-mcp.workspace:get-workspace ws-id)))
-          (unless filepath (error "filepath is required for create_file"))
-          (structural-editing-mcp.workspace:add-file-to-workspace
-            filepath
-            :content
-            content
-            :dialect
-            (or (href args "dialect")
-                (structural-editing-mcp.workspace:file-dialect filepath))
-            :ctx
-            ws)
-          (fmt
-            "File ~S created successfully in workspace ~S (staged in memory)."
-            filepath
-            ws-id)))
-      ((equal action "rebase")
-        (let*
-            ((onto-id
-               (or (href args "source_id")
-                   (href args "target_id")
-                   (href args "target_workspace_id")
-                   (href args "onto")
-                   "default"))
-             (strategy (or (href args "strategy") "error"))
-             (res
-               (structural-editing-mcp.workspace:rebase-workspace
-                 ws-id
-                 :onto-id
-                 onto-id
-                 :strategy
-                 strategy)))
-          (fmt
-            "Workspace ~S successfully rebased onto ~S (~A file(s) updated)."
-            ws-id
-            onto-id
-            (length (getf res :updated-files)))))
-      ((equal action "reload")
-        (let*
-            ((ws (structural-editing-mcp.workspace:get-workspace ws-id))
-             (reloaded
-               (structural-editing-mcp.workspace:reload-workspace
-                 :ctx
-                 ws
-                 :files
-                 files
-                 :force
-                 force)))
-          (fmt "Workspace ~S reloaded ~A file(s) from disk." ws-id (length reloaded))))
+        (manage-create-file args ws-id))
+      ((equal action "rebase") (manage-rebase-workspace args ws-id))
+      ((equal action "reload") (manage-reload-workspace ws-id files force))
       (t (error "Unknown workspace_manage action: ~A" action)))))
 
 (defun format-workspace-status-summary (st)

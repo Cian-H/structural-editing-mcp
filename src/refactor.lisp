@@ -41,42 +41,58 @@
                      node)))))))
       (reindex-paths (walk tree)))))
 
-(defun extract-variable (tree target-path var-name &key (dialect :common-lisp))
+(defun extract-variable
+       (tree target-path var-name &key (dialect :common-lisp))
   "Extract the node at TARGET-PATH into a let binding around its parent."
   (when
       (or (null target-path) (null (cdr target-path)))
     (error 'invalid-path-error
-           :path target-path
-           :tree tree
-           :message "Cannot extract a top-level form."))
+           :path
+           target-path
+           :tree
+           tree
+           :message
+           "Cannot extract a top-level form."))
   (let*
       ((target-node (get-node-at-path tree target-path))
        (parent-path (butlast target-path))
        (child-idx (lastcar target-path)))
     (unless target-node
       (error 'invalid-path-error
-             :path target-path
-             :tree tree
-             :message (format nil "Target node not found at path ~A" target-path)))
-    (update-node-at-path
-      tree
-      parent-path
-      (lambda (parent)
-        (multiple-value-bind (p-path p-tag p-children)
-                             (parse-node parent)
-          (declare (ignore p-path))
-          (let* ((new-children
-                   (loop for child in p-children
-                         for i from 0
-                         collect (if (= i child-idx)
-                                   (list :path nil :leaf (intern (string-upcase var-name)))
-                                   child)))
-                 (new-parent `(:path nil ,p-tag ,@new-children))
-                 (let-str (if (member dialect '(:clojure :fennel))
-                            (fmt "(let [~A ~A])" var-name (sexp-to-string target-node :dialect dialect))
-                            (fmt "(let ((~A ~A)))" var-name (sexp-to-string target-node :dialect dialect))))
-                 (let-ast (first (get-node-children (string-to-sexp let-str :dialect dialect)))))
-            `(:path nil :paren ,@(get-node-children let-ast) ,new-parent)))))))
+             :path
+             target-path
+             :tree
+             tree
+             :message
+             (format nil "Target node not found at path ~A" target-path)))
+    (update-node-at-path tree
+                         parent-path
+                         (lambda (parent)
+                           (multiple-value-bind (p-path p-tag p-children)
+                                                (parse-node parent)
+                             (declare (ignore p-path p-tag))
+                             (let*
+                                 ((new-children
+                                    (loop for
+                                          child
+                                          in
+                                          p-children
+                                          for
+                                          i
+                                          from
+                                          0
+                                          collect
+                                          (if (= i child-idx)
+                                            (list :path nil :leaf (intern (string-upcase var-name)))
+                                            child)))
+                                  (new-parent ` (:path nil :paren ,@new-children))
+                                  (let-str
+                                    (if (member dialect '(:clojure :fennel))
+                                      (fmt "(let [~A ~A])" var-name (sexp-to-string target-node :dialect dialect))
+                                      (fmt "(let ((~A ~A)))" var-name (sexp-to-string target-node :dialect dialect))))
+                                  (let-ast (first (get-node-children (string-to-sexp let-str :dialect dialect)))))
+                               `
+                               (:path nil :paren ,@ (get-node-children let-ast) ,new-parent)))))))
 
 (defun find-file-path-and-top-index (tree target-path)
   "Find the file node path and top-level form index in that file for TARGET-PATH."
