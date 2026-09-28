@@ -506,13 +506,14 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
 (defun contains-side-effect-call-p (n)
   "Recursively check if N contains a call to a known side-effect function."
   (when n
-    (if (compound-node-p n)
-      (let* ((children (get-node-children n))
-             (head (first children))
-             (head-name (when (and head (leaf-any-symbol-p head)) (leaf-symbol-name head))))
-        (or (member head-name *known-side-effect-operators* :test #'string=)
-            (some #'contains-side-effect-call-p children)))
-      nil)))
+    (when (compound-node-p n)
+      (let*
+          ((children (get-node-children n))
+           (head (first children))
+           (head-name (when (and head (leaf-any-symbol-p head)) (leaf-symbol-name head))))
+        (or
+          (member head-name *known-side-effect-operators* :test #'string=)
+          (some #'contains-side-effect-call-p children))))))
 
 (defun check-clojure-swap-side-effects (node path dialect)
   "Detect side-effects (e.g. println, spit) inside STM/CAS retry forms (swap!, alter, dosync)."
