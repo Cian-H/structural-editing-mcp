@@ -1,4 +1,4 @@
-#!/usr/bin/env -S devenv shell -- sbcl --script
+#!/usr/bin/env -S sbcl --script
 
 (require 'asdf)
 
@@ -46,30 +46,63 @@
         (declare (ignore sec min hr))
         (values yr mon day)))))
 
-(defun count-commits-on-date (year month day)
-  "Count git commits on HEAD for the given date."
-  (if (git-available-p)
-    (let* ((since-str (format nil "~D-~2,'0D-~2,'0D 00:00:00" year month day))
-           (until-str (format nil "~D-~2,'0D-~2,'0D 23:59:59" year month day))
-           (out (git-run (list "rev-list" "--count"
-                               (format nil "--since=~A" since-str)
-                               (format nil "--until=~A" until-str)
-                               "HEAD"))))
-      (if out (or (parse-integer out :junk-allowed t) 0) 0))
-    0))
+(defun get-highest-version-on-date (year month day)
+  "Return the highest micro version for date, or NIL if none exists yet."
+  (let* ((base-tag (format nil "v~D.~D.~D" year month day))
+         (tag-prefix (format nil "v~D.~D.~D." year month day))
+         (base-file (format nil "~D.~D.~D" year month day))
+         (file-prefix (format nil "~D.~D.~D." year month day))
+         (seen-base-p nil)
+         (max-micro nil))
+    ;; Inspect git tags
+    (when (git-available-p)
+      (let ((tags-out (git-run (list "tag" "-l" (format nil "~A*" base-tag)))))
+        (when tags-out
+          (dolist (line (uiop:split-string tags-out :separator '(#\Newline #\Return #\Space)))
+            (cond
+              ((string= line base-tag)
+               (setf seen-base-p t))
+              ((and (>= (length line) (length tag-prefix))
+                    (string= tag-prefix (subseq line 0 (length tag-prefix))))
+               (let ((n (parse-integer (subseq line (length tag-prefix)) :junk-allowed t)))
+                 (when n
+                   (setf max-micro (max (or max-micro 0) n))))))))))
+    ;; Inspect version.txt
+    (let ((cur (read-current-version-file)))
+      (when cur
+        (cond
+          ((string= cur base-file)
+           (setf seen-base-p t))
+          ((and (>= (length cur) (length file-prefix))
+                (string= file-prefix (subseq cur 0 (length file-prefix))))
+           (let ((n (parse-integer (subseq cur (length file-prefix)) :junk-allowed t)))
+             (when n
+               (setf max-micro (max (or max-micro 0) n))))))))
+    (values max-micro seen-base-p)))
 
 (defun compute-calver (&key next-p)
-  "Compute the CalVer string for the repository."
+  "Compute CalVer string: YYYY.M.D for the 1st release, YYYY.M.D.1, .2, etc. for subsequent releases."
   (multiple-value-bind (yr mon day) (get-date-components :use-git (not next-p))
     (when next-p
       (multiple-value-bind (sec min hr d m y) (get-decoded-time)
         (declare (ignore sec min hr))
         (setf yr y mon m day d)))
-    (let* ((count (count-commits-on-date yr mon day))
-           (effective-count (if next-p (1+ count) count)))
-      (if (zerop effective-count)
-        (format nil "~D.~D.~D" yr mon day)
-        (format nil "~D.~D.~D.~D" yr mon day effective-count)))))
+    (multiple-value-bind (highest-micro seen-base-p) (get-highest-version-on-date yr mon day)
+      (if next-p
+        (cond
+          (highest-micro
+           (format nil "~D.~D.~D.~D" yr mon day (1+ highest-micro)))
+          (seen-base-p
+           (format nil "~D.~D.~D.1" yr mon day))
+          (t
+           (format nil "~D.~D.~D" yr mon day)))
+        (cond
+          (highest-micro
+           (format nil "~D.~D.~D.~D" yr mon day highest-micro))
+          (seen-base-p
+           (format nil "~D.~D.~D" yr mon day))
+          (t
+           (format nil "~D.~D.~D" yr mon day)))))))
 
 (defun update-version-file (&key next-p)
   (let* ((target-ver (compute-calver :next-p next-p))
@@ -118,9 +151,9 @@
   (format t "Automatic Calendar Versioning (CalVer) tool for structural-editing-mcp.~%~%")
   (format t "Options:~%")
   (format t "  (no args), --print   Print the current CalVer version~%")
-  (format t "  --update             Update version.txt to match the current computed CalVer~%")
-  (format t "  --next               Print the CalVer version for the next commit/push~%")
-  (format t "  --tag                Tag HEAD with the current CalVer release tag (e.g. v2026.9.18.53)~%")
+  (format t "  --update             Update version.txt to match current CalVer~%")
+  (format t "  --next               Print the next CalVer version for today~%")
+  (format t "  --tag                Tag HEAD with the current CalVer release tag~%")
   (format t "  --check              Verify version.txt matches the computed CalVer~%")
   (format t "  -h, --help           Show this help message~%"))
 
