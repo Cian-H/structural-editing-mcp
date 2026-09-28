@@ -1,6 +1,10 @@
 #!/usr/bin/env -S devenv shell -- sbcl --script
 (require 'asdf)
 
+(let ((ql-setup (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname))))
+  (when (probe-file ql-setup)
+    (load ql-setup)))
+
 (let* ((this-file (or *load-truename* *load-pathname*))
        (project-root (if this-file
                        (uiop:pathname-parent-directory-pathname

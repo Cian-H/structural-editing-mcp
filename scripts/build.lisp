@@ -1,6 +1,10 @@
 #!/usr/bin/env -S devenv shell -- sbcl --script
 (require 'asdf)
 
+(let ((ql-setup (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname))))
+  (when (probe-file ql-setup)
+    (load ql-setup)))
+
 (let* ((this-file (or *load-truename* *load-pathname*))
        (project-root (if this-file
                        (uiop:pathname-parent-directory-pathname
@@ -11,8 +15,12 @@
 
 (asdf:load-system :structural-editing-mcp)
 
-(sb-ext:save-lisp-and-die "semcp"
-                          :executable t
-                          :save-runtime-options t
-                          :toplevel 'structural-editing-mcp:main
-                          :compression t)
+(let ((out (or (uiop:getenv "OUTPUT_BINARY")
+               (first (uiop:command-line-arguments))
+               "semcp"))
+      (compress (if (member :sb-core-compression *features*) t nil)))
+  (sb-ext:save-lisp-and-die out
+                            :executable t
+                            :save-runtime-options t
+                            :toplevel 'structural-editing-mcp:main
+                            :compression compress))

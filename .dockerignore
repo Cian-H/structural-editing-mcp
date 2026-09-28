@@ -1,0 +1,8 @@
+.git
+.devenv
+.agents
+semcp
+semcp-*
+*.log
+release-assets/
+scratch/

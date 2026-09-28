@@ -3,14 +3,20 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
-  release:
-    name: Build and publish CalVer release
+  check-version:
+    name: Check version and prepare release
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      exists: ${{ steps.check.outputs.exists }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,55 +47,161 @@ jobs:
             echo "No existing release for $TAG; will build and publish."
           fi
 
-      - name: Install SBCL
-        if: steps.check.outputs.exists == 'false'
+  build-binaries:
+    name: Build ${{ matrix.platform }}
+    needs: check-version
+    if: needs.check-version.outputs.exists == 'false'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-22.04
+            artifact: semcp-linux-x86_64
+
+          - platform: linux-aarch64
+            os: ubuntu-24.04-arm
+            artifact: semcp-linux-aarch64
+
+          - platform: darwin-arm64
+            os: macos-latest
+            artifact: semcp-darwin-arm64
+
+          - platform: darwin-x86_64
+            os: macos-13
+            artifact: semcp-darwin-x86_64
+
+          - platform: windows-x86_64
+            os: windows-latest
+            artifact: semcp-windows-x86_64.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y sbcl libzstd1
+          sudo apt-get install -y sbcl libzstd1 curl
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install sbcl zstd curl
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install sbcl -y
+          if (Test-Path "C:\Program Files\Steel Bank Common Lisp") {
+            "C:\Program Files\Steel Bank Common Lisp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
 
       - name: Install Quicklisp and Lisp dependencies
-        if: steps.check.outputs.exists == 'false'
+        shell: bash
         run: |
-          curl -fsSL https://beta.quicklisp.org/quicklisp.lisp -o /tmp/quicklisp.lisp
+          curl -fsSL https://beta.quicklisp.org/quicklisp.lisp -o quicklisp.lisp
           sbcl --non-interactive --no-userinit \
-            --load /tmp/quicklisp.lisp \
-            --eval '(quicklisp-quickstart:install :path #P"~/quicklisp/")' \
+            --load quicklisp.lisp \
+            --eval '(quicklisp-quickstart:install :path (merge-pathnames "quicklisp/" (user-homedir-pathname)))' \
             --eval '(ql:quickload (list "trivia" "alexandria" "serapeum" "yason" "cl-indentify" "bordeaux-threads" "rove") :silent t)' \
-            --eval '(uiop:quit 0)'
-          mkdir -p "$HOME/quicklisp/local-projects"
-          ln -s "$GITHUB_WORKSPACE" "$HOME/quicklisp/local-projects/"
-          sbcl --non-interactive --no-userinit \
-            --load "$HOME/quicklisp/setup.lisp" \
-            --eval '(ql:quickload :structural-editing-mcp/tests :silent t)' \
-            --eval '(uiop:quit 0)'
+            --eval '(sb-ext:exit :code 0)'
 
-      - name: Run tests
-        if: steps.check.outputs.exists == 'false'
+      - name: Run test suite
+        shell: bash
         run: |
           sbcl --no-userinit --disable-debugger \
-            --load "$HOME/quicklisp/setup.lisp" \
             --script scripts/run-tests.lisp
 
       - name: Build standalone binary
-        if: steps.check.outputs.exists == 'false'
+        shell: bash
         run: |
-          sbcl --no-userinit --disable-debugger \
-            --load "$HOME/quicklisp/setup.lisp" \
+          OUTPUT_BINARY="${{ matrix.artifact }}" sbcl --no-userinit --disable-debugger \
             --script scripts/build.lisp
-          test -x semcp
-          ./semcp --version
-          cp semcp "semcp-linux-x86_64"
+          chmod +x "${{ matrix.artifact }}" || true
+          ./${{ matrix.artifact }} --version
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+
+  build-container:
+    name: Build multi-arch container image
+    needs: check-version
+    if: needs.check-version.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ needs.check-version.outputs.version }}
+            type=raw,value=latest
+
+      - name: Build and push multi-arch Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  publish-release:
+    name: Publish GitHub release
+    needs: [check-version, build-binaries, build-container]
+    if: needs.check-version.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
 
       - name: Create GitHub Release
-        if: steps.check.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ needs.check-version.outputs.tag }}"
+          VERSION="${{ needs.check-version.outputs.version }}"
           gh release create "$TAG" \
             --title "structural-editing-mcp ${VERSION}" \
             --notes "Automated CalVer release ${VERSION}.
 
-          Asset: semcp-linux-x86_64 (standalone Linux x86_64 executable)." \
-            "semcp-linux-x86_64"
+          ### Standalone Binaries:
+          - **Linux x86_64**: \`semcp-linux-x86_64\`
+          - **Linux aarch64**: \`semcp-linux-aarch64\`
+          - **macOS Apple Silicon**: \`semcp-darwin-arm64\`
+          - **macOS Intel**: \`semcp-darwin-x86_64\`
+          - **Windows x86_64**: \`semcp-windows-x86_64.exe\`
+
+          ### Container Image (Multi-Arch):
+          - \`ghcr.io/${{ github.repository }}:${VERSION}\`
+          - \`ghcr.io/${{ github.repository }}:latest\`
+          *(Supports linux/amd64 and linux/arm64)*" \
+            release-assets/*
