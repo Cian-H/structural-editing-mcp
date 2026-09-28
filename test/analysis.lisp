@@ -131,6 +131,117 @@
         (ok (eq (lint-finding-rule f) :equal-nil-to-null))
         (ok (string= (lint-finding-suggested-fix f) "(null ptr)"))))))
 
+(deftest test-lint-p0-p1-p2-rules
+  (testing "ignored-destructive-return detection in statement position"
+    (let* ((code "(defun clean-list (items)
+                    (delete 'x items)
+                    items)")
+           (ast (string-to-sexp code))
+           (findings (lint-ast ast)))
+      (ok (= (length findings) 1))
+      (let ((f (first findings)))
+        (ok (eq (lint-finding-rule f) :ignored-destructive-return))
+        (ok (search "delete" (lint-finding-message f))))))
+
+  (testing "ignored-destructive-return ignores return position"
+    (let* ((code "(defun clean-list (items)
+                    (delete 'x items))")
+           (ast (string-to-sexp code))
+           (findings (lint-ast ast :rules '("ignored-destructive-return"))))
+      (ok (= (length findings) 0))))
+
+  (testing "unhygienic-macro-binding detection"
+    (let* ((code "(defmacro with-test (val &body body)
+                    `(let ((temp ,val))
+                       ,@body))")
+           (ast (string-to-sexp code))
+           (findings (lint-ast ast :rules '("unhygienic-macro-binding"))))
+      (ok (= (length findings) 1))
+      (let ((f (first findings)))
+        (ok (eq (lint-finding-rule f) :unhygienic-macro-binding))
+        (ok (search "temp" (lint-finding-message f))))))
+
+  (testing "clojure-tail-recur detection"
+    (let* ((code "(defn countdown [n]
+                    (if (<= n 0)
+                      :done
+                      (countdown (dec n))))")
+           (ast (string-to-sexp code :dialect :clojure))
+           (findings (lint-ast ast :dialect :clojure :rules '("clojure-tail-recur"))))
+      (ok (= (length findings) 1))
+      (let ((f (first findings)))
+        (ok (eq (lint-finding-rule f) :clojure-tail-recur))
+        (ok (search "recur" (lint-finding-suggested-fix f))))))
+
+  (testing "mutate-literal-constant detection on nconc"
+    (let* ((code "(nconc '(1 2) '(3 4))")
+           (ast (string-to-sexp code))
+           (findings (lint-ast ast :rules '("mutate-literal-constant"))))
+      (ok (= (length findings) 1))
+      (let ((f (first findings)))
+        (ok (eq (lint-finding-rule f) :mutate-literal-constant))
+        (ok (eq (lint-finding-severity f) :error)))))
+
+  (testing "special-var-earmuffs detection"
+    (let* ((code "(defvar global-count 42)")
+           (ast (string-to-sexp code))
+           (findings (lint-ast ast :rules '("special-var-earmuffs"))))
+      (ok (= (length findings) 1))
+      (let ((f (first findings)))
+        (ok (eq (lint-finding-rule f) :special-var-earmuffs))
+        (ok (string= (lint-finding-suggested-fix f) "*global-count*")))))
+
+  (testing "clojure-swap-side-effects detection"
+    (let* ((code "(swap! my-atom (fn [state] (println state) (inc state)))")
+           (ast (string-to-sexp code :dialect :clojure))
+           (findings (lint-ast ast :dialect :clojure :rules '("clojure-swap-side-effects"))))
+      (ok (= (length findings) 1))
+      (let ((f (first findings)))
+        (ok (eq (lint-finding-rule f) :clojure-swap-side-effects)))))
+
+  (testing "dead-cond-clauses detection"
+    (let* ((code "(cond
+                    ((> x 0) :positive)
+                    (t :default)
+                    ((< x 0) :negative))")
+           (ast (string-to-sexp code))
+           (findings (lint-ast ast :rules '("dead-cond-clauses"))))
+      (ok (= (length findings) 1))
+      (let ((f (first findings)))
+        (ok (eq (lint-finding-rule f) :dead-cond-clauses)))))
+
+  (testing "inappropriate-equality detection"
+    (let* ((code "(eq x \"hello\")")
+           (ast (string-to-sexp code))
+           (findings (lint-ast ast :rules '("inappropriate-equality"))))
+      (ok (= (length findings) 1))
+      (let ((f (first findings)))
+        (ok (eq (lint-finding-rule f) :inappropriate-equality))
+        (ok (search "string=" (lint-finding-suggested-fix f))))))
+
+  (testing "clojure-vector-contains detection"
+    (let* ((code "(contains? [10 20 30] 20)")
+           (ast (string-to-sexp code :dialect :clojure))
+           (findings (lint-ast ast :dialect :clojure :rules '("clojure-vector-contains"))))
+      (ok (= (length findings) 1))
+      (let ((f (first findings)))
+        (ok (eq (lint-finding-rule f) :clojure-vector-contains)))))
+
+  (testing "elisp-missing-lexical-binding detection"
+    (let* ((code ";; A simple Emacs Lisp package\n(defun hello () (message \"hi\"))")
+           (ast (string-to-sexp code :dialect :emacs-lisp))
+           (findings (lint-ast ast :dialect :emacs-lisp :rules '("elisp-missing-lexical-binding"))))
+      (ok (= (length findings) 1))
+      (let ((f (first findings)))
+        (ok (eq (lint-finding-rule f) :elisp-missing-lexical-binding))
+        (ok (search "lexical-binding: t" (lint-finding-suggested-fix f))))))
+
+  (testing "elisp-missing-lexical-binding ok when present"
+    (let* ((code ";; -*- lexical-binding: t; -*-\n(defun hello () (message \"hi\"))")
+           (ast (string-to-sexp code :dialect :emacs-lisp))
+           (findings (lint-ast ast :dialect :emacs-lisp :rules '("elisp-missing-lexical-binding"))))
+      (ok (= (length findings) 0)))))
+
 (deftest test-lint-filtering-and-formatting
   (let ((ast (string-to-sexp "(progn (if valid (do-it) nil) (progn 42))")))
     (testing "filter rules by ID"

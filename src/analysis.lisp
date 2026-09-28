@@ -4,7 +4,7 @@
         :trivia
         :structural-editing-mcp.tree
         :structural-editing-mcp.parser)
-  (:import-from :serapeum :trim-whitespace :ellipsize :filter-map :fmt :string-join)
+  (:import-from :serapeum :trim-whitespace :ellipsize :filter-map :fmt :string-join :string-prefix-p)
   (:export :variable-node-p
            :match-pattern
            :instantiate-pattern
@@ -205,6 +205,48 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
   message
   severity
   suggested-fix)
+
+(defvar *current-lint-tree* nil
+                            "Dynamically bound to the root AST during linting to allow contextual queries (e.g., parent lookup).")
+
+(defun lint-parent-node (path)
+  "Return the parent node of PATH using *CURRENT-LINT-TREE*."
+  (when (and *current-lint-tree* (consp path))
+    (get-node-at-path *current-lint-tree* (butlast path))))
+
+(defun form-in-statement-position-p (node path)
+  "Return T if NODE at PATH is in statement position where its return value is discarded.
+Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the final expression."
+  (declare (ignore node))
+  (when (and *current-lint-tree* (consp path))
+    (let* ((parent (lint-parent-node path))
+           (child-idx (first (last path))))
+      (when (and parent (compound-node-p parent))
+        (let* ((children (get-node-children parent))
+               (num-children (length children))
+               (head (first children))
+               (head-name (when (and head (leaf-any-symbol-p head))
+                            (leaf-symbol-name head))))
+          (cond
+            ;; In (progn e1 e2 ... en), e_i for i < n-1 is in statement position
+            ((equal head-name "progn")
+              (< child-idx (1- num-children)))
+            ;; In (defun / defmacro / defmethod / defn name (...) e1 ... en)
+            ((member head-name '("defun" "defmacro" "defmethod" "defn" "defn-") :test #'string=)
+              (let ((body-start (if (member head-name '("defn" "defn-") :test #'string=)
+                                  (if (and (>= num-children 3) (eq (get-node-tag (third children)) :square)) 3 2)
+                                  3)))
+                (and (>= child-idx body-start)
+                     (< child-idx (1- num-children)))))
+            ;; In (let / let* (...) e1 ... en)
+            ((member head-name '("let" "let*") :test #'string=)
+              (and (>= child-idx 2)
+                   (< child-idx (1- num-children))))
+            ;; In (do ...)
+            ((equal head-name "do")
+              (< child-idx (1- num-children)))
+            (t nil)))))))
+
 
 (defun leaf-symbol-p (node name)
   "Return T if NODE is a leaf symbol matching NAME (case-insensitive string or symbol)."
@@ -489,6 +531,340 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
             :severity :style
             :suggested-fix replacement))))))
 
+;;; ---------------------------------------------------------------------------
+;;; P0 Rules: Safety, Destructive Returns, Macro Hygiene, & TCO
+;;; ---------------------------------------------------------------------------
+
+(defparameter *destructive-sequence-functions*
+  '("delete" "delete-if" "delete-if-not" "sort" "stable-sort" "nreverse" "nconc" "nreconc")
+  "Names of destructive functions whose return values must be captured.")
+
+(defun check-ignored-destructive-return (node path dialect)
+  "Detect calls to destructive sequence functions in statement position where the return value is discarded."
+  (declare (ignore dialect))
+  (when (and (compound-node-p node) (consp path))
+    (let ((children (get-node-children node)))
+      (when (and children (leaf-any-symbol-p (first children)))
+        (let ((fn-name (leaf-symbol-name (first children))))
+          (when (member fn-name *destructive-sequence-functions* :test #'string=)
+            (when (form-in-statement-position-p node path)
+              (make-lint-finding
+                :rule :ignored-destructive-return
+                :path path
+                :message (fmt "Return value of destructive function '~A' is ignored; this can cause list truncation or dropped heads." fn-name)
+                :severity :warning
+                :suggested-fix nil))))))))
+
+(defun find-unhygienic-macro-bindings (body-nodes)
+  "Scan BODY-NODES of a defmacro for literal symbol bindings in backquoted let forms."
+  (let ((unhygienic '()))
+    (labels ((scan (n in-backquote)
+               (cond
+                 ((null n) nil)
+                 ((eq (get-node-tag n) :leaf)
+                   (let ((val (parse-atom-string (format-atom (third (parse-node n))))))
+                     (declare (ignore val))))
+                 ((compound-node-p n)
+                   (let* ((children (get-node-children n))
+                          (head (first children))
+                          (head-name (when (and head (leaf-any-symbol-p head)) (leaf-symbol-name head))))
+                     (cond
+                       ((and in-backquote (member head-name '("let" "let*") :test #'string=) (second children))
+                         (let ((bindings-node (second children)))
+                           (when (compound-node-p bindings-node)
+                             (dolist (clause (get-node-children bindings-node))
+                               (when (compound-node-p clause)
+                                 (let ((var-node (first (get-node-children clause))))
+                                   (when (and var-node (leaf-any-symbol-p var-node))
+                                     (let ((name (leaf-symbol-name var-node)))
+                                       (unless (or (string-prefix-p "," name)
+                                                   (string-prefix-p "#" name))
+                                         (push (list :name name :path (get-node-path var-node)) unhygienic))))))))))
+                       (t nil))
+                     (dolist (c children)
+                       (scan c in-backquote)))))))
+      (dolist (b body-nodes)
+        (scan b t)))
+    (nreverse unhygienic)))
+
+(defun check-unhygienic-macro-binding (node path dialect)
+  "Detect literal symbol bindings in backquoted let/let* forms inside defmacro."
+  (declare (ignore dialect))
+  (when (compound-node-p node)
+    (let ((children (get-node-children node)))
+      (when (and (>= (length children) 3)
+                 (leaf-any-symbol-p (first children))
+                 (member (leaf-symbol-name (first children)) '("defmacro" "defmacro*") :test #'string=))
+        (let* ((body-nodes (cddr children))
+               (unhygienic (find-unhygienic-macro-bindings body-nodes)))
+          (when unhygienic
+            (let ((first-un (first unhygienic)))
+              (make-lint-finding
+                :rule :unhygienic-macro-binding
+                :path (getf first-un :path)
+                :message (fmt "Unhygienic macro binding '~A': literal symbol in macro expansion risks variable capture. Use gensym or with-gensyms."
+                              (getf first-un :name))
+                :severity :warning
+                :suggested-fix nil))))))))
+
+(defun find-tail-self-calls (fn-name body-node)
+  "Recursively search BODY-NODE for tail-position calls to FN-NAME in Clojure."
+  (let ((hits '()))
+    (labels ((scan-tail (n)
+               (when (and n (compound-node-p n))
+                 (let* ((children (get-node-children n))
+                        (head (first children))
+                        (head-name (when (and head (leaf-any-symbol-p head)) (leaf-symbol-name head))))
+                   (cond
+                     ((string= head-name fn-name)
+                       (push (get-node-path n) hits))
+                     ((member head-name '("if" "if-not") :test #'string=)
+                       (when (third children) (scan-tail (third children)))
+                       (when (fourth children) (scan-tail (fourth children))))
+                     ((member head-name '("when" "when-not") :test #'string=)
+                       (when (rest children) (scan-tail (first (last children)))))
+                     ((equal head-name "do")
+                       (when (rest children) (scan-tail (first (last children)))))
+                     ((member head-name '("let" "loop") :test #'string=)
+                       (when (cddr children) (scan-tail (first (last children)))))
+                     ((equal head-name "cond")
+                       (loop for (test-expr res-expr) on (rest children) by #'cddr
+                             while test-expr
+                             do (when res-expr (scan-tail res-expr))))
+                     (t nil))))))
+      (scan-tail body-node)
+      hits)))
+
+(defun check-clojure-tail-recur (node path dialect)
+  "Detect recursive self-calls by function name in tail position in Clojure; suggest 'recur'."
+  (declare (ignore dialect))
+  (when (compound-node-p node)
+    (let ((children (get-node-children node)))
+      (when (and (>= (length children) 3)
+                 (leaf-any-symbol-p (first children))
+                 (member (leaf-symbol-name (first children)) '("defn" "defn-") :test #'string=))
+        (let* ((name-node (second children))
+               (fn-name (when (leaf-any-symbol-p name-node) (leaf-symbol-name name-node))))
+          (when fn-name
+            ;; Body starts after optional docstring / params vector
+            (let ((body-tail (first (last children))))
+              (when body-tail
+                (let ((hits (find-tail-self-calls fn-name body-tail)))
+                  (when hits
+                    (make-lint-finding
+                      :rule :clojure-tail-recur
+                      :path (first hits)
+                      :message (fmt "Self-call to '~A' in tail position risks stack overflow in Clojure; use 'recur' for tail-call optimization." fn-name)
+                      :severity :warning
+                      :suggested-fix (fmt "Replace (~A ...) with (recur ...)" fn-name))))))))))))
+
+;;; ---------------------------------------------------------------------------
+;;; P1 Rules: State & Scoping Hazards
+;;; ---------------------------------------------------------------------------
+
+(defparameter *literal-mutating-functions*
+  '("nconc" "nreverse" "nreconc" "sort" "stable-sort" "delete" "delete-if"
+    "set-car!" "set-cdr!" "vector-set!" "assoc!" "dissoc!" "conj!")
+  "Functions that destructively modify data structures in place.")
+
+(defun quoted-or-literal-node-p (node)
+  "Return T if NODE is a quoted literal ('(...) or (quote ...))."
+  (when (compound-node-p node)
+    (let ((children (get-node-children node)))
+      (when children
+        (let ((head (first children)))
+          (when (leaf-any-symbol-p head)
+            (equal (leaf-symbol-name head) "quote")))))))
+
+(defun check-mutate-literal-constant (node path dialect)
+  "Detect destructive mutation of literal or quoted constants."
+  (declare (ignore dialect))
+  (when (compound-node-p node)
+    (let ((children (get-node-children node)))
+      (when children
+        (let* ((head (first children))
+               (head-name (when (leaf-any-symbol-p head) (leaf-symbol-name head))))
+          (cond
+            ;; (setf (car '(...)) val) or (setf (cdr '(...)) val)
+            ((and (string= head-name "setf") (second children) (compound-node-p (second children)))
+              (let* ((place (second children))
+                     (place-children (get-node-children place)))
+                (when (and place-children (leaf-any-symbol-p (first place-children)))
+                  (let ((place-op (leaf-symbol-name (first place-children))))
+                    (when (member place-op '("car" "cdr" "first" "rest" "nth" "aref") :test #'string=)
+                      (loop for arg in (rest place-children)
+                            when (or (quoted-or-literal-node-p arg)
+                                     (and (leaf-any-symbol-p arg) (string= (leaf-symbol-name arg) "'")))
+                            do (return (make-lint-finding
+                                         :rule :mutate-literal-constant
+                                         :path path
+                                         :message "Modifying literal constant data has undefined behavior and can cause memory write faults."
+                                         :severity :error
+                                         :suggested-fix nil))))))))
+            ;; (nconc '(1 2) '(3 4)) or (sort '(1 2) #'<)
+            ((member head-name *literal-mutating-functions* :test #'string=)
+              (loop for arg in (rest children)
+                    when (or (quoted-or-literal-node-p arg)
+                             (and (leaf-any-symbol-p arg) (string= (leaf-symbol-name arg) "'")))
+                    do (return (make-lint-finding
+                                 :rule :mutate-literal-constant
+                                 :path path
+                                 :message (fmt "Destructive operation '~A' called on quoted literal constant data." head-name)
+                                 :severity :error
+                                 :suggested-fix nil))))
+            (t nil)))))))
+
+(defun check-special-var-earmuffs (node path dialect)
+  "Detect defvar or defparameter definitions lacking standard earmuffs (*...*)."
+  (when (member dialect '(:common-lisp :emacs-lisp nil))
+    (when (compound-node-p node)
+      (let ((children (get-node-children node)))
+        (when (and (>= (length children) 2)
+                   (leaf-any-symbol-p (first children))
+                   (member (leaf-symbol-name (first children)) '("defvar" "defparameter" "defcustom") :test #'string=))
+          (let* ((var-node (second children))
+                 (name (when (leaf-any-symbol-p var-node) (leaf-symbol-name var-node))))
+            (when (and name (not (dynamic-variable-name-p name)))
+              (make-lint-finding
+                :rule :special-var-earmuffs
+                :path path
+                :message (fmt "Global variable '~A' lacks earmuffs (*...*). In Common Lisp, this makes the symbol globally special, polluting lexical scopes." name)
+                :severity :style
+                :suggested-fix (fmt "*~A*" name)))))))))
+
+(defparameter *known-side-effect-operators*
+  '("println" "print" "prn" "spit" "slurp" "send" "send-off" "future" "pmap")
+  "Operators known to perform I/O or side-effects that should not be in retry transactions.")
+
+(defun contains-side-effect-call-p (n)
+  "Recursively check if N contains a call to a known side-effect function."
+  (when n
+    (if (compound-node-p n)
+      (let* ((children (get-node-children n))
+             (head (first children))
+             (head-name (when (and head (leaf-any-symbol-p head)) (leaf-symbol-name head))))
+        (or (member head-name *known-side-effect-operators* :test #'string=)
+            (some #'contains-side-effect-call-p children)))
+      nil)))
+
+(defun check-clojure-swap-side-effects (node path dialect)
+  "Detect side-effects (e.g. println, spit) inside STM/CAS retry forms (swap!, alter, dosync)."
+  (declare (ignore dialect))
+  (when (compound-node-p node)
+    (let ((children (get-node-children node)))
+      (when children
+        (let* ((head (first children))
+               (head-name (when (leaf-any-symbol-p head) (leaf-symbol-name head))))
+          (when (member head-name '("swap!" "alter" "commute" "dosync" "reset-vals!") :test #'string=)
+            (when (some #'contains-side-effect-call-p (rest children))
+              (make-lint-finding
+                :rule :clojure-swap-side-effects
+                :path path
+                :message (fmt "Side-effects detected inside '~A'; STM and atomic references retry on conflict, which will repeat side-effects." head-name)
+                :severity :warning
+                :suggested-fix nil))))))))
+
+;;; ---------------------------------------------------------------------------
+;;; P2 Rules: Idiomatic Traps & Dead Code
+;;; ---------------------------------------------------------------------------
+
+(defun check-dead-cond-clauses (node path dialect)
+  "Detect dead clauses appearing after an unconditional default branch (t, otherwise, :else) in cond."
+  (declare (ignore dialect))
+  (when (compound-node-p node)
+    (let ((children (get-node-children node)))
+      (when (and (>= (length children) 2)
+                 (leaf-any-symbol-p (first children))
+                 (equal (leaf-symbol-name (first children)) "cond"))
+        (let ((seen-default nil)
+              (dead-clause-path nil))
+          (dolist (clause (rest children))
+            (when (compound-node-p clause)
+              (let* ((clause-children (get-node-children clause))
+                     (test-node (first clause-children)))
+                (if seen-default
+                  (unless dead-clause-path (setf dead-clause-path (get-node-path clause)))
+                  (when (and test-node
+                             (or (leaf-true-p test-node)
+                                 (and (leaf-any-symbol-p test-node)
+                                      (member (leaf-symbol-name test-node) '("t" "otherwise" ":else" "else") :test #'string=))))
+                    (setf seen-default t))))))
+          (when dead-clause-path
+            (make-lint-finding
+              :rule :dead-cond-clauses
+              :path dead-clause-path
+              :message "Unreachable clause in 'cond' follows an unconditional default test."
+              :severity :warning
+              :suggested-fix nil)))))))
+
+(defun check-inappropriate-equality (node path dialect)
+  "Detect comparison of numbers, strings, or characters using eq or eq?."
+  (declare (ignore dialect))
+  (when (compound-node-p node)
+    (let ((children (get-node-children node)))
+      (when (and (= (length children) 3)
+                 (leaf-any-symbol-p (first children))
+                 (member (leaf-symbol-name (first children)) '("eq" "eq?") :test #'string=))
+        (let* ((arg1 (second children))
+               (arg2 (third children))
+               (v1 (when (eq (get-node-tag arg1) :leaf) (parse-node arg1)))
+               (v2 (when (eq (get-node-tag arg2) :leaf) (parse-node arg2))))
+          (declare (ignore v1 v2))
+          (let ((val1 (get-node-leaf-value arg1))
+                (val2 (get-node-leaf-value arg2)))
+            (when (or (numberp val1) (numberp val2)
+                      (stringp val1) (stringp val2)
+                      (characterp val1) (characterp val2))
+              (let ((replacement
+                      (cond
+                        ((or (numberp val1) (numberp val2))
+                          (format nil "(= ~A ~A)" (sexp-to-string arg1) (sexp-to-string arg2)))
+                        ((or (stringp val1) (stringp val2))
+                          (format nil "(string= ~A ~A)" (sexp-to-string arg1) (sexp-to-string arg2)))
+                        (t
+                          (format nil "(equal ~A ~A)" (sexp-to-string arg1) (sexp-to-string arg2))))))
+                (make-lint-finding
+                  :rule :inappropriate-equality
+                  :path path
+                  :message "Comparing numbers, strings, or characters with 'eq' is implementation-dependent; use '=', 'string=', or 'equal'."
+                  :severity :warning
+                  :suggested-fix replacement)))))))))
+
+(defun check-clojure-vector-contains (node path dialect)
+  "Detect (contains? [...] key) where first argument is a vector literal; contains? tests indices, not values."
+  (declare (ignore dialect))
+  (when (compound-node-p node)
+    (let ((children (get-node-children node)))
+      (when (and (>= (length children) 2)
+                 (leaf-any-symbol-p (first children))
+                 (equal (leaf-symbol-name (first children)) "contains?"))
+        (let ((coll-node (second children)))
+          (when (and coll-node (eq (get-node-tag coll-node) :square))
+            (make-lint-finding
+              :rule :clojure-vector-contains
+              :path path
+              :message "'contains?' on a vector checks for numerical index presence, not value containment. Use (some #{val} vec) or convert to set."
+              :severity :warning
+              :suggested-fix nil)))))))
+
+(defun check-elisp-lexical-binding (node path dialect)
+  "Detect Emacs Lisp file lacking ';; -*- lexical-binding: t; -*-' in initial comments."
+  (when (eq dialect :emacs-lisp)
+    (when (and (eq (get-node-tag node) :file) (null path))
+      (let* ((children (get-node-children node))
+             (first-comment (find-if (lambda (c) (eq (get-node-tag c) :comment)) children)))
+        (unless (and first-comment
+                     (multiple-value-bind (cpath ctag txt) (parse-node first-comment)
+                       (declare (ignore cpath ctag))
+                       (and (stringp txt) (search "lexical-binding: t" txt :test #'char-equal))))
+          (make-lint-finding
+            :rule :elisp-missing-lexical-binding
+            :path '()
+            :message "Emacs Lisp file lacks ';; -*- lexical-binding: t; -*-' header; defaults to dynamic variable scoping."
+            :severity :style
+            :suggested-fix ";; -*- lexical-binding: t; -*-"))))))
+
+
 (defclass lint-rule ()
   ((id :initarg :id :accessor rule-id :type keyword)
    (check :initarg :check :accessor rule-check)
@@ -538,7 +914,30 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
     (make-lint-rule :if-boolean-redundant #'check-if-boolean-redundant :dialects nil)
     (make-lint-rule :redundant-progn #'check-redundant-progn :dialects '(:common-lisp :emacs-lisp))
     (make-lint-rule :nested-let #'check-nested-let :dialects '(:common-lisp :emacs-lisp :scheme))
-    (make-lint-rule :equal-nil-to-null #'check-equal-nil-to-null :dialects '(:common-lisp :emacs-lisp)))
+    (make-lint-rule :equal-nil-to-null #'check-equal-nil-to-null :dialects '(:common-lisp :emacs-lisp))
+    ;; P0 Rules
+    (make-lint-rule :ignored-destructive-return #'check-ignored-destructive-return :dialects '(:common-lisp :emacs-lisp)
+                    :description "Detect calls to destructive sequence functions where the return value is discarded.")
+    (make-lint-rule :unhygienic-macro-binding #'check-unhygienic-macro-binding :dialects '(:common-lisp :emacs-lisp :scheme)
+                    :description "Detect literal symbol bindings in backquoted let forms inside defmacro.")
+    (make-lint-rule :clojure-tail-recur #'check-clojure-tail-recur :dialects '(:clojure)
+                    :description "Detect recursive self-calls in tail position in Clojure; suggest 'recur'.")
+    ;; P1 Rules
+    (make-lint-rule :mutate-literal-constant #'check-mutate-literal-constant :dialects '(:common-lisp :scheme :clojure)
+                    :description "Detect destructive mutation of literal or quoted constants.")
+    (make-lint-rule :special-var-earmuffs #'check-special-var-earmuffs :dialects '(:common-lisp :emacs-lisp)
+                    :description "Detect global variable definitions lacking standard earmuffs (*...*).")
+    (make-lint-rule :clojure-swap-side-effects #'check-clojure-swap-side-effects :dialects '(:clojure)
+                    :description "Detect side-effects inside STM/CAS retry transactions.")
+    ;; P2 Rules
+    (make-lint-rule :dead-cond-clauses #'check-dead-cond-clauses :dialects nil
+                    :description "Detect dead clauses appearing after an unconditional default test in cond.")
+    (make-lint-rule :inappropriate-equality #'check-inappropriate-equality :dialects '(:common-lisp :scheme)
+                    :description "Detect comparison of numbers, strings, or characters using eq or eq?.")
+    (make-lint-rule :clojure-vector-contains #'check-clojure-vector-contains :dialects '(:clojure)
+                    :description "Detect 'contains?' on vector literals testing indices rather than values.")
+    (make-lint-rule :elisp-missing-lexical-binding #'check-elisp-lexical-binding :dialects '(:emacs-lisp)
+                    :description "Detect Emacs Lisp file lacking lexical-binding cookie."))
   "Active structural anti-pattern and code smell lint rules.")
 
 (defun rule-matches-dialect-p (rule dialect)
@@ -568,7 +967,8 @@ Returns a list of plists: (:path <path> :node <node> :bindings <bindings>)."
 (defun lint-ast (tree &key path dialect rules)
   "Recursively lint TREE (or subtree at PATH) for structural code smells and anti-patterns.
 Returns a list of LINT-FINDING instances."
-  (let* ((start-node (resolve-tree-scope tree path))
+  (let* ((*current-lint-tree* tree)
+         (start-node (resolve-tree-scope tree path))
          (findings '()))
     (when start-node
       (labels ((walk (node current-dialect)
@@ -1833,16 +2233,21 @@ Returns a list of BINDING-FINDING instances."
           ((rule (lint-finding-rule f))
            (p
              (case rule
-               ((:single-clause-cond :if-boolean-redundant) :high)
+               ((:single-clause-cond :if-boolean-redundant
+                                     :ignored-destructive-return :unhygienic-macro-binding
+                                     :clojure-tail-recur :mutate-literal-constant)
+                 :high)
                ((:if-progn-to-when :if-nil-to-when
-                                   :if-not-to-unless
-                                   :invert-if-not
-                                   :equal-nil-to-null)
+                                   :if-not-to-unless :invert-if-not
+                                   :equal-nil-to-null :special-var-earmuffs
+                                   :clojure-swap-side-effects :dead-cond-clauses
+                                   :inappropriate-equality :clojure-vector-contains)
                  :medium)
                (t :low)))
            (tool
              (case rule
-               (:redundant-progn "ast_remove")
+               ((:redundant-progn :dead-cond-clauses) "ast_remove")
+               ((:special-var-earmuffs :unhygienic-macro-binding) "ast_rename")
                (t "ast_modify")))
            (plan
              (if (lint-finding-suggested-fix f)
