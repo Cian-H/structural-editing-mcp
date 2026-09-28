@@ -425,6 +425,16 @@ If FORCE is nil and uncommitted dirty files would be overwritten, signals WORKSP
     (when coords
       (get-node-at-path (workspace-context-tree ctx) coords))))
 
+(defun reconcile-single-form (b s tg)
+  "Compare a single form across BASE (B), SOURCE (S), and TARGET (TG).
+Returns (values resolved-form conflict-p)."
+  (cond
+    ((and (equal s b) (equal tg b)) (values (when b (copy-tree b)) nil))
+    ((and (not (equal s b)) (equal tg b)) (values (when s (copy-tree s)) nil))
+    ((and (equal s b) (not (equal tg b))) (values (when tg (copy-tree tg)) nil))
+    ((equal s tg) (values (when s (copy-tree s)) nil))
+    (t (values nil t))))
+
 (defun reconcile-file-forms
        (max-len base-forms src-forms tgt-forms)
   (let
@@ -432,14 +442,11 @@ If FORCE is nil and uncommitted dirty files would be overwritten, signals WORKSP
     (dotimes (i max-len)
       (let
           ((b (nth i base-forms)) (s (nth i src-forms)) (tg (nth i tgt-forms)))
-        (cond
-          ((and (equal s b) (equal tg b)) (when b (push (copy-tree b) merged-forms)))
-          ((and (not (equal s b)) (equal tg b))
-            (when s (push (copy-tree s) merged-forms)))
-          ((and (equal s b) (not (equal tg b)))
-            (when tg (push (copy-tree tg) merged-forms)))
-          ((equal s tg) (when s (push (copy-tree s) merged-forms)))
-          (t (setf conflict-p t) (push i conflicts)))))
+        (multiple-value-bind (resolved form-conflict-p)
+                             (reconcile-single-form b s tg)
+          (if form-conflict-p
+            (progn (setf conflict-p t) (push i conflicts))
+            (when resolved (push resolved merged-forms))))))
     (values merged-forms conflict-p conflicts)))
 
 (defun merge-file-ast
@@ -910,19 +917,10 @@ Returns the newly assigned numerical file ID."
 
 (defun find-file-path-coords (canonical-path)
   "Locate the workspace tree coordinate path for CANONICAL-PATH."
-  (loop for
-        k
-        being
-        the
-        hash-keys
-        of
-        *file-registry*
-        using
-        (hash-value v)
-        when
-        (and (listp k) (equal v canonical-path))
-        return
-        k))
+  (loop for k being the hash-keys of
+        *file-registry* using
+        (hash-value v) when
+        (and (listp k) (equal v canonical-path)) return k))
 
 (defun register-clean-file-state
        (canonical-path parsed-file-node)
