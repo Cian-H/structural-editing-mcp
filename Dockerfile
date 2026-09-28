@@ -1,13 +1,12 @@
-# Multi-stage Docker build for structural-editing-mcp
-FROM debian:bookworm-slim AS builder
+# Multi-stage Alpine Docker build for structural-editing-mcp
+FROM alpine:latest AS builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apk add --no-cache \
     sbcl \
-    libzstd1 \
+    zstd-libs \
     curl \
     ca-certificates \
-    git \
- && rm -rf /var/lib/apt/lists/*
+    git
 
 # Install Quicklisp and pre-load all project dependencies
 RUN curl -fsSL https://beta.quicklisp.org/quicklisp.lisp -o /tmp/quicklisp.lisp && \
@@ -27,13 +26,10 @@ RUN OUTPUT_BINARY="semcp" sbcl --no-userinit --disable-debugger \
     chmod +x semcp && \
     ./semcp --version
 
-# Minimal runtime image
-FROM debian:bookworm-slim
+# Minimal runtime image (~22 MB total)
+FROM alpine:latest
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libzstd1 \
-    ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache zstd-libs ca-certificates
 
 COPY --from=builder /build/semcp /usr/local/bin/semcp
 
