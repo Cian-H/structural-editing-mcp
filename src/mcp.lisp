@@ -9,7 +9,7 @@
         :structural-editing-mcp.analysis
         :structural-editing-mcp.conditions
         :structural-editing-mcp.workspace)
-  (:import-from :serapeum :dict :trim-whitespace :ellipsize :fmt :href :defconst)
+  (:import-from :serapeum :dict :trim-whitespace :ellipsize :fmt :href :defconst :string-case)
   (:export :start-server :handle-message :dict :start-worker-pool :stop-worker-pool))
 
 (in-package :structural-editing-mcp.mcp)
@@ -615,20 +615,20 @@
 (defun perform-relocate-action
        (action src tgt index tree)
   "Dispatch relocation mutation and return the updated tree."
-  (match action
-         ((or "move" "copy")
-          (multiple-value-bind (tgt-parent tgt-idx)
-                               (resolve-parent-and-index tree tgt index)
-            (if (equal action "move")
-              (structural-editing-mcp.edit:move-node tree src tgt-parent tgt-idx)
-              (structural-editing-mcp.edit:copy-node tree src tgt-parent tgt-idx))))
-         ("swap" (structural-editing-mcp.edit:swap-nodes tree src tgt))
-         ("merge" (structural-editing-mcp.edit:merge-nodes tree src tgt))
-         ("split"
-          (structural-editing-mcp.edit:split-node tree
-                                                  tgt
-                                                  (resolve-split-index tgt index)))
-         (_ (error "Unknown action: ~A" action))))
+  (string-case (or action "")
+               (("move" "copy")
+                (multiple-value-bind (tgt-parent tgt-idx)
+                                     (resolve-parent-and-index tree tgt index)
+                  (if (equal action "move")
+                    (structural-editing-mcp.edit:move-node tree src tgt-parent tgt-idx)
+                    (structural-editing-mcp.edit:copy-node tree src tgt-parent tgt-idx))))
+               ("swap" (structural-editing-mcp.edit:swap-nodes tree src tgt))
+               ("merge" (structural-editing-mcp.edit:merge-nodes tree src tgt))
+               ("split"
+                (structural-editing-mcp.edit:split-node tree
+                                                        tgt
+                                                        (resolve-split-index tgt index)))
+               (t (error "Unknown action: ~A" action))))
 
 (defun perform-insert
        (tree path new-node-str &optional index)
@@ -1456,12 +1456,12 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
             child-count))))
     (setf
       structural-editing-mcp.workspace:*workspace-tree*
-      (match action
-             ("insert" (perform-insert tree path new_node index))
-             ("overwrite"
-              (structural-editing-mcp.edit:overwrite-expression tree path new_node))
-             ("wrap" (perform-wrap tree path new_node end_index index))
-             (_ (error "Unknown action: ~A" action))))
+      (string-case (or action "")
+                   ("insert" (perform-insert tree path new_node index))
+                   ("overwrite"
+                    (structural-editing-mcp.edit:overwrite-expression tree path new_node))
+                   ("wrap" (perform-wrap tree path new_node end_index index))
+                   (t (error "Unknown action: ~A" action))))
     (format-mutation-result
       (fmt "Successfully executed ~A at ~A" action path)
       path
@@ -1494,11 +1494,11 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
       ((tree structural-editing-mcp.workspace:*workspace-tree*))
     (setf
       structural-editing-mcp.workspace:*workspace-tree*
-      (match action
-             ("delete" (structural-editing-mcp.edit:delete-node tree path))
-             ("unwrap" (structural-editing-mcp.edit:unwrap-node tree path))
-             ("promote" (structural-editing-mcp.edit:promote-node tree path))
-             (_ (error "Unknown action: ~A" action))))
+      (string-case (or action "")
+                   ("delete" (structural-editing-mcp.edit:delete-node tree path))
+                   ("unwrap" (structural-editing-mcp.edit:unwrap-node tree path))
+                   ("promote" (structural-editing-mcp.edit:promote-node tree path))
+                   (t (error "Unknown action: ~A" action))))
     (format-mutation-result
       (fmt "Successfully executed ~A at ~A" action path)
       path
@@ -1926,30 +1926,30 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
        (tgt (or target_id workspace_id))
        (snap (or snapshot_name "checkpoint"))
        (file-list (to-list files)))
-    (match act
-           ("list"
-            (format-workspaces-list (structural-editing-mcp.workspace:list-workspaces)))
-           ("create"
-            (unless tgt (error "target_id or workspace_id required for create"))
-            (structural-editing-mcp.workspace:create-workspace tgt)
-            (fmt "Workspace ~S created successfully." tgt))
-           ("delete"
-            (structural-editing-mcp.workspace:delete-workspace ws-id)
-            (fmt "Workspace ~S deleted successfully." ws-id))
-           ("clear"
-            (let
-                ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
-              (structural-editing-mcp.workspace:clear-workspace ws :force force)
-              (fmt "Workspace ~S cleared successfully." ws-id)))
-           ("fork"
-            (unless tgt (error "target_id required for fork"))
-            (structural-editing-mcp.workspace:fork-workspace src tgt)
-            (fmt "Workspace ~S successfully forked into ~S." src tgt))
-           ((or "snapshot" "restore") (manage-snapshot-restore act ws-id snap))
-           ((or "create_file" "add_file") (manage-create-file args ws-id))
-           ("rebase" (manage-rebase-workspace args ws-id))
-           ("reload" (manage-reload-workspace ws-id file-list force))
-           (_ (error "Unknown workspace_manage action: ~A" act)))))
+    (string-case act
+                 ("list"
+                  (format-workspaces-list (structural-editing-mcp.workspace:list-workspaces)))
+                 ("create"
+                  (unless tgt (error "target_id or workspace_id required for create"))
+                  (structural-editing-mcp.workspace:create-workspace tgt)
+                  (fmt "Workspace ~S created successfully." tgt))
+                 ("delete"
+                  (structural-editing-mcp.workspace:delete-workspace ws-id)
+                  (fmt "Workspace ~S deleted successfully." ws-id))
+                 ("clear"
+                  (let
+                      ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+                    (structural-editing-mcp.workspace:clear-workspace ws :force force)
+                    (fmt "Workspace ~S cleared successfully." ws-id)))
+                 ("fork"
+                  (unless tgt (error "target_id required for fork"))
+                  (structural-editing-mcp.workspace:fork-workspace src tgt)
+                  (fmt "Workspace ~S successfully forked into ~S." src tgt))
+                 (("snapshot" "restore") (manage-snapshot-restore act ws-id snap))
+                 (("create_file" "add_file") (manage-create-file args ws-id))
+                 ("rebase" (manage-rebase-workspace args ws-id))
+                 ("reload" (manage-reload-workspace ws-id file-list force))
+                 (t (error "Unknown workspace_manage action: ~A" act)))))
 
 (define-mcp-tool "workspace_status"
                  (:description
@@ -2173,12 +2173,14 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
        (method (href msg "method"))
        (params (href msg "params")))
     (when (equal jsonrpc "2.0")
-      (match method
-             ("initialize" (handle-initialize id params))
-             ("notifications/initialized" nil)
-             ("tools/list" (handle-tools-list id params))
-             ("tools/call" (handle-tools-call id params))
-             (_ (when id (send-error id -32601 (fmt "Method not found: ~A" method))))))))
+      (string-case (or method "")
+                   ("initialize" (handle-initialize id params))
+                   ("notifications/initialized" nil)
+                   ("notifications/cancelled" nil)
+                   ("ping" (when id (send-result id (dict))))
+                   ("tools/list" (handle-tools-list id params))
+                   ("tools/call" (handle-tools-call id params))
+                   (t (when id (send-error id -32601 (fmt "Method not found: ~A" method))))))))
 
 (defun start-server ()
   "Start the MCP server loop over stdin/stdout with worker thread pool."

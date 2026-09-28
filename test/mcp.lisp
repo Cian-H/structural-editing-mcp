@@ -17,7 +17,7 @@
     (parse-mcp-response (get-output-stream-string capture))))
 
 (deftest test-mcp-initialize
-  (testing "handle-message parses initialize request"
+  (testing "handle-message parses initialize request from dictionary"
     (let* ((msg (structural-editing-mcp.mcp::dict
                   "jsonrpc" "2.0"
                   "id" 1
@@ -29,7 +29,35 @@
       (let ((res (gethash "result" result-json)))
         (ok (equal (gethash "protocolVersion" res) "2024-11-05"))
         (let ((info (gethash "serverInfo" res)))
-          (ok (equal (gethash "name" info) "structural-editing-mcp")))))))
+          (ok (equal (gethash "name" info) "structural-editing-mcp"))))))
+
+  (testing "handle-message parses initialize request from raw parsed JSON string"
+    (let* ((json-str "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"initialize\",\"params\":{}}")
+           (msg (let ((yason:*parse-json-arrays-as-vectors* nil)) (yason:parse json-str)))
+           (result-json (call-mcp-msg msg)))
+      (ok (equal (gethash "jsonrpc" result-json) "2.0"))
+      (ok (equal (gethash "id" result-json) 10))
+      (let ((res (gethash "result" result-json)))
+        (ok (equal (gethash "protocolVersion" res) "2024-11-05"))
+        (let ((info (gethash "serverInfo" res)))
+          (ok (equal (gethash "name" info) "structural-editing-mcp"))))))
+
+  (testing "handle-message responds to ping"
+    (let* ((json-str "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"ping\"}")
+           (msg (let ((yason:*parse-json-arrays-as-vectors* nil)) (yason:parse json-str)))
+           (result-json (call-mcp-msg msg)))
+      (ok (equal (gethash "jsonrpc" result-json) "2.0"))
+      (ok (equal (gethash "id" result-json) 99))
+      (ok (hash-table-p (gethash "result" result-json)))))
+
+  (testing "handle-message handles notifications without errors or responses"
+    (let ((notif-init (yason:parse "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"))
+          (notif-cancel (yason:parse "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1}}"))
+          (capture (make-string-output-stream)))
+      (let ((*standard-output* capture))
+        (structural-editing-mcp.mcp:handle-message notif-init)
+        (structural-editing-mcp.mcp:handle-message notif-cancel))
+      (ok (string= (get-output-stream-string capture) "")))))
 
 (deftest test-mcp-tools-list
   (testing
