@@ -6,19 +6,26 @@
 (asdf:load-system :cl-indentify)
 (indentify:initialize-templates)
 
-(let* ((root (uiop:pathname-parent-directory-pathname
-               (uiop:pathname-directory-pathname
-                 (or *load-truename* *load-pathname*))))
-       (tpl-file (merge-pathnames ".templates.lisp" root))
-       (files (append (directory (merge-pathnames "src/*.lisp" root))
-                      (directory (merge-pathnames "test/*.lisp" root))
-                      (directory (merge-pathnames "scripts/*.lisp" root))
-                      (directory (merge-pathnames "*.asd" root)))))
-  (when (probe-file tpl-file)
-    (indentify:load-template-file tpl-file))
+(let*
+    ((root
+       (uiop:pathname-parent-directory-pathname
+         (uiop:pathname-directory-pathname (or *load-truename* *load-pathname*))))
+     (tpl-file (merge-pathnames ".templates.lisp" root))
+     (files
+       (append
+         (directory (merge-pathnames "src/*.lisp" root))
+         (directory (merge-pathnames "test/*.lisp" root))
+         (directory (merge-pathnames "scripts/*.lisp" root))
+         (directory (merge-pathnames "*.asd" root)))))
+  (when (probe-file tpl-file) (indentify:load-template-file tpl-file))
   (dolist (file files)
-    (let ((text (uiop:read-file-string file)))
-      (uiop:with-output-file (out file :if-exists :supersede)
-                             (with-input-from-string (in text)
-                               (indentify:indentify in out)))
-      (format t "~&formatted  ~A~%" file))))
+    (let*
+        ((text (uiop:read-file-string file))
+         (formatted
+           (with-output-to-string (out)
+             (with-input-from-string (in text) (indentify:indentify in out)))))
+      (unless (string= text formatted)
+        (uiop:with-output-file
+          (out file :if-exists :supersede)
+          (write-string formatted out))
+        (format t "~&formatted  ~A~%" file)))))
