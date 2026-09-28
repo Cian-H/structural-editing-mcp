@@ -1,82 +1,136 @@
 ---
 name: lisp-quality-swarm
 description: >-
-  Deploys a team of agents to perform code quality passes on the Lisp codebase. Uses Jev System One models to filter findings, verify worker intent, and review AST diffs for safety before merging.
+  Deploys an automated swarm of worker subagents via invoke_subagent to perform code quality passes on the Lisp codebase. Uses Jev System One models to filter findings, verify worker intent, and review AST diffs for safety before merging via structural-editing MCP tools.
 ---
 
 # Lisp Code Quality Swarm
 
 ## Overview
-This skill orchestrates a swarm of agents (an Orchestrator and specialized Workers) to audit, evaluate, and optimize a Lisp codebase. It heavily leverages TypeSafe's Jev System One models to make intuitive, fast decisions—filtering out noisy static analysis findings, verifying worker intent, and reviewing blast radius before merging.
+This skill orchestrates a real agent swarm to audit, evaluate, and optimize a Lisp codebase. The calling agent acts as the **Orchestrator**, running static analysis, filtering findings with the Jev System One decision engine, and **actually deploying parallel worker subagents via `invoke_subagent`**. Each worker operates in an isolated AST branch using the `structural-editing` MCP tools, and changes are gated with `jev_review` and `jev_verify` before being merged and committed to disk.
 
-## Dependencies
-- **lisp-jev-refactor-evaluator**: Used by the Orchestrator to filter raw static analysis findings.
-- **jev**: Required for `jev_review` (safety checks) and `jev_verify` (intent checks).
-- **structural-editing-mcp**: Used for AST analysis, workspace branching, and structural mutation.
+## Strict Dogfooding Invariants
+- **NEVER use text-based replacement or diff tools (`replace_file_content`, text diffs) on Lisp files (`.lisp`, `.cl`, `.asd`).**
+- **ALL modifications MUST be performed in-memory via `structural-editing` MCP tools.**
+- **Changes persist to disk ONLY via `commit_workspace`.**
 
-## Quick Start
-To launch this swarm, use the `/teamwork-preview` slash command with this prompt, or simply tell the agent to "Launch the lisp-quality-swarm":
+## Toolchain & MCP Mappings
+- **Structural Editing (`ServerName: "structural-editing"`):**
+  - `read_node`: Load files into workspace (`load_files`) and inspect AST coordinates.
+  - `ast_suggest_refactorings`: Aggregate lint, complexity, duplicate, and binding analysis.
+  - `workspace_manage`: Manage lifecycle (`action: "fork"` to branch, `action: "list"` to inspect).
+  - `workspace_diff`: Compute AST diff between worker branch and `"default"`.
+  - `workspace_merge`: Merge worker branch into `"default"`.
+  - `commit_workspace`: Persist dirty files to disk.
+- **System 1 Engine (`ServerName: "jev"`):**
+  - `jev_decide`: Filter findings via `lisp-jev-refactor-evaluator`.
+  - `jev_review`: Review AST diffs for `safe_to_apply` and `blast_radius`.
+  - `jev_verify`: Verify worker changes match the assigned refactoring intent.
+- **Subagent Swarm Management:**
+  - `invoke_subagent`: Launch worker subagents concurrently.
 
-```markdown
-/teamwork-preview 
+---
 
-Please launch a team of agents led by an orchestrator agent. The orchestrator should work according to the following prompt as a rough template:
+## Orchestrator Execution Workflow
 
-# SYSTEM DIRECTIVE: ORCHESTRATOR AGENT (OPTIMIZATION & REFACTORING)
+### Step 1: Workspace Ingestion & Automated Audit
+1. Call `read_node` (with `load_files: ["/path/to/project"]` or target file) to ensure all source files are loaded into `*workspace-tree*`.
+2. Call `ast_suggest_refactorings` on target path (or workspace root `path: []`) with `min_priority: "style"`:
+   ```json
+   {
+     "ServerName": "structural-editing",
+     "ToolName": "ast_suggest_refactorings",
+     "Arguments": { "path": [0, 0], "min_priority": "style" }
+   }
+   ```
 
-## ROLE & MISSION
-You are the Orchestrator Agent for an automated code quality and optimization swarm. You are evaluating a Common Lisp codebase. 
-This is a dogfooding operation: you are optimizing the `structural-editing-mcp` codebase using its own structural editing tools.
-Your responsibility is to analyze the AST, evaluate findings using the Jev System One model, formulate precise tasks for specialized worker agents, and review their work before merging. You do not write code directly.
+### Step 2: System 1 Finding Filtration (`jev_decide`)
+For each finding returned by `ast_suggest_refactorings`:
+1. Use the `lisp-jev-refactor-evaluator` workflow to query `jev_decide`.
+2. Inspect Jev's `confidence` and `selected` candidate:
+   - If `confidence < 0.68` OR `selected != "apply"`: **Silently discard**.
+   - If `confidence >= 0.68` AND `selected == "apply"`: **Approve for worker delegation**.
 
-## MANDATORY DOGFOODING INVARIANTS
-- **No Text Diffs on Lisp Code:** You MUST prioritize using the structural-editing MCP tools over standard text-editing tools (`replace_file_content`, text diffs) for all Lisp code (`.lisp`, `.cl`, `.asd`)[cite: 1].
-- **AST-Level Editing Only:** Editing Lisp via raw text diffs violates the core philosophy of this project and risks parenthesis imbalance[cite: 1].
+### Step 3: Termination Check (System 2)
+- If 0 approved findings remain: Terminate the swarm, present a summary of work completed, and stop.
+- If approved findings exist, proceed to Step 4.
 
-## ORCHESTRATOR TOOLCHAIN & STRATEGY
-Instead of guessing where bugs are, use your analytical tools to build a data-driven plan, filter that plan through Jev, and review worker output using System 1 gut-checks.
+### Step 4: Branch Isolation (`workspace_manage`)
+For each approved finding `i` with target coordinate `path` (e.g. `[0, 0, 104]`):
+1. Call `workspace_manage` to create an isolated branch:
+   ```json
+   {
+     "ServerName": "structural-editing",
+     "ToolName": "workspace_manage",
+     "Arguments": {
+       "action": "fork",
+       "source_id": "default",
+       "target_id": "worker-branch-<i>"
+     }
+   }
+   ```
 
-1. **Initial Reconnaissance (`read_node`):**
-   - When inspecting unfamiliar or large files/nodes, pass `mode: "skeleton"` on your initial `read_node` call. 
-2. **Automated Auditing (`ast_suggest_refactorings`):**
-   - Call `ast_suggest_refactorings` to aggregate lint, complexity, duplicate, and binding analysis into a raw refactoring plan.
-3. **Finding Filtration (System 1):**
-   - You MUST run the raw findings through the `lisp-jev-refactor-evaluator` skill.
-   - Discard any finding where Jev's confidence score is < 0.68. Do not delegate discarded findings to worker agents.
-4. **Delegation & Isolation (`workspace_manage`):**
-   - For parallel work, call `workspace_manage` with `action: "fork"` to create an isolated agent branch for each approved finding.
-   - Instruct the worker to use Jev to ensure any newly extracted functions or variables use idiomatic Lisp naming (e.g., `-p` for predicates).
-5. **Merge Gating & Review (`jev_review` & `jev_verify`):**
-   - Before calling `workspace_merge` to integrate a worker's branch, you must check their work.
-   - **Safety**: Pass the worker's AST diff to `jev_review`. If the `blast_radius` is high or `safe_to_apply` is low, reject the merge and instruct the worker to isolate their changes.
-   - **Intent**: Pass your original delegation instructions as the claim and the worker's AST diff as evidence to `jev_verify`. If Jev returns `contradicted` or `unsupported`, reject the merge.
-6. **Termination Condition (System 2):**
-   - Loop this auditing and delegation process until either:
-     a) Jev evaluates the remaining static analysis findings and returns 0 high-confidence items to `apply`.
-     b) You determine through meta-reasoning that the remaining approved findings offer severely diminishing returns compared to the time cost of delegating another pass.
-   - Once either condition is met, output a final summary of merged optimizations and terminate the swarm.
+### Step 5: Launch Swarm via `invoke_subagent`
+Deploy worker subagents concurrently using the `invoke_subagent` tool. Group approved delegations into a single call:
 
-## AVAILABLE WORKER AGENTS
-1. **Extraction_Agent:** Uses `ast_extract_function` and `ast_extract_variable` to decompose complex nodes[cite: 2].
-2. **Linting_Agent:** Uses `ast_replace_pattern` and `ast_modify` to resolve anti-patterns[cite: 2].
-3. **Binding_Agent:** Resolves unused variables and lexical shadowing bugs[cite: 2].
-
-## OUTPUT SCHEMA (Delegation)
-When delegating, output your routing decisions in strictly valid JSON format.
-
+```json
 {
-  "mcp_analysis_requests": [
-    { "tool": "read_node", "params": { "load_files": ["src/analysis.lisp"], "mode": "skeleton" } }
-  ],
-  "delegations": [
+  "Subagents": [
     {
-      "target_worker": "Extraction_Agent",
-      "target_file": "src/analysis.lisp",
-      "target_path": [0, 0, 5],
-      "workspace_action": "fork",
-      "workspace_id": "opt-branch-1",
-      "instructions": "Decompose this function. Ensure the new helpers use idiomatic Lisp naming (verify with Jev). Run tests before finishing."
+      "TypeName": "self",
+      "Role": "AST Extraction Specialist",
+      "Model": "flash",
+      "Workspace": "inherit",
+      "Prompt": "You are a specialized worker in a structural editing swarm. You must optimize the AST node at path [0, 0, 104] in workspace 'worker-branch-1'.\n\nMANDATORY RULES:\n1. Target workspace is 'worker-branch-1'. Every structural-editing call MUST pass \"workspace_id\": \"worker-branch-1\".\n2. DO NOT use text-editing tools (replace_file_content). Use ONLY structural-editing MCP tools: ast_extract_function, ast_modify, ast_remove, ast_replace_pattern.\n3. Verify newly extracted helper names follow Common Lisp conventions (kebab-case, -p for predicates).\n4. Report back when the AST modification is complete with the exact tool call used."
+    },
+    {
+      "TypeName": "self",
+      "Role": "AST Lint Specialist",
+      "Model": "flash",
+      "Workspace": "inherit",
+      "Prompt": "You are a specialized worker in a structural editing swarm. You must resolve the anti-pattern at path [0, 0, 21] in workspace 'worker-branch-2'.\n\nMANDATORY RULES:\n1. Target workspace is 'worker-branch-2'. Every structural-editing call MUST pass \"workspace_id\": \"worker-branch-2\".\n2. DO NOT use text-editing tools. Use ONLY structural-editing MCP tools: ast_modify or ast_replace_pattern.\n3. Report back when the AST modification is complete."
     }
   ]
 }
 ```
+
+### Step 6: Reactive Collect & Merge Gating
+When subagents notify you of task completion:
+1. **Inspect AST Diff**: Call `workspace_diff`:
+   ```json
+   {
+     "ServerName": "structural-editing",
+     "ToolName": "workspace_diff",
+     "Arguments": {
+       "source_workspace_id": "worker-branch-<i>",
+       "target_workspace_id": "default"
+     }
+   }
+   ```
+2. **Review Safety (`jev_review`)**:
+   Pass the AST diff string to `jev_review`. If `safe_to_apply` is low or `blast_radius` is high, reject the branch.
+3. **Verify Intent (`jev_verify`)**:
+   Pass the assigned task description as the `claim` and the AST diff as `evidence` to `jev_verify`. Ensure result is `verified`.
+4. **Merge Branch**: Call `workspace_merge`:
+   ```json
+   {
+     "ServerName": "structural-editing",
+     "ToolName": "workspace_merge",
+     "Arguments": {
+       "source_workspace_id": "worker-branch-<i>",
+       "target_workspace_id": "default"
+     }
+   }
+   ```
+
+### Step 7: Verification & Disk Persistence
+1. Run test suite: execute `./scripts/run-tests.lisp`. All tests must pass (0 failures).
+2. Persist in-memory modifications to disk:
+   ```json
+   {
+     "ServerName": "structural-editing",
+     "ToolName": "commit_workspace",
+     "Arguments": { "workspace_id": "default" }
+   }
+   ```
+3. Loop back to Step 1 for the next pass, or terminate if stopping criteria are met.
