@@ -78,5 +78,5 @@
 (defun enqueue-task (task-thunk)
   "Enqueue TASK-THUNK for processing by the worker pool."
   (bt:with-lock-held (*worker-queue-lock*)
-    (setf *worker-queue* (append *worker-queue* (list task-thunk)))
+    (setf *worker-queue* (nconc *worker-queue* (list task-thunk)))
     (bt:condition-notify *worker-queue-cvar*)))

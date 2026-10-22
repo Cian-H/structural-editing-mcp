@@ -53,9 +53,11 @@
 
 (defun dynamic-variable-name-p (name)
   "Return T if variable NAME has earmuffs (*...*), indicating a dynamic variable."
-  (and (>= (length name) 2)
-       (char= (char name 0) #\*)
-       (char= (char name (1- (length name))) #\*)))
+  (let ((clean (string-left-trim ",@'" name)))
+    (and (>= (length clean) 2)
+         (or
+           (and (char= (char clean 0) #\*) (char= (char clean (1- (length clean))) #\*))
+           (and (char= (char clean 0) #\+) (char= (char clean (1- (length clean))) #\+))))))
 
 (defun extract-spec-ignored-vars (spec)
   "Extract ignored/ignorable variable names from a single declaration specifier form SPEC."
@@ -229,23 +231,44 @@ Returns (values ignored-names remaining-body-nodes)."
             for parsed = (extract-single-let-clause clause)
             when parsed collect parsed))))
 
-(defun check-and-register-binding (scope name path ignored-names findings)
-  (let ((outer (find-in-lexical-scope (lexical-scope-parent scope) name))
-        (ignored (member name ignored-names :test #'string-equal)))
-    (when (and outer
-               (not (ignored-variable-name-p name))
-               (not (dynamic-variable-name-p name)))
-      (push (make-binding-finding
-              :kind :shadowed-variable
-              :variable-name name
-              :path path
-              :scope-kind (lexical-scope-kind scope)
-              :outer-path (scope-binding-path outer)
-              :message (fmt "Variable '~A' in ~A shadows outer binding at [~{~A~^, ~}]."
-                            name (lexical-scope-kind scope) (scope-binding-path outer))
-              :recommendation (fmt "Consider renaming local variable '~A' using 'ast_rename' to avoid shadowing." name))
-            findings))
-    (register-scope-binding scope name path :ignored (or ignored (ignored-variable-name-p name)))
+(defun check-and-register-binding
+       (scope name path ignored-names findings)
+  (let
+      ((outer (find-in-lexical-scope (lexical-scope-parent scope) name))
+       (ignored
+         (or (member name ignored-names :test #'string-equal) (string-prefix-p "," name))))
+    (when
+        (and outer
+             (not ignored)
+             (not (ignored-variable-name-p name))
+             (not (dynamic-variable-name-p name)))
+      (push
+        (make-binding-finding :kind
+                              :shadowed-variable
+                              :variable-name
+                              name
+                              :path
+                              path
+                              :scope-kind
+                              (lexical-scope-kind scope)
+                              :outer-path
+                              (scope-binding-path outer)
+                              :message
+                              (fmt
+                                "Variable '~A' in ~A shadows outer binding at [~{~A~^, ~}]."
+                                name
+                                (lexical-scope-kind scope)
+                                (scope-binding-path outer))
+                              :recommendation
+                              (fmt
+                                "Consider renaming local variable '~A' using 'ast_rename' to avoid shadowing."
+                                name))
+        findings))
+    (register-scope-binding scope
+                            name
+                            path
+                            :ignored
+                            (or ignored (ignored-variable-name-p name)))
     findings))
 
 (defun check-unused-in-scope (scope dialect findings)
@@ -597,24 +620,38 @@ Returns (values ignored-names remaining-body-nodes)."
       (when (leaf-any-symbol-p head)
         (leaf-symbol-name head)))))
 
-(defun walk-binding-tree (node scope dialect findings-acc)
+(defun walk-binding-tree
+       (node scope dialect findings-acc)
   "Recursively walk NODE in SCOPE, updating findings accumulator and resolving variable usages."
   (cond
-    ((null node)
-      findings-acc)
+    ((null node) findings-acc)
     ((eq (get-node-tag node) :leaf)
       (when (leaf-any-symbol-p node)
-        (record-variable-usage scope (leaf-symbol-name node) (get-node-path node)))
+        (let*
+            ((raw-name (leaf-symbol-name node))
+             (clean-name (string-left-trim "#'`,@~" raw-name)))
+          (record-variable-usage scope raw-name (get-node-path node))
+          (when
+              (and (plusp (length clean-name)) (not (string= clean-name raw-name)))
+            (record-variable-usage scope clean-name (get-node-path node)))))
       findings-acc)
-    ((eq (get-node-tag node) :comment)
-      findings-acc)
+    ((eq (get-node-tag node) :comment) findings-acc)
+    ((member (get-node-tag node) *supported-dialects*)
+      (walk-binding-nodes (get-node-children node)
+                          scope
+                          (get-node-tag node)
+                          findings-acc))
     ((member (get-node-tag node) '(:paren :square))
       (let ((children (get-node-children node)))
         (if children
-          (walk-compound-binding-form (node-head-leaf-name children) children scope dialect findings-acc)
+          (walk-compound-binding-form
+            (node-head-leaf-name children)
+            children
+            scope
+            dialect
+            findings-acc)
           findings-acc)))
-    (t
-      (walk-binding-nodes (get-node-children node) scope dialect findings-acc))))
+    (t (walk-binding-nodes (get-node-children node) scope dialect findings-acc))))
 
 (defun analyze-bindings (tree &key path (include-unused t) (include-shadowed t) (dialect *current-dialect*))
   "Analyze variable bindings in TREE (or under PATH) for unused and shadowed variables.

@@ -13,8 +13,10 @@
            :parse-node
            :node
            :leaf
-           :comment)
-  (:documentation "Core AST representations, patterns, accessors, and path navigation."))
+           :comment
+           :ast-equal-p)
+  (:documentation
+    "Core AST representations, patterns, accessors, and path navigation."))
 
 (in-package :structural-editing-mcp.tree)
 
@@ -131,4 +133,19 @@ Only re-indexes the modified subtree at PATH rather than traversing the entire t
                                 :path path
                                 :tree tree
                                 :message (fmt "Cannot navigate into non-node element at path ~A" curr-path)))))))
-    (walk tree path '())))
+    (walk tree path '())))(defun ast-equal-p (node-a node-b)
+  "Return T if NODE-A and NODE-B are structurally identical AST nodes, ignoring :path metadata."
+  (or (eq node-a node-b)
+      (multiple-value-bind (path-a tag-a children-a)
+                           (parse-node node-a)
+        (declare (ignore path-a))
+        (multiple-value-bind (path-b tag-b children-b)
+                             (parse-node node-b)
+          (declare (ignore path-b))
+          (if (and tag-a tag-b)
+            (and (eq tag-a tag-b)
+                 (if (or (eq tag-a :leaf) (eq tag-a :comment))
+                   (equal children-a children-b)
+                   (and (= (length children-a) (length children-b))
+                        (every #'ast-equal-p children-a children-b))))
+            (and (null tag-a) (null tag-b) (equal node-a node-b)))))))

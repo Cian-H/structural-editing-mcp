@@ -200,18 +200,33 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
            (structural-editing-mcp.tree:get-node-children
              (structural-editing-mcp.parser:string-to-sexp new-name)))))
     (labels
-        ((walk (node)
+        ((replace-matched-leaf (path prefix)
+           (if (string= prefix "")
+             (match parsed-new
+                    ((node _ tag children) ` (:path ,path ,tag ,@children))
+                    ((leaf _ new-val) ` (:path ,path :leaf ,new-val))
+                    (_ ` (:path ,path :leaf (:raw . ,new-name))))
+             `
+             (:path ,path :leaf (:raw . , (concatenate 'string prefix new-name)))))
+         (match-prefixed-old (lower-str str)
+           (loop for p in '
+                 ("#'," "#'" ",@" "~@" "'" "`" "," "@" "~") when
+                 (and (> (length lower-str) (length p))
+                      (string= p lower-str :end2 (length p))
+                      (string= lower-old (subseq lower-str (length p))))
+                 return
+                 (subseq str 0 (length p))))
+         (walk (node)
            (match node
                   ((leaf path val)
                    (let*
                        ((str (structural-editing-mcp.parser::format-atom val))
                         (lower-str (string-downcase str)))
-                     (if (string= lower-old lower-str)
-                       (match parsed-new
-                              ((node _ tag children) ` (:path ,path ,tag ,@children))
-                              ((leaf _ new-val) ` (:path ,path :leaf ,new-val))
-                              (_ node))
-                       node)))
+                     (cond
+                       ((string= lower-old lower-str) (replace-matched-leaf path ""))
+                       ((and (not (consp val)) (match-prefixed-old lower-str str))
+                         (replace-matched-leaf path (match-prefixed-old lower-str str)))
+                       (t node))))
                   ((node path tag children) (list* :path path tag (mapcar #'walk children)))
                   (_ node))))
       (if target-path
@@ -372,10 +387,16 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                    collect
                    (let
                        ((key-str (string-downcase (substitute #\_ #\- (string pname))))
-                        (default (getf (cdr p) :default)))
-                     (if default
+                        (default (getf (cdr p) :default))
+                        (has-default (not (eq (getf (cdr p) :default :missing) :missing))))
+                     (if has-default
                        `
-                       (,pname (or (gethash ,key-str args) ,default))
+                       (,pname
+                         (multiple-value-bind (val present-p)
+                                              (gethash ,key-str args)
+                           (if present-p
+                             val
+                             ,default)))
                        `
                        (,pname (gethash ,key-str args))))))
           (declare (ignorable path dialect agent-id ,@ (mapcar #'first effective-params)))
@@ -449,13 +470,15 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
 (defun run-tool-duplicates (tree path args)
   "Run duplicate subtree detector and return formatted report."
   (let*
-      ((min-nodes (or (gethash "min_nodes" args) 4))
+      ((min-nodes (or (gethash "min_nodes" args) (gethash "min_size" args) 4))
        (min-depth (or (gethash "min_depth" args) 2))
+       (min-occurrences (or (gethash "min_occurrences" args) 2))
        (exact
-         (let ((val (gethash "exact" args)))
-           (if (null val)
-             t
-             val)))
+         (multiple-value-bind (val present-p)
+                              (gethash "exact" args)
+           (if present-p
+             val
+             t)))
        (results
          (structural-editing-mcp.analysis:find-duplicate-subtrees
            tree
@@ -465,6 +488,8 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
            min-nodes
            :min-depth
            min-depth
+           :min-occurrences
+           min-occurrences
            :exact
            exact)))
     (structural-editing-mcp.analysis:format-duplicate-report results)))
@@ -473,15 +498,17 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
   "Run variable binding analysis and return formatted report."
   (let*
       ((inc-unused
-         (let ((val (gethash "include_unused" args)))
-           (if (null val)
-             t
-             val)))
+         (multiple-value-bind (val present-p)
+                              (gethash "include_unused" args)
+           (if present-p
+             val
+             t)))
        (inc-shadowed
-         (let ((val (gethash "include_shadowed" args)))
-           (if (null val)
-             t
-             val)))
+         (multiple-value-bind (val present-p)
+                              (gethash "include_shadowed" args)
+           (if present-p
+             val
+             t)))
        (findings
          (structural-editing-mcp.analysis:analyze-bindings
            tree
@@ -664,7 +691,16 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
   (cond
     ((mutation-tool-p name)
       (execute-mutation-tool-locked name path args dialect agent-id))
-    ((equal name "commit_workspace")
+    ((member name
+             '
+             ("commit_workspace" "ast_search"
+              "ast_lint"
+              "ast_complexity_metrics"
+              "ast_find_duplicates"
+              "ast_analyze_bindings"
+              "ast_suggest_refactorings")
+             :test
+             #'string=)
       (bt:with-lock-held
         (structural-editing-mcp.workspace:*workspace-lock*)
         (dispatch-tool-call name path args dialect agent-id)))

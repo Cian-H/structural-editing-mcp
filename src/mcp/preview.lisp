@@ -27,12 +27,14 @@
         (1+ (reduce #'+ children :key #'count-subtree-nodes :initial-value 0))))))
 
 (defun format-child-stub (c)
-  (let ((ctag (structural-editing-mcp.tree:get-node-tag c)))
+  (let
+      ((ctag (structural-editing-mcp.tree:get-node-tag c)))
     (cond
       ((or (eq ctag :leaf) (eq ctag :comment))
         (structural-editing-mcp.parser:sexp-to-string c))
-      ((eq ctag :bracket) "[...]")
-      ((eq ctag :brace) "{...}")
+      ((member ctag '(:square :bracket)) "[...]")
+      ((member ctag '(:curly :brace)) "{...}")
+      ((eq ctag :set) "#{...}")
       (t "(...)"))))
 
 (defun extract-node-signature
@@ -40,26 +42,40 @@
   "Extract a compact signature/stub string for a node without hydrating its entire body."
   (if (null node)
     ""
-    (let ((tag (structural-editing-mcp.tree:get-node-tag node)))
+    (let
+        ((tag (structural-editing-mcp.tree:get-node-tag node)))
       (cond
         ((or (eq tag :leaf) (eq tag :comment))
           (truncate-preview-string
             (structural-editing-mcp.parser:sexp-to-string node)
-            :max-length max-length))
+            :max-length
+            max-length))
         (t
-          (let ((children (structural-editing-mcp.tree:get-node-children node))
-                (prefix (case tag (:bracket "[") (:brace "{") (t "(")))
-                (suffix (case tag (:bracket "]") (:brace "}") (t ")"))))
+          (let
+              ((children (structural-editing-mcp.tree:get-node-children node))
+               (prefix
+                 (case tag
+                   ((:square :bracket) "[")
+                   ((:curly :brace) "{")
+                   (:set "#{")
+                   (t "(")))
+               (suffix
+                 (case tag
+                   ((:square :bracket) "]")
+                   ((:curly :brace :set) "}")
+                   (t ")"))))
             (if (null children)
               (concatenate 'string prefix suffix)
-              (let* ((count (min (length children) max-elements))
-                     (head (subseq children 0 count))
-                     (has-more (> (length children) max-elements))
-                     (items (mapcar #'format-child-stub head))
-                     (content (format nil "~{~A~^ ~}" items))
-                     (res (if has-more
-                            (format nil "~A~A ...~A" prefix content suffix)
-                            (format nil "~A~A~A" prefix content suffix))))
+              (let*
+                  ((count (min (length children) max-elements))
+                   (head (subseq children 0 count))
+                   (has-more (> (length children) max-elements))
+                   (items (mapcar #'format-child-stub head))
+                   (content (format nil "~{~A~^ ~}" items))
+                   (res
+                     (if has-more
+                       (format nil "~A~A ...~A" prefix content suffix)
+                       (format nil "~A~A~A" prefix content suffix))))
                 (truncate-preview-string res :max-length max-length)))))))))
 
 (defun print-children-tree
@@ -189,19 +205,14 @@
   "Format a node with its path, tag, rendered code, and summary of children up to DEPTH with pagination. Supports 'skeleton' mode to prevent context blowout on wide nodes."
   (if (null node)
     "Node not found at given path."
-    (let* ((path (structural-editing-mcp.tree:get-node-path node))
-           (tag (structural-editing-mcp.tree:get-node-tag node))
-           (children (structural-editing-mcp.tree:get-node-children node))
-           (code (structural-editing-mcp.parser:sexp-to-string node))
-           (skeleton-p
-             (or (equal mode "skeleton")
-                 (and (not (equal mode "full"))
-                      (or (>= (length children) *skeleton-threshold-children*)
-                          (> (length code) *skeleton-threshold-chars*)))
-                 (and (equal mode "full")
-                      (or (>= (length children) 200) (> (length code) 20000))))))
+    (let*
+        ((path (structural-editing-mcp.tree:get-node-path node))
+         (tag (structural-editing-mcp.tree:get-node-tag node))
+         (children (structural-editing-mcp.tree:get-node-children node)))
       (with-output-to-string (s)
-        (format s "Workspace Revision: ~D~%" structural-editing-mcp.workspace:*workspace-revision*)
+        (format s
+                "Workspace Revision: ~D~%"
+                structural-editing-mcp.workspace:*workspace-revision*)
         (format s "Path: ~A~%" (or path "()"))
         (format s "Tag: ~A~%" tag)
         (cond
@@ -209,16 +220,35 @@
             (format-workspace-preview s children :limit limit :offset offset))
           ((member tag structural-editing-mcp.workspace:*known-dialects*)
             (format-dialect-preview s children path tag :limit limit :offset offset))
-          ((eq tag :file)
-            (let ((filepath (structural-editing-mcp.workspace:get-filepath path)))
-              (when filepath (format s "File: ~A~%" filepath)))
-            (format-node-code-and-metrics s node code children skeleton-p)
-            (format-children-preview s children path depth " top-level forms"
-                                     :limit limit :offset offset :skeleton skeleton-p))
           (t
-            (format-node-code-and-metrics s node code children skeleton-p)
-            (format-children-preview s children path depth ""
-                                     :limit limit :offset offset :skeleton skeleton-p)))))))
+            (let*
+                ((code (structural-editing-mcp.parser:sexp-to-string node))
+                 (skeleton-p
+                   (or (equal mode "skeleton")
+                       (and (not (equal mode "full"))
+                            (or
+                              (>= (length children) *skeleton-threshold-children*)
+                              (> (length code) *skeleton-threshold-chars*)))
+                       (and (equal mode "full")
+                            (or (>= (length children) 200) (> (length code) 20000))))))
+              (when (eq tag :file)
+                (let
+                    ((filepath (structural-editing-mcp.workspace:get-filepath path)))
+                  (when filepath (format s "File: ~A~%" filepath))))
+              (format-node-code-and-metrics s node code children skeleton-p)
+              (format-children-preview s
+                                       children
+                                       path
+                                       depth
+                                       (if (eq tag :file)
+                                         " top-level forms"
+                                         "")
+                                       :limit
+                                       limit
+                                       :offset
+                                       offset
+                                       :skeleton
+                                       skeleton-p))))))))
 
 (defun format-ancestor-spine-item
        (tree prefix next-idx)

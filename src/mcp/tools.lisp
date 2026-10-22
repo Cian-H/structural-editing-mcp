@@ -7,42 +7,100 @@
 ;;; ----------------------------------------------------------------------
 
 (define-mcp-tool "read_node"
-    (:description "Inspect any node in the AST or workspace. Returns rendered code and a nested tree of child paths up to 'depth' levels. Supports 'mode': 'skeleton' for compact metadata stubs on wide trees. BEST PRACTICE: Always read parent forms (e.g. [0, 10]) to see the entire expression and its child paths at once—do NOT probe child indices one-by-one. Use 'read_slice' to cast a vertical ray down to a specific nested node without lateral context blowout. Pass 'load_files' on initial call to populate the workspace from disk."
-     :mutation nil)
-    ((path :type :path)
-     (depth :type :integer :doc "Recursion depth for displaying nested children and their paths (default: 2)." :default 2)
-     (limit :type :integer :doc "Optional maximum number of child nodes or files to display in preview (default: 50)." :default 50)
-     (offset :type :integer :doc "Optional 0-indexed child offset to start displaying from (default: 0)." :default 0)
-     (mode :type :string :doc "Display mode: 'full' (default), 'skeleton' (compact metadata stubs for wide trees), or 'auto' (automatic skeleton for massive nodes)."
-           :enum ("full" "skeleton" "auto") :default "auto")
-     (load_files :type :load-files))
-  (bt:with-lock-held (structural-editing-mcp.workspace:*workspace-lock*)
+                 (:description
+                   "Inspect any node in the AST or workspace. Returns rendered code and a nested tree of child paths up to 'depth' levels. Supports 'mode': 'skeleton' for compact metadata stubs on wide trees. BEST PRACTICE: Always read parent forms (e.g. [0, 10]) to see the entire expression and its child paths at once—do NOT probe child indices one-by-one. Use 'read_slice' to cast a vertical ray down to a specific nested node without lateral context blowout. Pass 'load_files' on initial call to populate the workspace from disk."
+                   :mutation
+                   nil)
+                 ((path :type :path)
+                  (depth :type
+                         :integer
+                         :doc
+                         "Recursion depth for displaying nested children and their paths (default: 2)."
+                         :default
+                         2)
+                  (limit :type
+                         :integer
+                         :doc
+                         "Optional maximum number of child nodes or files to display in preview (default: 50)."
+                         :default
+                         50)
+                  (offset :type
+                          :integer
+                          :doc
+                          "Optional 0-indexed child offset to start displaying from (default: 0)."
+                          :default
+                          0)
+                  (mode :type
+                        :string
+                        :doc
+                        "Display mode: 'full' (default), 'skeleton' (compact metadata stubs for wide trees), or 'auto' (automatic skeleton for massive nodes)."
+                        :enum
+                        ("full" "skeleton" "auto")
+                        :default
+                        "auto")
+                  (load_files :type :load-files))
+  (bt:with-lock-held
+    (structural-editing-mcp.workspace:*workspace-lock*)
     (let ((files-to-load (to-list load_files)))
       (when files-to-load
         (structural-editing-mcp.workspace:load-into-workspace files-to-load)))
-    (unless structural-editing-mcp.workspace:*workspace-tree*
-      (structural-editing-mcp.workspace:init-workspace))
+    (unless
+        structural-editing-mcp.workspace:*workspace-tree*
+      (setf structural-editing-mcp.workspace:*workspace-tree* '(:path () :workspace)))
     (structural-editing-mcp.workspace:record-agent-read agent-id)
-    (let ((node (structural-editing-mcp.tree:resolve-tree-scope
-                 structural-editing-mcp.workspace:*workspace-tree* path)))
+    (let
+        ((node
+           (structural-editing-mcp.tree:resolve-tree-scope
+             structural-editing-mcp.workspace:*workspace-tree*
+             path)))
       (format-node-preview node :depth depth :limit limit :offset offset :mode mode))))
 
 (define-mcp-tool "read_slice"
-    (:description "Inspect a vertical ray/spine path down to a specific target AST node. Renders the ancestral hierarchy (e.g. file, let, defun) leading to the target node while strictly eliding lateral siblings at each level, then hydrates the target node up to 'depth'. Ideal for inspecting deeply nested code in wide trees without context window blowout."
-     :mutation nil)
-    ((path :type :path :doc "Target AST path (e.g. [0, 0, 50, 2]) to cast the vertical ray down to." :required t)
-     (depth :type :integer :doc "Recursion depth for displaying nested children of the target node (default: 2)." :default 2)
-     (limit :type :integer :doc "Optional maximum number of child nodes to display for the target node (default: 50)." :default 50)
-     (offset :type :integer :doc "Optional 0-indexed child offset for the target node." :default 0)
-     (mode :type :string :doc "Display mode for the target node: 'full' (default) or 'skeleton'."
-           :enum ("full" "skeleton" "auto") :default "full")
-     (load_files :type :load-files))
-  (bt:with-lock-held (structural-editing-mcp.workspace:*workspace-lock*)
+                 (:description
+                   "Inspect a vertical ray/spine path down to a specific target AST node. Renders the ancestral hierarchy (e.g. file, let, defun) leading to the target node while strictly eliding lateral siblings at each level, then hydrates the target node up to 'depth'. Ideal for inspecting deeply nested code in wide trees without context window blowout."
+                   :mutation
+                   nil)
+                 ((path :type
+                        :path
+                        :doc
+                        "Target AST path (e.g. [0, 0, 50, 2]) to cast the vertical ray down to."
+                        :required
+                        t)
+                  (depth :type
+                         :integer
+                         :doc
+                         "Recursion depth for displaying nested children of the target node (default: 2)."
+                         :default
+                         2)
+                  (limit :type
+                         :integer
+                         :doc
+                         "Optional maximum number of child nodes to display for the target node (default: 50)."
+                         :default
+                         50)
+                  (offset :type
+                          :integer
+                          :doc
+                          "Optional 0-indexed child offset for the target node."
+                          :default
+                          0)
+                  (mode :type
+                        :string
+                        :doc
+                        "Display mode for the target node: 'full' (default) or 'skeleton'."
+                        :enum
+                        ("full" "skeleton" "auto")
+                        :default
+                        "full")
+                  (load_files :type :load-files))
+  (bt:with-lock-held
+    (structural-editing-mcp.workspace:*workspace-lock*)
     (let ((files-to-load (to-list load_files)))
       (when files-to-load
         (structural-editing-mcp.workspace:load-into-workspace files-to-load)))
-    (unless structural-editing-mcp.workspace:*workspace-tree*
-      (structural-editing-mcp.workspace:init-workspace))
+    (unless
+        structural-editing-mcp.workspace:*workspace-tree*
+      (setf structural-editing-mcp.workspace:*workspace-tree* '(:path () :workspace)))
     (structural-editing-mcp.workspace:record-agent-read agent-id)
     (format-node-slice structural-editing-mcp.workspace:*workspace-tree* path args)))
 
@@ -93,23 +151,48 @@
                             structural-editing-mcp.workspace:*workspace-tree*)))
 
 (define-mcp-tool "ast_relocate"
-    (:description "Reorder, copy, swap, merge, or split AST nodes and collections in memory. Actions: 'move' (relocates node from source_path to target_path or target_index), 'copy' (duplicates node from source_path into target_path), 'swap' (interchanges positions of two nodes at source_path and target_path), 'merge' (combines two collections or files into one), 'split' (divides a collection into two at split_index). NOTE: Automatically returns a preview of the enclosing form."
-     :mutation t)
-    ((action :type :string :doc "The relocation action to perform." :enum ("move" "copy" "swap" "merge" "split") :required t)
-     (source_path :type :path :doc "Source AST path of the node to move, copy, swap, or merge.")
-     (target_path :type :path :doc "Target AST path for move, copy, swap, or merge.")
-     (target_index :type :integer :doc "Optional child index within target_path to insert the relocated node.")
-     (index :type :integer :doc "Optional index within target.")
-     (split_index :type :integer :doc "For action 'split': the 0-indexed child position at which to split the collection.")
-     (separator :type :string :doc "Optional separator string for merge."))
-  (let* ((src (or (to-list source_path) path))
-         (tgt (to-list target_path))
-         (idx (or target_index index)))
-    (setf structural-editing-mcp.workspace:*workspace-tree*
-          (perform-relocate-action action src tgt idx structural-editing-mcp.workspace:*workspace-tree*))
-    (format-mutation-result (fmt "Successfully executed ~A from ~A to ~A" action src tgt)
-                            tgt
-                            structural-editing-mcp.workspace:*workspace-tree*)))
+                 (:description
+                   "Reorder, copy, swap, merge, or split AST nodes and collections in memory. Actions: 'move' (relocates node from source_path to target_path or target_index), 'copy' (duplicates node from source_path into target_path), 'swap' (interchanges positions of two nodes at source_path and target_path), 'merge' (combines two collections or files into one), 'split' (divides a collection into two at split_index). NOTE: Automatically returns a preview of the enclosing form."
+                   :mutation
+                   t)
+                 ((action :type
+                          :string
+                          :doc
+                          "The relocation action to perform."
+                          :enum
+                          ("move" "copy" "swap" "merge" "split")
+                          :required
+                          t)
+                  (source_path :type
+                               :path
+                               :doc
+                               "Source AST path of the node to move, copy, swap, or merge.")
+                  (target_path :type :path :doc "Target AST path for move, copy, swap, or merge.")
+                  (target_index :type
+                                :integer
+                                :doc
+                                "Optional child index within target_path to insert the relocated node.")
+                  (index :type :integer :doc "Optional index within target.")
+                  (split_index :type
+                               :integer
+                               :doc
+                               "For action 'split': the 0-indexed child position at which to split the collection.")
+                  (separator :type :string :doc "Optional separator string for merge."))
+  (let*
+      ((src (or (to-list source_path) path))
+       (tgt (to-list target_path))
+       (idx (or target_index index split_index)))
+    (setf
+      structural-editing-mcp.workspace:*workspace-tree*
+      (perform-relocate-action action
+                               src
+                               tgt
+                               idx
+                               structural-editing-mcp.workspace:*workspace-tree*))
+    (format-mutation-result
+      (fmt "Successfully executed ~A from ~A to ~A" action src tgt)
+      (or tgt (butlast src))
+      structural-editing-mcp.workspace:*workspace-tree*)))
 
 (define-mcp-tool "ast_search"
     (:description "Search the workspace or a subtree for symbols, identifiers, function calls, or literal values. Fast AST-aware token searching that returns matched AST paths."
@@ -142,28 +225,85 @@
   (fmt "Successfully executed pattern replacement across workspace."))
 
 (define-mcp-tool "ast_extract_variable"
-    (:description "Extracts an AST node into a local `let` binding wrapped around its immediate parent. Preserves sub-expression structure and automatically replaces the node with the bound variable."
-     :mutation t)
-    ((path :type :path :doc "AST path of the node to extract." :required t)
-     (variable_name :type :string :doc "The name of the new variable to bind it to." :required t))
-  (let ((eff-dialect (or dialect structural-editing-mcp.parser:*current-dialect*)))
-    (setf structural-editing-mcp.workspace:*workspace-tree*
-          (structural-editing-mcp.refactor:extract-variable
-           structural-editing-mcp.workspace:*workspace-tree*
-           path variable_name :dialect eff-dialect))
+                 (:description
+                   "Extracts an AST node into a local `let` binding wrapped around its immediate parent. Preserves sub-expression structure and automatically replaces the node with the bound variable."
+                   :mutation
+                   t)
+                 ((path :type :path :doc "AST path of the node to extract." :required t)
+                  (variable_name :type
+                                 :string
+                                 :doc
+                                 "The name of the new variable to bind it to."
+                                 :required
+                                 t))
+  (let
+      ((eff-dialect
+         (or dialect
+             (when
+                 (and (consp path)
+                      (eq
+                        (structural-editing-mcp.tree:get-node-tag
+                          structural-editing-mcp.workspace:*workspace-tree*)
+                        :workspace))
+               (let
+                   ((d-node
+                      (structural-editing-mcp.tree:get-node-at-path
+                        structural-editing-mcp.workspace:*workspace-tree*
+                        (list (first path)))))
+                 (when d-node (structural-editing-mcp.tree:get-node-tag d-node))))
+             structural-editing-mcp.parser:*current-dialect*)))
+    (setf
+      structural-editing-mcp.workspace:*workspace-tree*
+      (structural-editing-mcp.refactor:extract-variable
+        structural-editing-mcp.workspace:*workspace-tree*
+        path
+        variable_name
+        :dialect
+        eff-dialect))
     (fmt "Successfully extracted node at ~A into variable '~A'." path variable_name)))
 
 (define-mcp-tool "ast_extract_function"
-    (:description "Extracts an AST node into a new top-level function definition and replaces the original node with a call to the new function. Emits the new function right before the current top-level form."
-     :mutation t)
-    ((path :type :path :doc "AST path of the node to extract into a function." :required t)
-     (function_name :type :string :doc "The name of the new function." :required t)
-     (params :type :string-array :doc "Optional list of parameter names for the new function."))
-  (let ((eff-dialect (or dialect structural-editing-mcp.parser:*current-dialect*)))
-    (setf structural-editing-mcp.workspace:*workspace-tree*
-          (structural-editing-mcp.refactor:extract-function
-           structural-editing-mcp.workspace:*workspace-tree*
-           path function_name :params (to-list params) :dialect eff-dialect))
+                 (:description
+                   "Extracts an AST node into a new top-level function definition and replaces the original node with a call to the new function. Emits the new function right before the current top-level form."
+                   :mutation
+                   t)
+                 ((path :type
+                        :path
+                        :doc
+                        "AST path of the node to extract into a function."
+                        :required
+                        t)
+                  (function_name :type :string :doc "The name of the new function." :required t)
+                  (params :type
+                          :string-array
+                          :doc
+                          "Optional list of parameter names for the new function."))
+  (let
+      ((eff-dialect
+         (or dialect
+             (when
+                 (and (consp path)
+                      (eq
+                        (structural-editing-mcp.tree:get-node-tag
+                          structural-editing-mcp.workspace:*workspace-tree*)
+                        :workspace))
+               (let
+                   ((d-node
+                      (structural-editing-mcp.tree:get-node-at-path
+                        structural-editing-mcp.workspace:*workspace-tree*
+                        (list (first path)))))
+                 (when d-node (structural-editing-mcp.tree:get-node-tag d-node))))
+             structural-editing-mcp.parser:*current-dialect*)))
+    (setf
+      structural-editing-mcp.workspace:*workspace-tree*
+      (structural-editing-mcp.refactor:extract-function
+        structural-editing-mcp.workspace:*workspace-tree*
+        path
+        function_name
+        :params
+        (to-list params)
+        :dialect
+        eff-dialect))
     (fmt "Successfully extracted node at ~A into function '~A'." path function_name)))
 
 (define-mcp-tool "ast_lint"
@@ -199,13 +339,28 @@
   (run-tool-bindings structural-editing-mcp.workspace:*workspace-tree* path dialect args))
 
 (define-mcp-tool "ast_suggest_refactorings"
-    (:description "Aggregate analysis findings from lint, complexity, duplicates, and binding analysis into a prioritized refactoring plan with specific AST paths and actions."
-     :mutation nil)
-    ((path :type :path :doc "Optional AST path to analyze. If omitted, analyzes the whole workspace.")
-     (dialect :type :dialect)
-     (min_priority :type :string :doc "Minimum priority threshold to include in plan: 'critical', 'warning', 'suggestion', 'style' (default: 'style')."
-                   :enum ("critical" "warning" "suggestion" "style") :default "style"))
-  (run-tool-suggestions structural-editing-mcp.workspace:*workspace-tree* path dialect args))
+                 (:description
+                   "Aggregate analysis findings from lint, complexity, duplicates, and binding analysis into a prioritized refactoring plan with specific AST paths and actions."
+                   :mutation
+                   nil)
+                 ((path :type
+                        :path
+                        :doc
+                        "Optional AST path to analyze. If omitted, analyzes the whole workspace.")
+                  (dialect :type :dialect)
+                  (min_priority :type
+                                :string
+                                :doc
+                                "Minimum priority threshold to include in plan: 'high'/'critical', 'medium'/'warning', 'low'/'suggestion'/'style' (default: 'low')."
+                                :enum
+                                ("high" "medium" "low" "critical" "warning" "suggestion" "style")
+                                :default
+                                "low"))
+  (run-tool-suggestions
+    structural-editing-mcp.workspace:*workspace-tree*
+    path
+    dialect
+    args))
 
 (define-mcp-tool "workspace_create_file"
     (:description "Create a new source file in the staged workspace without writing to disk. The file is registered in memory, staged for AST operations, and persisted only when commit_workspace is called."

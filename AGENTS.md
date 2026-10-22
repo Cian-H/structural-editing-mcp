@@ -62,14 +62,28 @@ structural-editing-mcp/
 │   └── run-tests.lisp         # Rove test runner with CLI argument support
 ├── src/
 │   ├── conditions.lisp        # Custom condition hierarchy (mcp-error, invalid-path-error, etc.)
-│   ├── utils.lisp             # General list/string manipulation, dictionary/JSON helpers
+│   ├── version.lisp           # CalVer version resolution
 │   ├── tree.lisp              # AST representations, trivia pattern matching, path indexing
 │   ├── parser.lisp            # Multi-dialect tokenizers, tree builder, pretty-printer
 │   ├── edit.lisp              # Functional AST surgery (ast-modify, ast-remove, ast-relocate)
-│   ├── analysis.lisp          # Linter, cyclomatic complexity, clone finder, binding tracker
+│   ├── analysis/              # Modular static analysis subsystem
+│   │   ├── package.lisp       # Analysis package definition and exports
+│   │   ├── common.lisp        # Shared AST utilities (leaf predicates, depth counting)
+│   │   ├── patterns.lisp      # Structural pattern matching with wildcards
+│   │   ├── lint.lisp          # 19 multi-dialect anti-pattern lint rules
+│   │   ├── complexity.lisp    # Cyclomatic complexity and nesting depth metrics
+│   │   ├── duplicates.lisp    # Subtree clone detection via Merkle hashing
+│   │   ├── bindings.lisp      # Lexical variable scope and shadowing analysis
+│   │   └── suggestions.lisp   # Unified prioritized refactoring advisor
 │   ├── refactor.lisp          # Structural pattern replacement, let & defun extraction
-│   ├── workspace.lisp         # Workspace tree staging (*workspace-tree*), file registry, disk I/O
-│   ├── mcp.lisp               # JSON-RPC protocol parser, MCP tool registry & dispatchers
+│   ├── workspace.lisp         # Workspace tree staging, isolated branches, 3-way AST merge
+│   ├── mcp/                   # Model Context Protocol subsystem
+│   │   ├── package.lisp       # MCP package definition and exports
+│   │   ├── protocol.lisp      # JSON-RPC 2.0 serialization, worker thread pool
+│   │   ├── preview.lisp       # Node previews, skeleton mode, vertical slice rays
+│   │   ├── core.lisp          # define-mcp-tool macro, tool dispatch, OCC locking
+│   │   ├── tools.lisp         # 22 tool declarations and handlers
+│   │   └── server.lisp        # Stdio server loop and message dispatch
 │   └── main.lisp              # Standalone binary entry point and signal handling
 ├── test/
 │   ├── package.lisp           # Test package definition and test helpers

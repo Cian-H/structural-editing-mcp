@@ -248,15 +248,21 @@ If CTX1 and CTX2 share the same lock, acquires the lock only once."
                          (error 'workspace-not-found-error :workspace-id norm-id))
                        (remhash norm-id *workspace-registry*))))
 
-(defun workspace-dirty-files-list (&optional (ctx *current-workspace*))
+(defun workspace-dirty-files-list
+       (&optional (ctx *current-workspace*))
   "Return a list of file paths in CTX that have uncommitted in-memory changes."
   (let ((dirty '()))
-    (maphash (lambda (path-or-id filepath)
-               (when (and (listp path-or-id) filepath)
-                 (let ((file-node (get-node-at-path (workspace-context-tree ctx) path-or-id)))
-                   (when (and file-node (not (equal file-node (gethash filepath (workspace-context-clean-state ctx)))))
-                     (pushnew filepath dirty :test #'equal)))))
-             (workspace-context-file-registry ctx))
+    (maphash
+      (lambda (path-or-id filepath)
+        (when (and (listp path-or-id) filepath)
+          (let
+              ((file-node (get-node-at-path (workspace-context-tree ctx) path-or-id)))
+            (when
+                (and file-node
+                     (not
+                       (ast-equal-p file-node (gethash filepath (workspace-context-clean-state ctx)))))
+              (pushnew filepath dirty :test #'equal)))))
+      (workspace-context-file-registry ctx))
     dirty))
 
 (defun workspace-all-files-list (&optional (ctx *current-workspace*))
@@ -429,10 +435,12 @@ If FORCE is nil and uncommitted dirty files would be overwritten, signals WORKSP
   "Compare a single form across BASE (B), SOURCE (S), and TARGET (TG).
 Returns (values resolved-form conflict-p)."
   (cond
-    ((and (equal s b) (equal tg b)) (values (when b (copy-tree b)) nil))
-    ((and (not (equal s b)) (equal tg b)) (values (when s (copy-tree s)) nil))
-    ((and (equal s b) (not (equal tg b))) (values (when tg (copy-tree tg)) nil))
-    ((equal s tg) (values (when s (copy-tree s)) nil))
+    ((and (ast-equal-p s b) (ast-equal-p tg b)) (values (when b (copy-tree b)) nil))
+    ((and (not (ast-equal-p s b)) (ast-equal-p tg b))
+      (values (when s (copy-tree s)) nil))
+    ((and (ast-equal-p s b) (not (ast-equal-p tg b)))
+      (values (when tg (copy-tree tg)) nil))
+    ((ast-equal-p s tg) (values (when s (copy-tree s)) nil))
     (t (values nil t))))
 
 (defun reconcile-file-forms
@@ -452,9 +460,15 @@ Returns (values resolved-form conflict-p)."
 (defun merge-file-ast
        (base-file src-file tgt-file)
   "Perform a 3-way AST merge of SRC-FILE and TGT-FILE against BASE-FILE at the top-level form level.
-Returns (values merged-file-node conflict-p conflicting-indices)."
+Returns (values merged-file-node conflict-p conflicting-indices).
+
+Note: This is a positional merge — forms are compared by index. If a new top-level
+form is inserted at the beginning of a file in one branch, all subsequent forms
+shift by one index, which may cause false conflicts in the other branch.
+For best results, prefer appending new forms at the end of files or using
+disjoint file sets across branches."
   (cond
-    ((equal src-file tgt-file) (values (copy-tree src-file) nil nil))
+    ((ast-equal-p src-file tgt-file) (values (copy-tree src-file) nil nil))
     ((null base-file) (values nil t '(:no-base)))
     (t
       (let*
@@ -503,7 +517,7 @@ Returns (values merged-file-node conflict-p conflicting-indices)."
           ((node-src (get-file-node-in-workspace src f))
            (node-tgt (get-file-node-in-workspace tgt f)))
         (when
-            (and node-src node-tgt (not (equal node-src node-tgt)))
+            (and node-src node-tgt (not (ast-equal-p node-src node-tgt)))
           (push f ast-differing))))
     (dolist (f both-dirty)
       (let
@@ -570,9 +584,9 @@ Returns (values merged-file-node conflict-p conflicting-indices)."
             (setf *workspace-tree*
                   (overwrite-node *workspace-tree* coords (copy-tree node)))
             (setf (gethash filepath *file-clean-sources*) clean-sources))
-          (multiple-value-bind (parsed-node sources)
-                               (string-to-sexp (sexp-to-string node :dialect dialect) :dialect dialect)
-            (declare (ignore parsed-node))
+          (let ((sources (nth-value 1
+                          (string-to-sexp (sexp-to-string node :dialect dialect)
+                                           :dialect dialect))))
             (setf (gethash filepath *file-clean-sources*) sources)
             (insert-file-into-workspace (copy-tree node) filepath dialect)))
         (if clean-state
@@ -599,11 +613,11 @@ Returns (values merged-file-node conflict-p conflicting-indices)."
             (setf *workspace-tree* (reindex-paths *workspace-tree*))))))))
 
 (defun merge-workspaces
-       (source-id target-id &key files (strategy :fast-forward-or-disjoint))
+       (source-id target-id &key files)
   "Merge SOURCE-ID into TARGET-ID.
 If FILES is provided, transfers only those files.
-Otherwise performs fast-forward or disjoint/AST-level merge, signaling WORKSPACE-MERGE-CONFLICT-ERROR on conflicting modifications."
-  (declare (ignore strategy))
+Otherwise performs auto-determined merge: fast-forward if target hasn't diverged,
+otherwise disjoint/AST-level merge. Signals WORKSPACE-MERGE-CONFLICT-ERROR on conflicting modifications."
   (let*
       ((src (get-workspace source-id)) (tgt (get-workspace target-id)))
     (when
@@ -729,13 +743,14 @@ STRATEGY can be :error (signal on collision), :theirs (accept onto version), or 
                        ((not conflict-p) merged-node)
                        ((eq norm-strategy :theirs) (copy-tree onto-node))
                        ((eq norm-strategy :ours) (copy-tree src-node))
-                       (t (copy-tree onto-node)))))
-                (with-workspace-context (src)
-                  (let ((coords (find-file-path-coords f)))
-                    (when coords
-                      (setf *workspace-tree* (overwrite-node *workspace-tree* coords chosen-node))
-                      (setf *workspace-tree* (reindex-paths *workspace-tree*))))
-                  (push f updated-files))))))
+                       (t nil))))
+                (when chosen-node
+                  (with-workspace-context (src)
+                    (let ((coords (find-file-path-coords f)))
+                      (when coords
+                        (setf *workspace-tree* (overwrite-node *workspace-tree* coords chosen-node))
+                        (setf *workspace-tree* (reindex-paths *workspace-tree*))))
+                    (push f updated-files)))))))
         (setf (workspace-context-parent-id src) (workspace-context-id onto))
         (setf (workspace-context-base-revision src) (workspace-context-revision onto))
         (incf (workspace-context-revision src))
@@ -747,6 +762,10 @@ STRATEGY can be :error (signal on collision), :theirs (accept onto version), or 
               (workspace-context-id onto)
               :updated-files
               (remove-duplicates updated-files :test #'equal)
+              :conflicts
+              (when
+                  (and conflicts (not (member norm-strategy '(:theirs :ours))))
+                conflict-details)
               :strategy
               norm-strategy)))))
 
@@ -897,10 +916,12 @@ Returns the newly assigned numerical file ID."
          (if dialect-pos
            (nth dialect-pos workspace-children)
            `
-           (:path () ,dialect)))
+           (:path (,d-idx) ,dialect)))
        (dialect-files (get-node-children dialect-node))
        (f-idx (length dialect-files))
-       (updated-dialect-node ` (:path () ,dialect ,@dialect-files ,parsed-file-node)))
+       (indexed-file-node (reindex-paths parsed-file-node (list d-idx f-idx)))
+       (updated-dialect-node `
+         (:path (,d-idx) ,dialect ,@dialect-files ,indexed-file-node)))
     (incf *next-file-id*)
     (setf (gethash new-id *file-registry*) canonical-path)
     (setf (gethash (list d-idx f-idx) *file-registry*) canonical-path)
@@ -912,7 +933,6 @@ Returns the newly assigned numerical file ID."
       (setf *workspace-tree*
             `
             (:path () :workspace ,@workspace-children ,updated-dialect-node)))
-    (setf *workspace-tree* (reindex-paths *workspace-tree*))
     new-id))
 
 (defun find-file-path-coords (canonical-path)
@@ -990,7 +1010,7 @@ Returns a list of loaded numerical file IDs."
     (and filepath
          (let
              ((clean-node (gethash filepath *file-clean-state*)))
-           (and clean-node (equal file-node clean-node))))))
+           (and clean-node (ast-equal-p file-node clean-node))))))
 
 (defun update-written-file-clean-state
        (filepath file-node dialect)

@@ -123,19 +123,25 @@
       (harvest-duplicate-children curr-path children (get-node-tag node)
                                   head-str context exact min-nodes min-depth buckets node-metadata))))
 
-(defun extract-raw-duplicate-candidates (buckets node-metadata)
-  "Extract entries appearing at least twice from BUCKETS and associate with NODE-METADATA."
+(defun extract-raw-duplicate-candidates
+       (buckets node-metadata &optional (min-occurrences 2))
+  "Extract entries appearing at least MIN-OCCURRENCES times from BUCKETS and associate with NODE-METADATA."
   (filter-map
     (lambda (fingerprint)
       (let ((entries (gethash fingerprint buckets)))
-        (when (>= (length entries) 2)
-          (let* ((meta (gethash fingerprint node-metadata))
-                 (paths (mapcar #'car entries)))
-            (list :fingerprint fingerprint
-                  :paths (nreverse paths)
-                  :node-count (getf meta :node-count)
-                  :depth (getf meta :depth)
-                  :sample (getf meta :sample))))))
+        (when (>= (length entries) min-occurrences)
+          (let*
+              ((meta (gethash fingerprint node-metadata)) (paths (mapcar #'car entries)))
+            (list :fingerprint
+                  fingerprint
+                  :paths
+                  (nreverse paths)
+                  :node-count
+                  (getf meta :node-count)
+                  :depth
+                  (getf meta :depth)
+                  :sample
+                  (getf meta :sample))))))
     (hash-table-keys buckets)))
 
 (defun candidate-subsumed-p (cand candidates)
@@ -191,19 +197,29 @@
               (> (duplicate-group-occurrence-count a) (duplicate-group-occurrence-count b))
               (> savings-a savings-b))))))
 
-(defun find-duplicate-subtrees (tree &key path (min-nodes 4) (min-depth 2) (exact t))
+(defun find-duplicate-subtrees
+       (tree &key path (min-nodes 4) (min-depth 2) (min-occurrences 2) (exact t))
   "Find repeated AST subtrees in TREE (or under PATH).
 Groups matching subtrees, removes redundant subsumed sub-expressions, and generates refactoring recommendations."
-  (let ((start-node (resolve-tree-scope tree path)))
-    (unless start-node
-      (return-from find-duplicate-subtrees nil))
-    (let ((buckets (make-hash-table :test 'equal))
-          (node-metadata (make-hash-table :test 'equal))
-          (start-path (or (get-node-path start-node) path '())))
-      (harvest-duplicate-subtrees start-node start-path exact min-nodes min-depth buckets node-metadata)
-      (let* ((raw-candidates (extract-raw-duplicate-candidates buckets node-metadata))
-             (filtered-candidates (filter-subsumed-candidates raw-candidates))
-             (groups (mapcar #'build-duplicate-group filtered-candidates)))
+  (let
+      ((start-node (resolve-tree-scope tree path)))
+    (unless start-node (return-from find-duplicate-subtrees nil))
+    (let
+        ((buckets (make-hash-table :test 'equal))
+         (node-metadata (make-hash-table :test 'equal))
+         (start-path (or (get-node-path start-node) path '())))
+      (harvest-duplicate-subtrees start-node
+                                  start-path
+                                  exact
+                                  min-nodes
+                                  min-depth
+                                  buckets
+                                  node-metadata)
+      (let*
+          ((raw-candidates
+             (extract-raw-duplicate-candidates buckets node-metadata min-occurrences))
+           (filtered-candidates (filter-subsumed-candidates raw-candidates))
+           (groups (mapcar #'build-duplicate-group filtered-candidates)))
         (sort-duplicate-groups groups)))))
 
 (defun format-duplicate-report (duplicate-groups)

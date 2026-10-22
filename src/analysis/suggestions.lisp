@@ -13,9 +13,9 @@
 (defun priority-rank (p)
   "Return numeric rank for PRIORITY keyword (:high = 3, :medium = 2, :low = 1)."
   (case p
-    (:high 3)
-    (:medium 2)
-    (:low 1)
+    ((:high :critical) 3)
+    ((:medium :warning) 2)
+    ((:low :suggestion :style) 1)
     (t 0)))
 
 (defun parse-priority-keyword (val)

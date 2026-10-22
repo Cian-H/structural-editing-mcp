@@ -318,6 +318,7 @@ Returns the updated index."
       ((next-ch (peek-char-ahead string index len)))
     (case next-ch
       (#\| (read-block-comment-token string index len))
+      (#\! (read-line-comment-token string index len))
       (#\\ (read-escaped-char-token string index len dialect))
       (#\{ (values '(:delim . :set-open) (+ index 2)))
       (otherwise nil))))
@@ -595,16 +596,11 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
   (with-output-to-string (s)
     (write-string open s)
     (loop for
-          (b . rest)
-          on
-          blocks
-          do
-          (write-string b s)
-          when
-          rest
-          do
-          (let ((next-b (car rest)))
-            (unless (member b '("#" "'") :test #'string=) (write-string " " s))))
+          (b . rest) on blocks do
+          (write-string b s) when rest do
+          (unless
+              (member b '("#" "'" "#'" "#_" "," ",@" "@" "~" "~@") :test #'string=)
+            (write-string " " s)))
     (write-string close s)))
 
 (defparameter *operator-category-table*
@@ -784,28 +780,29 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
     (write-string (first blocks) s)
     (let*
         ((inline-n (min (head-inline-count op-cat) (length blocks)))
-         (col (+ 1 (length open) (length (first blocks)))))
+         (col (+ 1 (length open) (length (first blocks))))
+         (prev-b (first blocks)))
       (loop for
-            (b . rest)
-            on
-            (rest blocks)
-            for
-            i
-            from
-            1
-            for starts-compound = (and (plusp (length b))
-                                       (member (char b 0) '(#\( #\[ #\{)))
-            for should-inline = (if (< i inline-n)
-                                  (and (single-line-p b)
-                                       (<= (+ col 1 (length b)) *inline-column-limit*))
-                                  (and (eq op-cat :iteration)
-                                       (not starts-compound)
-                                       (single-line-p b)
-                                       (<= (+ col 1 (length b)) *inline-column-limit*)))
+            (b . rest) on
+            (rest blocks) for i from 1 for starts-compound =
+            (and (plusp (length b)) (member (char b 0) '(#\( #\[ #\{)))
+            for glue-p =
+            (member prev-b '("'" "`" "," ",@" "#" "#'" "#_" "@" "~" "~@") :test #'string=)
+            for should-inline =
+            (if (< i inline-n)
+              (and (single-line-p b) (<= (+ col 1 (length b)) *inline-column-limit*))
+              (and (eq op-cat :iteration)
+                   (not starts-compound)
+                   (single-line-p b)
+                   (<= (+ col 1 (length b)) *inline-column-limit*)))
             do
-            (if should-inline
-              (progn (write-char #\space s) (write-string b s) (incf col (+ 1 (length b))))
-              (progn (terpri s) (write-string b s) (setf col (length b))))))
+            (cond
+              (glue-p (write-string b s) (incf col (length b)))
+              (should-inline (write-char #\space s)
+                             (write-string b s)
+                             (incf col (+ 1 (length b))))
+              (t (terpri s) (write-string b s) (setf col (length b))))
+            (setf prev-b b)))
     (write-string close s)))
 
 (defun raw-form-text (node)
@@ -855,15 +852,15 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
                   (with-output-to-string (s)
                     (write-string open s)
                     (write-string (first blocks) s)
-                    (let ((pad (make-indent-string (+ indent 2))))
-                      (loop for
-                            b
-                            in
-                            (rest blocks)
-                            do
-                            (terpri s)
-                            (write-string pad s)
-                            (write-string b s)))
+                    (let
+                        ((pad (make-indent-string (+ indent 2))) (prev-b (first blocks)))
+                      (loop for b in
+                            (rest blocks) do
+                            (if
+                                (member prev-b '("'" "`" "," ",@" "#" "#'" "#_" "@" "~" "~@") :test #'string=)
+                              (write-string b s)
+                              (progn (terpri s) (write-string pad s) (write-string b s)))
+                            (setf prev-b b)))
                     (write-string close s)))))))
          ((list :path _ val) (format-atom val))
          (_ (format-atom node))))
@@ -881,13 +878,19 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
     ("ok" :count 0))
   "Project-specific indentation templates for cl-indentify.")
 
+(defvar *cl-indentify-lock*
+  (bt:make-lock "cl-indentify-init-lock")
+  "Lock protecting one-time initialization of cl-indentify templates.")
+
 (defun ensure-cl-indentify-init ()
   "Load cl-indentify templates lazily once, including project templates."
   (unless *cl-indentify-initialized*
-    (indentify:initialize-templates)
-    (dolist (tpl *project-indent-templates*)
-      (setf (indentify:indent-template (first tpl)) (cdr tpl)))
-    (setf *cl-indentify-initialized* t)))
+    (bt:with-lock-held (*cl-indentify-lock*)
+                       (unless *cl-indentify-initialized*
+                         (indentify:initialize-templates)
+                         (dolist (tpl *project-indent-templates*)
+                           (setf (indentify:indent-template (first tpl)) (cdr tpl)))
+                         (setf *cl-indentify-initialized* t)))))
 
 (defun cl-indentify-text (raw-text)
   "Re-indent RAW-TEXT with cl-indentify, returning the indented string.
@@ -909,46 +912,46 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
     (with-output-to-string (s)
       (let
           ((pad (make-indent-string base-indent)) (start 0))
-        (loop for
-              pos
-              =
-              (position #\newline text :start start)
-              do
+        (loop for pos =
+              (position #\newline text :start start) do
               (write-string pad s)
               (write-string text s :start start :end (or pos (length text)))
-              if
-              pos
-              do
-              (write-char #\newline s)
-              while
-              pos
-              do
+              if pos do
+              (write-char #\newline s) while pos do
               (setf start (1+ pos)))))))
 
 (defgeneric collection-delimiters (dialect tag)
-  (:documentation "Return (values open-string close-string) for collection TAG in DIALECT."))
+  (:documentation
+    "Return (values open-string close-string) for collection TAG in DIALECT."))
 
 (defmethod collection-delimiters (dialect tag)
   (declare (ignore dialect))
   (collection-delims tag))
 
-(defgeneric dialect-supports-indentify-p (dialect node)
+(defgeneric dialect-supports-indentify-p
+            (dialect node)
   (:documentation "Return T if DIALECT can format NODE with cl-indentify."))
 
-(defmethod dialect-supports-indentify-p (dialect node)
+(defmethod dialect-supports-indentify-p
+           (dialect node)
   (and (member dialect *cl-indentify-dialects*) (not (node-has-braces-p node))))
 
-(defgeneric format-dialect-form (dialect node stream indent)
-  (:documentation "Render NODE to STREAM according to DIALECT formatting rules at INDENT."))
+(defgeneric format-dialect-form
+            (dialect node stream indent)
+  (:documentation
+    "Render NODE to STREAM according to DIALECT formatting rules at INDENT."))
 
-(defmethod format-dialect-form (dialect node stream indent)
+(defmethod format-dialect-form
+           (dialect node stream indent)
   "Default formatting implementation delegating to cl-indentify or generic-form-text."
-  (let ((text (if (dialect-supports-indentify-p dialect node)
-                (let ((raw (raw-form-text node)))
-                  (if (find #\newline raw)
-                    (cl-indentify-text raw)
-                    raw))
-                (generic-form-text node indent))))
+  (let
+      ((text
+         (if (dialect-supports-indentify-p dialect node)
+           (let ((raw (raw-form-text node)))
+             (if (find #\newline raw)
+               (cl-indentify-text raw)
+               raw))
+           (generic-form-text node indent))))
     (write-string (shift-indent-text text indent) stream)))
 
 (defun use-cl-indentify-p (node dialect)
@@ -957,17 +960,15 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
 
 (defun print-formatted-form (node stream indent)
   "Render NODE to STREAM with cl-indentify, or the generic fallback for brace dialects."
-  (let ((dialect (or *current-dialect* :common-lisp)))
+  (let
+      ((dialect (or *current-dialect* :common-lisp)))
     (format-dialect-form dialect node stream indent)))
 
 (defun print-toplevel-sequence
        (children stream indent dialect)
   "Print sequence of top-level CHILDREN separated by blank lines."
   (loop for
-        (c . rest)
-        on
-        children
-        do
+        (c . rest) on children do
         (print-sexp c stream indent :dialect dialect)
         (when rest
           (terpri stream)
@@ -978,7 +979,7 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
   "Return clean source string for CHILD if it exists unmodified in CLEAN-CHILDREN."
   (when (and clean-children clean-sources)
     (let
-        ((pos (position child clean-children :test #'equal)))
+        ((pos (position child clean-children :test #'ast-equal-p)))
       (when (and pos (< pos (length clean-sources))) (aref clean-sources pos)))))
 
 (defun print-file-with-clean-sources
@@ -992,10 +993,7 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
       ((current-children (get-node-children file-node))
        (clean-children (and clean-node (get-node-children clean-node))))
     (loop for
-          (c . rest)
-          on
-          current-children
-          do
+          (c . rest) on current-children do
           (let
               ((clean-str (clean-source-for-child c clean-children clean-sources)))
             (if clean-str
@@ -1051,11 +1049,8 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
     (cond
       ((toplevel-container-tag-p (get-node-tag expr))
         (print-toplevel-node expr stream indent dialect))
-      ((or
-         (member (get-node-tag expr)
-                 '
-                 (:paren :square :curly :set 'paren 'square 'curly 'set))
-         (and (consp expr) (not (eq (first expr) :path))))
+      ((or (collection-tag-p (get-node-tag expr))
+           (and (consp expr) (not (eq (first expr) :path))))
         (print-collection-expr expr stream indent))
       (t (print-leaf-expr expr stream)))))
 

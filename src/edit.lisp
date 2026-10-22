@@ -99,22 +99,44 @@
                         (_ parent))))))
       (values new-tree popped-node))))
 
-(defun move-node (tree source-path target-parent-path target-index)
+(defun move-node
+       (tree source-path target-parent-path target-index)
   "Move the node at SOURCE-PATH to TARGET-INDEX under TARGET-PARENT-PATH."
-  (when (and source-path
-             (<= (length source-path) (length target-parent-path))
-             (equal source-path (subseq target-parent-path 0 (length source-path))))
+  (when
+      (and source-path
+           (<= (length source-path) (length target-parent-path))
+           (equal source-path (subseq target-parent-path 0 (length source-path))))
     (error 'invalid-path-error
-           :path source-path
-           :tree tree
-           :message "Cannot move node into its own subtree"))
-  (multiple-value-bind (new-tree node) (pop-node tree source-path)
+           :path
+           source-path
+           :tree
+           tree
+           :message
+           "Cannot move node into its own subtree"))
+  (multiple-value-bind (new-tree node)
+                       (pop-node tree source-path)
     (unless node
       (error 'invalid-path-error
-             :path source-path
-             :tree tree
-             :message (fmt "Source node at path ~A not found for move" source-path)))
-    (insert-node new-tree target-parent-path target-index node)))
+             :path
+             source-path
+             :tree
+             tree
+             :message
+             (fmt "Source node at path ~A not found for move" source-path)))
+    (let*
+        ((src-parent (butlast source-path))
+         (k (length src-parent))
+         (adjusted-parent-path
+           (if
+               (and source-path
+                    (< k (length target-parent-path))
+                    (equal src-parent (subseq target-parent-path 0 k))
+                    (< (lastcar source-path) (nth k target-parent-path)))
+             (append src-parent
+                     (list (1- (nth k target-parent-path)))
+                     (subseq target-parent-path (1+ k)))
+             target-parent-path)))
+      (insert-node new-tree adjusted-parent-path target-index node))))
 
 (defun prefix-of-p (prefix path)
   "Return T if list PREFIX is an initial sublist of list PATH."

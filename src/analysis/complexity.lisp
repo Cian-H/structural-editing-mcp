@@ -179,18 +179,32 @@ Base complexity is 1, with +1 for each conditional branch, short-circuit point, 
          (complexity-metrics-max-nesting-depth b))
       (> ca cb))))
 
-(defun analyze-complexity (tree &key path dialect (min-complexity 1) (min-depth 1))
+(defun analyze-complexity
+       (tree &key path dialect (min-complexity 1) (min-depth 1))
   "Analyze structural complexity for forms in TREE (or under PATH).
 Filters results to those meeting MIN-COMPLEXITY and MIN-DEPTH thresholds."
-  (let* ((start-node (resolve-tree-scope tree path))
-         (forms-with-paths (when start-node (collect-top-level-forms start-node path)))
-         (min-cc (or min-complexity 1))
-         (min-d (or min-depth 1))
-         (results '()))
+  (let*
+      ((start-node (resolve-tree-scope tree path))
+       (forms-with-paths (when start-node (collect-top-level-forms start-node path)))
+       (min-cc (or min-complexity 1))
+       (min-d (or min-depth 1))
+       (results '()))
     (dolist (pair forms-with-paths)
-      (let ((metrics (analyze-form-complexity (car pair) :path (cdr pair) :dialect dialect)))
-        (when (and (>= (complexity-metrics-cyclomatic-complexity metrics) min-cc)
-                   (>= (complexity-metrics-max-nesting-depth metrics) min-d))
+      (let*
+          ((form-path (cdr pair))
+           (eff-dialect
+             (or dialect
+                 (when
+                     (and (eq (get-node-tag tree) :workspace) (consp form-path))
+                   (let
+                       ((d-node (nth (first form-path) (get-node-children tree))))
+                     (when d-node (get-node-tag d-node))))))
+           (metrics
+             (analyze-form-complexity (car pair) :path form-path :dialect eff-dialect)))
+        (when
+            (and
+              (>= (complexity-metrics-cyclomatic-complexity metrics) min-cc)
+              (>= (complexity-metrics-max-nesting-depth metrics) min-d))
           (push metrics results))))
     (sort results #'compare-complexity-metrics)))
 

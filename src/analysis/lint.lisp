@@ -322,36 +322,38 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
                 :severity :warning
                 :suggested-fix nil))))))))
 
-(defun find-unhygienic-macro-bindings (body-nodes)
+(defun find-unhygienic-macro-bindings
+       (body-nodes)
   "Scan BODY-NODES of a defmacro for literal symbol bindings in backquoted let forms."
   (let ((unhygienic '()))
-    (labels ((scan (n in-backquote)
-               (cond
-                 ((null n) nil)
-                 ((eq (get-node-tag n) :leaf)
-                   (let ((val (parse-atom-string (format-atom (third (parse-node n))))))
-                     (declare (ignore val))))
-                 ((compound-node-p n)
-                   (let* ((children (get-node-children n))
-                          (head (first children))
-                          (head-name (when (and head (leaf-any-symbol-p head)) (leaf-symbol-name head))))
-                     (cond
-                       ((and in-backquote (member head-name '("let" "let*") :test #'string=) (second children))
-                         (let ((bindings-node (second children)))
-                           (when (compound-node-p bindings-node)
-                             (dolist (clause (get-node-children bindings-node))
-                               (when (compound-node-p clause)
-                                 (let ((var-node (first (get-node-children clause))))
-                                   (when (and var-node (leaf-any-symbol-p var-node))
-                                     (let ((name (leaf-symbol-name var-node)))
-                                       (unless (or (string-prefix-p "," name)
-                                                   (string-prefix-p "#" name))
-                                         (push (list :name name :path (get-node-path var-node)) unhygienic))))))))))
-                       (t nil))
-                     (dolist (c children)
-                       (scan c in-backquote)))))))
-      (dolist (b body-nodes)
-        (scan b t)))
+    (labels
+        ((scan (n in-backquote)
+           (cond
+             ((null n) nil)
+             ((eq (get-node-tag n) :leaf) nil)
+             ((compound-node-p n)
+               (let*
+                   ((children (get-node-children n))
+                    (head (first children))
+                    (head-name (when (and head (leaf-any-symbol-p head)) (leaf-symbol-name head))))
+                 (when
+                     (and in-backquote
+                          (member head-name '("let" "let*") :test #'string=)
+                          (second children))
+                   (let ((bindings-node (second children)))
+                     (when (compound-node-p bindings-node)
+                       (dolist
+                           (clause (get-node-children bindings-node))
+                         (when (compound-node-p clause)
+                           (let
+                               ((var-node (first (get-node-children clause))))
+                             (when (and var-node (leaf-any-symbol-p var-node))
+                               (let ((name (leaf-symbol-name var-node)))
+                                 (unless
+                                     (or (string-prefix-p "," name) (string-prefix-p "#" name))
+                                   (push (list :name name :path (get-node-path var-node)) unhygienic))))))))))
+                 (dolist (c children) (scan c in-backquote)))))))
+      (dolist (b body-nodes) (scan b t)))
     (nreverse unhygienic)))
 
 (defun check-unhygienic-macro-binding (node path dialect)
@@ -481,23 +483,38 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
                                  :suggested-fix nil))))
             (t nil)))))))
 
-(defun check-special-var-earmuffs (node path dialect)
+(defun check-special-var-earmuffs
+       (node path dialect)
   "Detect defvar or defparameter definitions lacking standard earmuffs (*...*)."
-  (when (member dialect '(:common-lisp :emacs-lisp nil))
+  (when
+      (and (member dialect '(:common-lisp :emacs-lisp nil)) (<= (length path) 3))
     (when (compound-node-p node)
       (let ((children (get-node-children node)))
-        (when (and (>= (length children) 2)
-                   (leaf-any-symbol-p (first children))
-                   (member (leaf-symbol-name (first children)) '("defvar" "defparameter" "defcustom") :test #'string=))
-          (let* ((var-node (second children))
-                 (name (when (leaf-any-symbol-p var-node) (leaf-symbol-name var-node))))
-            (when (and name (not (dynamic-variable-name-p name)))
-              (make-lint-finding
-                :rule :special-var-earmuffs
-                :path path
-                :message (fmt "Global variable '~A' lacks earmuffs (*...*). In Common Lisp, this makes the symbol globally special, polluting lexical scopes." name)
-                :severity :style
-                :suggested-fix (fmt "*~A*" name)))))))))
+        (when
+            (and (>= (length children) 2)
+                 (leaf-any-symbol-p (first children))
+                 (member (leaf-symbol-name (first children))
+                         '
+                         ("defvar" "defparameter" "defcustom")
+                         :test
+                         #'string=))
+          (let*
+              ((var-node (second children))
+               (name (when (leaf-any-symbol-p var-node) (leaf-symbol-name var-node))))
+            (when
+                (and name (not (string-prefix-p "," name)) (not (dynamic-variable-name-p name)))
+              (make-lint-finding :rule
+                                 :special-var-earmuffs
+                                 :path
+                                 path
+                                 :message
+                                 (fmt
+                                   "Global variable '~A' lacks earmuffs (*...*). In Common Lisp, this makes the symbol globally special, polluting lexical scopes."
+                                   name)
+                                 :severity
+                                 :style
+                                 :suggested-fix
+                                 (fmt "*~A*" name)))))))))
 
 (defparameter *known-side-effect-operators*
   '("println" "print" "prn" "spit" "slurp" "send" "send-off" "future" "pmap")
@@ -536,34 +553,46 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
 ;;; P2 Rules: Idiomatic Traps & Dead Code
 ;;; ---------------------------------------------------------------------------
 
-(defun check-dead-cond-clauses (node path dialect)
+(defun check-dead-cond-clauses
+       (node path dialect)
   "Detect dead clauses appearing after an unconditional default branch (t, otherwise, :else) in cond."
   (declare (ignore dialect))
   (when (compound-node-p node)
     (let ((children (get-node-children node)))
-      (when (and (>= (length children) 2)
-                 (leaf-any-symbol-p (first children))
-                 (equal (leaf-symbol-name (first children)) "cond"))
-        (let ((seen-default nil)
-              (dead-clause-path nil))
+      (when
+          (and (>= (length children) 2)
+               (leaf-any-symbol-p (first children))
+               (equal (leaf-symbol-name (first children)) "cond"))
+        (let ((seen-default nil) (dead-clause-path nil))
           (dolist (clause (rest children))
             (when (compound-node-p clause)
-              (let* ((clause-children (get-node-children clause))
-                     (test-node (first clause-children)))
+              (let*
+                  ((clause-children (get-node-children clause))
+                   (test-node (first clause-children)))
                 (if seen-default
                   (unless dead-clause-path (setf dead-clause-path (get-node-path clause)))
-                  (when (and test-node
-                             (or (leaf-true-p test-node)
-                                 (and (leaf-any-symbol-p test-node)
-                                      (member (leaf-symbol-name test-node) '("t" "otherwise" ":else" "else") :test #'string=))))
+                  (when
+                      (and test-node
+                           (rest clause-children)
+                           (or (leaf-true-p test-node)
+                               (and (leaf-any-symbol-p test-node)
+                                    (member (leaf-symbol-name test-node)
+                                            '
+                                            ("t" "otherwise" ":else" "else")
+                                            :test
+                                            #'string=))))
                     (setf seen-default t))))))
           (when dead-clause-path
-            (make-lint-finding
-              :rule :dead-cond-clauses
-              :path dead-clause-path
-              :message "Unreachable clause in 'cond' follows an unconditional default test."
-              :severity :warning
-              :suggested-fix nil)))))))
+            (make-lint-finding :rule
+                               :dead-cond-clauses
+                               :path
+                               dead-clause-path
+                               :message
+                               "Unreachable clause in 'cond' follows an unconditional default test."
+                               :severity
+                               :warning
+                               :suggested-fix
+                               nil)))))))
 
 (defun check-inappropriate-equality (node path dialect)
   "Detect comparison of numbers, strings, or characters using eq or eq?."
@@ -574,10 +603,7 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
                  (leaf-any-symbol-p (first children))
                  (member (leaf-symbol-name (first children)) '("eq" "eq?") :test #'string=))
         (let* ((arg1 (second children))
-               (arg2 (third children))
-               (v1 (when (eq (get-node-tag arg1) :leaf) (parse-node arg1)))
-               (v2 (when (eq (get-node-tag arg2) :leaf) (parse-node arg2))))
-          (declare (ignore v1 v2))
+               (arg2 (third children)))
           (let ((val1 (get-node-leaf-value arg1))
                 (val2 (get-node-leaf-value arg2)))
             (when (or (numberp val1) (numberp val2)
@@ -615,22 +641,34 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
               :severity :warning
               :suggested-fix nil)))))))
 
-(defun check-elisp-lexical-binding (node path dialect)
+(defun check-elisp-lexical-binding
+       (node path dialect)
   "Detect Emacs Lisp file lacking ';; -*- lexical-binding: t; -*-' in initial comments."
   (when (eq dialect :emacs-lisp)
-    (when (and (eq (get-node-tag node) :file) (null path))
-      (let* ((children (get-node-children node))
-             (first-comment (find-if (lambda (c) (eq (get-node-tag c) :comment)) children)))
-        (unless (and first-comment
-                     (multiple-value-bind (cpath ctag txt) (parse-node first-comment)
-                       (declare (ignore cpath ctag))
-                       (and (stringp txt) (search "lexical-binding: t" txt :test #'char-equal))))
-          (make-lint-finding
-            :rule :elisp-missing-lexical-binding
-            :path '()
-            :message "Emacs Lisp file lacks ';; -*- lexical-binding: t; -*-' header; defaults to dynamic variable scoping."
-            :severity :style
-            :suggested-fix ";; -*- lexical-binding: t; -*-"))))))
+    (when (eq (get-node-tag node) :file)
+      (let*
+          ((children (get-node-children node))
+           (first-comment
+             (find-if
+               (lambda (c)
+                 (eq (get-node-tag c) :comment))
+               children)))
+        (unless
+            (and first-comment
+                 (multiple-value-bind (cpath ctag txt)
+                                      (parse-node first-comment)
+                   (declare (ignore cpath ctag))
+                   (and (stringp txt) (search "lexical-binding: t" txt :test #'char-equal))))
+          (make-lint-finding :rule
+                             :elisp-missing-lexical-binding
+                             :path
+                             path
+                             :message
+                             "Emacs Lisp file lacks ';; -*- lexical-binding: t; -*-' header; defaults to dynamic variable scoping."
+                             :severity
+                             :style
+                             :suggested-fix
+                             ";; -*- lexical-binding: t; -*-"))))))
 
 (defclass lint-rule ()
   ((id :initarg :id :accessor rule-id :type keyword)
