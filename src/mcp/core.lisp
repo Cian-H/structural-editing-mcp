@@ -347,14 +347,31 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
          (intern
            (string-upcase (format nil "DISPATCH-MCP-TOOL-~A" (substitute #\- #\_ name)))))
        (effective-params
-         (if workspace
-           (let ((res (copy-list params)))
+         (let ((res (copy-list params)))
+           (when mutation
+             (unless (member 'expected_head res :key #'car)
+               (setf res
+                     (append res
+                             '
+                             ((expected_head :type
+                                             :string
+                                             :doc
+                                             "Optional expected head/prefix of the target node (e.g. 'let' or 'defun foo'). Aborts with a fresh slice preview if the target node shifted.")))))
+             (unless
+                 (member 'expected_revision res :key #'car)
+               (setf res
+                     (append res
+                             '
+                             ((expected_revision :type
+                                                 :integer
+                                                 :doc
+                                                 "Optional expected workspace revision number for optimistic concurrency checking."))))))
+           (when workspace
              (unless (member 'workspace_id res :key #'car)
                (setf res (append res '((workspace_id :type :workspace-id)))))
              (unless (member 'agent_id res :key #'car)
-               (setf res (append res '((agent_id :type :agent-id)))))
-             res)
-           params))
+               (setf res (append res '((agent_id :type :agent-id))))))
+           res))
        (props-var (gensym "PROPS"))
        (reqs-var (gensym "REQS")))
     `
@@ -376,7 +393,15 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
              (args &key (path nil) (dialect nil) (agent-id "default") &allow-other-keys)
         (declare (ignorable args path dialect agent-id))
         (let*
-            ((path (or path (to-list (gethash "path" args))))
+            ((raw-path (or path (to-list (gethash "path" args))))
+             (path
+               (if raw-path
+                 (or
+                   (structural-editing-mcp.tree:resolve-symbolic-path
+                     structural-editing-mcp.workspace:*workspace-tree*
+                     raw-path)
+                   raw-path)
+                 nil))
              (dialect (or dialect (parse-dialect-arg (gethash "dialect" args))))
              (agent-id
                (or (gethash "agent_id" args) (gethash "agent-id" args) agent-id "default"))
@@ -657,16 +682,69 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
   "Execute a mutation tool holding *WORKSPACE-LOCK* with OCC validation and rollback on error."
   (bt:with-lock-held
     (structural-editing-mcp.workspace:*workspace-lock*)
-    (let
-        ((target-path
+    (let*
+        ((raw-target
            (if (equal name "ast_relocate")
-             (to-list (href args "target_path"))
-             path)))
+             (or (to-list (href args "target_path"))
+                 (to-list (href args "source_path"))
+                 path)
+             path))
+         (target-path
+           (if raw-target
+             (or
+               (structural-editing-mcp.tree:resolve-symbolic-path
+                 structural-editing-mcp.workspace:*workspace-tree*
+                 raw-target)
+               raw-target)
+             nil))
+         (expected-rev (href args "expected_revision"))
+         (expected-head (href args "expected_head")))
+      (when
+          (and (integerp expected-rev)
+               (/= expected-rev structural-editing-mcp.workspace:*workspace-revision*))
+        (error
+          'structural-editing-mcp.conditions:occ-conflict-error
+          :agent-id
+          agent-id
+          :expected-revision
+          expected-rev
+          :current-revision
+          structural-editing-mcp.workspace:*workspace-revision*
+          :suggested-path
+          (or (butlast target-path) target-path)))
       (structural-editing-mcp.workspace:validate-agent-edit
         :agent-id
         agent-id
         :target-path
         target-path)
+      (when
+          (and (stringp expected-head)
+               (plusp (length (string-trim " " expected-head)))
+               target-path)
+        (let*
+            ((target-node
+               (structural-editing-mcp.tree:resolve-tree-scope
+                 structural-editing-mcp.workspace:*workspace-tree*
+                 target-path))
+             (sig
+               (when target-node
+                 (extract-node-signature target-node :max-elements 4 :max-length 120)))
+             (clean-sig (string-left-trim "([{#'` " (or sig "")))
+             (clean-exp (string-left-trim "([{#'` " (string-trim " " expected-head))))
+          (unless
+              (and target-node
+                   (>= (length clean-sig) (length clean-exp))
+                   (string-equal clean-exp clean-sig :end2 (length clean-exp)))
+            (return-from execute-mutation-tool-locked
+                         (fmt
+                           "Mutation aborted by expected_head content guard: expected ~S at ~A, but found ~S.~%~%~A"
+                           expected-head
+                           target-path
+                           (or sig "NIL")
+                           (format-node-slice
+                             structural-editing-mcp.workspace:*workspace-tree*
+                             (or (butlast target-path) target-path)
+                             (dict "depth" 2 "mode" "skeleton")))))))
       (let
           ((old-rev structural-editing-mcp.workspace:*workspace-revision*)
            (old-tree structural-editing-mcp.workspace:*workspace-tree*)
@@ -674,7 +752,7 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
              (gethash agent-id structural-editing-mcp.workspace:*agent-views*)))
         (structural-editing-mcp.workspace:commit-agent-edit agent-id)
         (handler-case
-            (dispatch-tool-call name path args dialect agent-id)
+            (dispatch-tool-call name target-path args dialect agent-id)
           (error (e)
             (setf structural-editing-mcp.workspace:*workspace-tree* old-tree)
             (setf structural-editing-mcp.workspace:*workspace-revision* old-rev)

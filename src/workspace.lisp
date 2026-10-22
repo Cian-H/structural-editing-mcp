@@ -838,6 +838,8 @@ Signals OCC-CONFLICT-ERROR if the workspace has changed since the agent's last r
         (when (and (listp key) (>= (length key) 2))
           (gethash (subseq key 0 2) *file-registry*)))))
 
+(setf structural-editing-mcp.tree:*symbolic-file-resolver* #'get-filepath)
+
 (defun file-dialect (pathname-or-string)
   "Return the dialect keyword (:common-lisp, :clojure, etc.) for PATHNAME-OR-STRING, or NIL if unrecognized."
   (let*

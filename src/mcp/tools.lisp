@@ -179,16 +179,21 @@
                                "For action 'split': the 0-indexed child position at which to split the collection.")
                   (separator :type :string :doc "Optional separator string for merge."))
   (let*
-      ((src (or (to-list source_path) path))
-       (tgt (to-list target_path))
+      ((tree structural-editing-mcp.workspace:*workspace-tree*)
+       (raw-src (or (to-list source_path) path))
+       (src
+         (if raw-src
+           (or (structural-editing-mcp.tree:resolve-symbolic-path tree raw-src) raw-src)
+           nil))
+       (raw-tgt (to-list target_path))
+       (tgt
+         (if raw-tgt
+           (or (structural-editing-mcp.tree:resolve-symbolic-path tree raw-tgt) raw-tgt)
+           nil))
        (idx (or target_index index split_index)))
     (setf
       structural-editing-mcp.workspace:*workspace-tree*
-      (perform-relocate-action action
-                               src
-                               tgt
-                               idx
-                               structural-editing-mcp.workspace:*workspace-tree*))
+      (perform-relocate-action action src tgt idx tree))
     (format-mutation-result
       (fmt "Successfully executed ~A from ~A to ~A" action src tgt)
       (or tgt (butlast src))

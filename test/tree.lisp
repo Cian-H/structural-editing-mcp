@@ -56,3 +56,37 @@
           (ok (eq :paren (get-node-tag plus-node)))
           (ok (equal '(:path (1 2 0 3 0) :leaf +) (first (get-node-children plus-node)))))))))
 
+(deftest test-node-ids-and-handles
+  (testing
+      "assigns and preserves monotonic Node IDs (#n<id>) across reindexing"
+    (let*
+        ((ast (string-to-sexp "(defun foo (x) (+ x 1))"))
+         (fn-node (get-node-at-path ast '(0)))
+         (id (ensure-node-id fn-node))
+         (handle (get-node-id-handle fn-node)))
+      (ok (integerp id))
+      (ok (stringp handle))
+      (ok (and (> (length handle) 2) (string= "#n" (subseq handle 0 2))))
+      ;; Reindex tree to new path '(0 0)
+      (let*
+          ((reindexed (reindex-paths ast '(0 0)))
+           (new-fn (get-node-at-path reindexed '(0 0 0)))
+           (new-handle (get-node-id-handle new-fn)))
+        ;; Node handle must be preserved across reindexing
+        (ok (string= handle new-handle))
+        ;; Handle resolution returns updated path
+        (ok (equal '(0 0 0) (resolve-symbolic-path reindexed handle)))
+        (ok (equal '(0 0 0) (get-node-path (get-node-at-path reindexed handle))))))))
+
+(deftest test-symbolic-path-selectors
+  (testing
+      "resolves symbolic form and operator selectors like 'defun:target-fn'"
+    (let*
+        ((ast (string-to-sexp "(defun first-fn () 1) (defun target-fn (a b) (+ a b))")))
+      (ok (equal '(1) (resolve-symbolic-path ast '("defun:target-fn"))))
+      (ok (equal '(1) (resolve-symbolic-path ast '("target-fn"))))
+      (ok (equal '(1 3 0) (resolve-symbolic-path ast '("defun:target-fn" 3 0))))
+      (let
+          ((leaf-node (get-node-at-path ast '("defun:target-fn" 3 0))))
+        (ok (eq :leaf (get-node-tag leaf-node)))
+        (ok (equal '(:path (1 3 0) :leaf +) leaf-node))))))
