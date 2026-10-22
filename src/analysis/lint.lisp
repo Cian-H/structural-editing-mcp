@@ -331,6 +331,9 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
            (cond
              ((null n) nil)
              ((eq (get-node-tag n) :leaf) nil)
+             ((prefix-tag-p (get-node-tag n))
+              (dolist (c (get-node-children n))
+                (scan c (or in-backquote (eq (get-node-tag n) :quasiquote)))))
              ((compound-node-p n)
                (let*
                    ((children (get-node-children n))
@@ -438,12 +441,13 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
 
 (defun quoted-or-literal-node-p (node)
   "Return T if NODE is a quoted literal ('(...) or (quote ...))."
-  (when (compound-node-p node)
-    (let ((children (get-node-children node)))
-      (when children
-        (let ((head (first children)))
-          (when (leaf-any-symbol-p head)
-            (equal (leaf-symbol-name head) "quote")))))))
+  (or (eq (get-node-tag node) :quote)
+      (when (compound-node-p node)
+        (let ((children (get-node-children node)))
+          (when children
+            (let ((head (first children)))
+              (when (leaf-any-symbol-p head)
+                (equal (leaf-symbol-name head) "quote"))))))))
 
 (defun check-mutate-literal-constant (node path dialect)
   "Detect destructive mutation of literal or quoted constants."
@@ -472,15 +476,21 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
                                          :suggested-fix nil))))))))
             ;; (nconc '(1 2) '(3 4)) or (sort '(1 2) #'<)
             ((member head-name *literal-mutating-functions* :test #'string=)
-              (loop for arg in (rest children)
-                    when (or (quoted-or-literal-node-p arg)
-                             (and (leaf-any-symbol-p arg) (string= (leaf-symbol-name arg) "'")))
-                    do (return (make-lint-finding
-                                 :rule :mutate-literal-constant
-                                 :path path
-                                 :message (fmt "Destructive operation '~A' called on quoted literal constant data." head-name)
-                                 :severity :error
-                                 :suggested-fix nil))))
+              (let ((targets (cond
+                               ((member head-name '("delete" "delete-if") :test #'string=)
+                                (cddr children))
+                               ((member head-name '("sort" "stable-sort" "nreverse") :test #'string=)
+                                (when (second children) (list (second children))))
+                               (t (rest children)))))
+                (loop for arg in targets
+                      when (or (quoted-or-literal-node-p arg)
+                               (and (leaf-any-symbol-p arg) (string= (leaf-symbol-name arg) "'")))
+                      do (return (make-lint-finding
+                                   :rule :mutate-literal-constant
+                                   :path path
+                                   :message (fmt "Destructive operation '~A' called on quoted literal constant data." head-name)
+                                   :severity :error
+                                   :suggested-fix nil)))))
             (t nil)))))))
 
 (defun check-special-var-earmuffs

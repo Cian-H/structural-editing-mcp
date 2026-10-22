@@ -16,7 +16,7 @@
           (string-trim '(#\Space #\Tab #\Newline #\Return)
                        (uiop:read-file-line
                          (asdf:system-relative-pathname :structural-editing-mcp "version.txt"))))
-        "2026.9.18")))
+        "2026.10.22")))
 
 (defparameter +version+ #.(resolve-version)
                         "The current CalVer version string of structural-editing-mcp.")

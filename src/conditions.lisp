@@ -26,6 +26,11 @@
            :occ-conflict-suggested-read-path
            :occ-conflict-current-revision
            :occ-conflict-agent-revision
+           :expected-head-guard-error
+           :expected-head-guard-expected
+           :expected-head-guard-actual
+           :expected-head-guard-target-path
+           :expected-head-guard-preview
            :format-path-notation
            :+error-code-parse-error+
            :+error-code-invalid-params+
@@ -121,6 +126,19 @@
                  (format stream "Conflict: The workspace was modified by another agent. Current revision is ~A. Your target path ~A may have shifted. Action required: Call read_node on ~A to inspect the updated file, re-evaluate your strategy, and submit your edit."
                          cur-rev target-str suggested-str)))))
   (:documentation "Signaled when an agent's edit conflicts with a concurrent workspace modification."))
+
+(define-condition expected-head-guard-error (structural-editing-error)
+  ((expected-head :initarg :expected-head :reader expected-head-guard-expected :initform nil)
+   (actual-head :initarg :actual-head :reader expected-head-guard-actual :initform nil)
+   (target-path :initarg :target-path :reader expected-head-guard-target-path :initform nil)
+   (preview :initarg :preview :reader expected-head-guard-preview :initform nil))
+  (:report (lambda (condition stream)
+             (format stream "Mutation aborted by expected_head content guard: expected ~S at ~A, but found ~S.~%~%~A"
+                     (expected-head-guard-expected condition)
+                     (expected-head-guard-target-path condition)
+                     (or (expected-head-guard-actual condition) "NIL")
+                     (or (expected-head-guard-preview condition) ""))))
+  (:documentation "Signaled when a mutation tool's expected_head argument does not match the target AST node."))
 
 (defconstant +error-code-parse-error+ -32700
                                       "JSON-RPC standard error code for syntax/parse errors.")

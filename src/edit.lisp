@@ -102,9 +102,13 @@
 (defun move-node
        (tree source-path target-parent-path target-index)
   "Move the node at SOURCE-PATH to TARGET-INDEX under TARGET-PARENT-PATH."
+  (when (null source-path)
+    (error 'invalid-path-error
+           :path source-path
+           :tree tree
+           :message "Cannot move root node"))
   (when
-      (and source-path
-           (<= (length source-path) (length target-parent-path))
+      (and (<= (length source-path) (length target-parent-path))
            (equal source-path (subseq target-parent-path 0 (length source-path))))
     (error 'invalid-path-error
            :path

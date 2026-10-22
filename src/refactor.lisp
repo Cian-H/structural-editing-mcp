@@ -1,5 +1,6 @@
 (defpackage :structural-editing-mcp.refactor
   (:use :cl
+        :trivia
         :structural-editing-mcp.tree
         :structural-editing-mcp.parser
         :structural-editing-mcp.edit
@@ -9,6 +10,7 @@
   (:export :replace-pattern
            :extract-variable
            :extract-function
+           :rename-identifier
            :match-pattern
            :instantiate-pattern))
 
@@ -138,3 +140,41 @@
              (tree-with-call (overwrite-node tree target-path call-ast))
              (final-tree (insert-node tree-with-call file-path top-idx def-ast)))
         (reindex-paths final-tree)))))
+
+(defun case-sensitive-dialect-p (dialect)
+  (member dialect '(:clojure :scheme :fennel)))
+
+(defun rename-identifier (tree old-name new-name &key target-path dialect)
+  "Recursively rename all identifier leaf nodes matching OLD-NAME to NEW-NAME under TARGET-PATH."
+  (let* ((case-sensitive (case-sensitive-dialect-p dialect))
+         (matcher (if case-sensitive #'string= #'string-equal))
+         (parsed-new (first (get-node-children (string-to-sexp new-name :dialect dialect)))))
+    (labels
+        ((matches-old-p (str)
+           (and (stringp str) (funcall matcher old-name str)))
+         (replace-leaf (path)
+           (match parsed-new
+             ((node _ tag children) (list* :path path tag children))
+             ((leaf _ new-val) (list :path path :leaf new-val))
+             (_ (list :path path :leaf (cons :raw new-name)))))
+         (walk (node)
+           (match node
+             ((leaf path val)
+              (cond
+                ((stringp val) node)
+                ((and (consp val) (eq (car val) :raw))
+                 (if (matches-old-p (cdr val))
+                   (replace-leaf path)
+                   node))
+                ((symbolp val)
+                 (if (matches-old-p (symbol-name val))
+                   (replace-leaf path)
+                   node))
+                (t node)))
+             ((comment _ _) node)
+             ((node path tag children)
+              (list* :path path tag (mapcar #'walk children)))
+             (_ node))))
+      (if target-path
+        (update-node-at-path tree target-path #'walk)
+        (walk tree)))))

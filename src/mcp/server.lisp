@@ -8,15 +8,19 @@
         (id (href msg "id"))
         (method (href msg "method"))
         (params (href msg "params")))
-    (when (equal jsonrpc "2.0")
-      (string-case (or method "")
-        ("initialize" (handle-initialize id params))
-        ("notifications/initialized" nil)
-        ("notifications/cancelled" nil)
-        ("ping" (when id (send-result id (dict))))
-        ("tools/list" (handle-tools-list id params))
-        ("tools/call" (handle-tools-call id params))
-        (t (when id (send-error id -32601 (fmt "Method not found: ~A" method))))))))
+    (cond
+      ((not (equal jsonrpc "2.0"))
+       (when id
+         (send-error id -32600 "Invalid Request: jsonrpc version must be \"2.0\"")))
+      (t
+       (string-case (or method "")
+         ("initialize" (handle-initialize id params))
+         ("notifications/initialized" nil)
+         ("notifications/cancelled" nil)
+         ("ping" (when id (send-result id (dict))))
+         ("tools/list" (handle-tools-list id params))
+         ("tools/call" (handle-tools-call id params))
+         (t (when id (send-error id -32601 (fmt "Method not found: ~A" method)))))))))
 
 (defun start-server ()
   "Start the MCP server loop over stdin/stdout with worker thread pool."
@@ -35,5 +39,6 @@
                         (handle-message msg))))
                 (error (e)
                   (format *error-output* "Parse error: ~A~%" e)
-                  (force-output *error-output*)))))))
+                  (force-output *error-output*)
+                  (send-error nil -32700 (fmt "Parse error: ~A" e))))))))
     (stop-worker-pool)))

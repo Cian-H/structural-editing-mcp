@@ -216,7 +216,7 @@
      (new_name :type :string :doc "The new symbol/string to replace it with (e.g. 'execute-api-call')." :required t)
      (path :type :path :doc "Optional AST path to constrain the bulk rename to a specific subtree. If omitted, renames globally across the workspace."))
   (setf structural-editing-mcp.workspace:*workspace-tree*
-        (perform-rename structural-editing-mcp.workspace:*workspace-tree* path old_name new_name))
+        (perform-rename structural-editing-mcp.workspace:*workspace-tree* path old_name new_name dialect))
   (fmt "Successfully renamed all occurrences of '~A' to '~A'." old_name new_name))
 
 (define-mcp-tool "ast_replace_pattern"

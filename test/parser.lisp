@@ -47,12 +47,13 @@
   (testing "backquote tokens do not hang the tokenizer"
     (ok (equal '(:path () :file
                  (:path (0) :paren
-                  (:path (0 0) :leaf |`|)
-                  (:path (0 1) :paren
-                   (:path (0 1 0) :leaf a)
-                   (:path (0 1 1) :leaf |,B|))))
+                  (:path (0 0) :quasiquote
+                   (:path (0 0 0) :paren
+                    (:path (0 0 0 0) :leaf a)
+                    (:path (0 0 0 1) :unquote
+                     (:path (0 0 0 1 0) :leaf b))))))
                (string-to-sexp "(` (a ,b))")))
-    (ok (string= "(` (a ,b))" (sexp-to-string (string-to-sexp "(` (a ,b))")))))
+    (ok (string= "(`(a ,b))" (sexp-to-string (string-to-sexp "(` (a ,b))")))))
 
   (testing "character literals parse without delimiter interference"
     (let ((code "(char= ch #\\; #\\( #\\) #\\\" #\\\\)"))
@@ -255,3 +256,19 @@
                          (collection-delimiters :clojure :square)
       (ok (string= open "["))
       (ok (string= close "]")))))
+
+(deftest test-exact-atom-and-prefix-roundtrip
+  (testing "preserves case and numerical formatting for literals"
+    (let* ((code "(defn Foo [x] (String. \"s\") 3.14159265358979 #x1F 1N :Kw)")
+           (ast (string-to-sexp code :dialect :clojure))
+           (out (sexp-to-string ast :dialect :clojure)))
+      (ok (string= code out))))
+  (testing "prefixes are addressable single nodes and do not shift child indices"
+    (let* ((code "(list 'x '(a b) c)")
+           (ast (string-to-sexp code))
+           (form (first (get-node-children ast)))
+           (children (get-node-children form)))
+      ;; list, 'x, '(a b), c -> exactly 4 children
+      (ok (= (length children) 4))
+      (ok (eq (get-node-tag (second children)) :quote))
+      (ok (eq (get-node-tag (third children)) :quote)))))

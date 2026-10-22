@@ -636,6 +636,10 @@ Returns (values ignored-names remaining-body-nodes)."
             (record-variable-usage scope clean-name (get-node-path node)))))
       findings-acc)
     ((eq (get-node-tag node) :comment) findings-acc)
+    ((prefix-tag-p (get-node-tag node))
+     (if (member (get-node-tag node) '(:quote :discard))
+       findings-acc
+       (walk-binding-nodes (get-node-children node) scope dialect findings-acc)))
     ((member (get-node-tag node) *supported-dialects*)
       (walk-binding-nodes (get-node-children node)
                           scope

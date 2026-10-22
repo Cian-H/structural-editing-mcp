@@ -202,7 +202,19 @@ Returns the updated index."
       (parse-read-literal (subseq string start end) #'numberp))))
 
 (defun parse-token (string start end)
-  "Parse a token delimited by [START, END) in STRING into a keyword, number, or symbol."
+  "Parse the token in [START, END) of STRING into a keyword, number, or symbol.
+If the parsed object would not print back to the exact source text (mixed-case identifiers in
+case-sensitive dialects, float precision, radix/exponent notation, character names, etc.),
+return a verbatim (:raw . text) atom instead so that round-tripping never alters source code."
+  (declare (type string string) (type fixnum start end))
+  (let ((val (classify-token string start end)))
+    (cond
+      ((characterp val) val)
+      ((string= (format-atom val) string :start2 start :end2 end) val)
+      (t (cons :raw (subseq string start end))))))
+
+(defun classify-token (string start end)
+  "Classify the token delimited by [START, END) in STRING into a keyword, number, or symbol."
   (declare (type string string) (type fixnum start end))
   (let ((len (- end start)))
     (declare (type fixnum len))
@@ -323,12 +335,52 @@ Returns the updated index."
       (#\{ (values '(:delim . :set-open) (+ index 2)))
       (otherwise nil))))
 
+(defvar *string-source-text*
+  (make-hash-table :test 'eq :weakness :key :synchronized t)
+  "Weak map from parsed string literal objects to their verbatim source text.
+Only populated for literals whose escapes would not survive a ~S round trip
+(e.g. Clojure \"\\n\" escapes or Fennel [[...]] strings).")
+
+(defun register-string-literal (str source)
+  "Record SOURCE as the verbatim text of string literal STR if printing STR would differ. Return STR."
+  (unless (string= (format nil "~S" str) source)
+    (setf (gethash str *string-source-text*) source))
+  str)
+
+(defun prefix-token-at (string index len dialect)
+  "If a reader-macro prefix (quote, backquote, unquote, #', #( ...) starts at INDEX,
+return (values prefix-node-tag width), otherwise NIL."
+  (let ((ch (char string index))
+        (next (peek-char-ahead string index len))
+        (clojure-p (eq dialect :clojure)))
+    (case ch
+      (#\' (values :quote 1))
+      (#\` (values :quasiquote 1))
+      (#\, (unless clojure-p
+             (if (eql next #\@) (values :unquote-splicing 2) (values :unquote 1))))
+      (#\~ (when clojure-p
+             (if (eql next #\@) (values :syntax-unquote-splicing 2) (values :syntax-unquote 1))))
+      (#\@ (when clojure-p (values :deref 1)))
+      (#\# (case next
+             (#\' (values :function 2))
+             (#\( (values :sharp 1))
+             (#\_ (when clojure-p (values :discard 2)))
+             (#\? (when clojure-p
+                    (if (eql (peek-char-ahead string index len 2) #\@)
+                      (values :reader-conditional-splicing 3)
+                      (values :reader-conditional 2))))
+             (otherwise nil)))
+      (otherwise nil))))
+
 (defun tokenize-next-token
        (string index len dialect)
   "Read the next token starting at INDEX in STRING. Return (values token next-index has-tok-p)."
   (let ((ch (char string index)))
+    (multiple-value-bind (prefix-tag prefix-width)
+                         (prefix-token-at string index len dialect)
     (cond
       ((whitespace-p ch dialect) (values nil (1+ index) nil))
+      (prefix-tag (values (cons :prefix prefix-tag) (+ index prefix-width) t))
       ((char= ch #\;)
         (multiple-value-bind (tok next)
                              (read-line-comment-token string index len)
@@ -347,7 +399,10 @@ Returns the updated index."
         (let
             ((close-pos (search "]]" string :start2 (+ index 2))))
           (if close-pos
-            (values (subseq string (+ index 2) close-pos) (+ close-pos 2) t)
+            (values (register-string-literal (subseq string (+ index 2) close-pos)
+                                             (subseq string index (+ close-pos 2)))
+                    (+ close-pos 2)
+                    t)
             (error 'sexp-parse-error
                    :token
                    (subseq string index)
@@ -358,11 +413,11 @@ Returns the updated index."
       ((char= ch #\")
         (multiple-value-bind (tok next)
                              (read-string-literal string index len #\" dialect)
-          (values tok next t)))
+          (values (register-string-literal tok (subseq string index next)) next t)))
       (t
         (multiple-value-bind (tok next)
                              (read-default-atom-token string index len dialect)
-          (values tok next t))))))
+          (values tok next t)))))))
 
 (defun tokenize-with-spans
        (string &key (dialect *current-dialect*))
@@ -426,6 +481,10 @@ Returns the updated index."
   "Parse a single form (leaf or collection) from TOKENS at PATH."
   (match tokens
          (nil (values nil nil))
+         ((list* (cons :prefix tag) rest)
+          (multiple-value-bind (child remaining)
+                               (parse-single-form rest (append path '(0)))
+            (values (list :path path tag child) remaining)))
          ((list* (cons :delim :paren-open) rest)
           (multiple-value-bind (children remaining)
                                (parse-collection :paren-close rest path 0)
@@ -471,7 +530,7 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
                   (multiple-value-bind (form rest)
                                        (parse-single-form remaining (list idx))
                     (let*
-                        ((consumed (- (length remaining) (length rest)))
+                        ((consumed (loop for cell on remaining until (eq cell rest) count 1))
                          (end-tok (+ start-tok (1- consumed))))
                       (when form
                         (push form forms)
@@ -508,7 +567,13 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
 (defun write-atom (val stream)
   "Write the string representation of atomic VAL to STREAM."
   (match val
-         ((type string) (format stream "~S" val))
+         ((guard val (and (consp val) (eq (car val) :raw)))
+          (write-string (cdr val) stream))
+         ((type string)
+          (let ((src (gethash val *string-source-text*)))
+            (if src
+              (write-string src stream)
+              (format stream "~S" val))))
          ((type character)
           (cond
             ((char= val #\space) (write-string "#\\space" stream))
@@ -529,7 +594,10 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
 
 (defun get-node-symbol-name (node)
   (match node
-         ((leaf _ sym) (when (symbolp sym) (symbol-name sym)))
+         ((leaf _ sym)
+          (or (when (symbolp sym) (symbol-name sym))
+              (when (and (consp sym) (eq (car sym) :raw))
+                (atom-symbol-name sym))))
          ((list :path _ sym) (when (symbolp sym) (symbol-name sym)))
          (_ nil)))
 
@@ -707,7 +775,7 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
         "DOTIMES"
         :iteration
         "LOOP"
-        :iteration
+        :loop
         "DO"
         :iteration
         "DO*"
@@ -772,6 +840,13 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
         ((min-count (gethash op-cat *multiline-min-child-counts*)))
       (and min-count (>= (length children) min-count)))))
 
+(defparameter *loop-clause-keywords*
+  '("for" "as" "with" "repeat" "while" "until" "always" "never" "thereis"
+    "collect" "collecting" "append" "appending" "nconc" "nconcing"
+    "count" "counting" "sum" "summing" "maximize" "minimizing"
+    "do" "doing" "when" "if" "unless" "else" "end" "finally" "initially")
+  "Keywords that introduce clauses in a LOOP form.")
+
 (defun raw-multiline-text
        (open close blocks op-cat)
   "Compose BLOCKS into a multiline raw string with the head and short leading blocks inline."
@@ -789,12 +864,18 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
             for glue-p =
             (member prev-b '("'" "`" "," ",@" "#" "#'" "#_" "@" "~" "~@") :test #'string=)
             for should-inline =
-            (if (< i inline-n)
-              (and (single-line-p b) (<= (+ col 1 (length b)) *inline-column-limit*))
-              (and (eq op-cat :iteration)
-                   (not starts-compound)
-                   (single-line-p b)
-                   (<= (+ col 1 (length b)) *inline-column-limit*)))
+            (cond
+              ((< i inline-n)
+               (and (single-line-p b) (<= (+ col 1 (length b)) *inline-column-limit*)))
+              ((eq op-cat :loop)
+               (and (single-line-p b)
+                    (not (member (string-downcase b) *loop-clause-keywords* :test #'string=))
+                    (<= (+ col 1 (length b)) *max-line-column*)))
+              (t
+               (and (eq op-cat :iteration)
+                    (not starts-compound)
+                    (single-line-p b)
+                    (<= (+ col 1 (length b)) *inline-column-limit*))))
             do
             (cond
               (glue-p (write-string b s) (incf col (length b)))
@@ -810,6 +891,8 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
   (match node
          ((leaf _ val) (format-atom val))
          ((comment _ text) (trim-whitespace text))
+         ((node _ (guard tag (prefix-tag-p tag)) (list child))
+          (format nil "~A~A" (prefix-tag-string tag) (raw-form-text child)))
          ((node _ tag children)
           (multiple-value-bind (open close)
                                (collection-delims tag)
@@ -834,6 +917,8 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
   (match node
          ((leaf _ val) (format-atom val))
          ((comment _ text) (trim-whitespace text))
+         ((node _ (guard tag (prefix-tag-p tag)) (list child))
+          (format nil "~A~A" (prefix-tag-string tag) (generic-form-text child indent)))
          ((node _ tag children)
           (multiple-value-bind (open close)
                                (collection-delims tag)
@@ -1049,6 +1134,8 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
     (cond
       ((toplevel-container-tag-p (get-node-tag expr))
         (print-toplevel-node expr stream indent dialect))
+      ((prefix-tag-p (get-node-tag expr))
+        (print-formatted-form expr stream indent))
       ((or (collection-tag-p (get-node-tag expr))
            (and (consp expr) (not (eq (first expr) :path))))
         (print-collection-expr expr stream indent))

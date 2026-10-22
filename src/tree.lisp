@@ -18,7 +18,13 @@
            :ensure-node-id
            :get-node-id-handle
            :resolve-symbolic-path
-           :*symbolic-file-resolver*)
+           :*symbolic-file-resolver*
+           :*prefix-node-tags*
+           :prefix-tag-p
+           :prefix-tag-string
+           :raw-atom-p
+           :raw-atom-text
+           :atom-symbol-name)
   (:documentation
     "Core AST representations, patterns, accessors, and path navigation."))
 
@@ -67,6 +73,56 @@
   (let ((tag (get-node-tag node)))
     (or (eq tag :paren) (eq tag :square))))
 
+(defparameter *prefix-node-tags*
+  '((:quote . "'")
+    (:quasiquote . "`")
+    (:unquote . ",")
+    (:unquote-splicing . ",@")
+    (:syntax-unquote . "~")
+    (:syntax-unquote-splicing . "~@")
+    (:deref . "@")
+    (:function . "#'")
+    (:discard . "#_")
+    (:sharp . "#")
+    (:reader-conditional . "#?")
+    (:reader-conditional-splicing . "#?@"))
+  "Alist mapping reader-macro prefix node tags to their exact source prefix strings.
+A prefix node has the shape (:path P TAG CHILD) and prints as PREFIX immediately followed by CHILD,
+so that e.g. '(a b) is a single addressable node rather than two siblings.")
+
+(defun prefix-tag-p (tag)
+  "Return T if TAG denotes a reader-macro prefix node (e.g. :quote)."
+  (and (assoc tag *prefix-node-tags*) t))
+
+(defun prefix-tag-string (tag)
+  "Return the source prefix string for prefix node TAG (e.g. \"'\" for :quote), or NIL."
+  (cdr (assoc tag *prefix-node-tags*)))
+
+(defun raw-atom-p (val)
+  "Return T if leaf value VAL is a verbatim (:raw . text) atom."
+  (and (consp val) (eq (car val) :raw) (stringp (cdr val))))
+
+(defun raw-atom-text (val)
+  "Return the verbatim source text of raw atom VAL, or NIL."
+  (when (raw-atom-p val) (cdr val)))
+
+(defun raw-symbol-text-p (text)
+  "Return T if raw atom TEXT looks like a (non-keyword) symbol rather than a number, string or character."
+  (let ((len (length text)))
+    (and (plusp len)
+         (let ((c0 (char text 0)) (c1 (and (> len 1) (char text 1))))
+           (not (or (member c0 '(#\" #\# #\\ #\:))
+                    (digit-char-p c0)
+                    (and (member c0 '(#\+ #\- #\.)) c1 (digit-char-p c1))))))))
+
+(defun atom-symbol-name (val)
+  "Return the symbol name of leaf value VAL: SYMBOL-NAME for symbols, the verbatim text for
+symbol-like raw atoms (e.g. case-sensitive identifiers such as Foo), otherwise NIL."
+  (cond
+    ((symbolp val) (symbol-name val))
+    ((raw-atom-p val) (let ((text (cdr val))) (when (raw-symbol-text-p text) text)))
+    (t nil)))
+
 (defun parse-node (node)
   "Destructure NODE and return (values path tag children-or-leaf-val)."
   (match node
@@ -75,29 +131,33 @@
          ((node path tag children) (values path tag children))
          (_ (values nil nil nil))))
 
+(defvar *node-id-lock* (bt:make-lock "node-id-lock")
+  "Lock protecting node ID allocation and table registration.")
+
 (defvar *next-node-id* 0
-                       "Monotonic counter for assigning Hybrid \"Explicity Addressed Sequence Enccoding\" (EASE) handles (#n<id>) to AST nodes.")
+  "Monotonic counter for assigning Hybrid \"Explicitly Addressed Sequence Encoding\" (EASE) handles (#n<id>) to AST nodes.")
 
 (defvar *node-id-table*
-  (make-hash-table :test 'eq :weakness :key)
+  (make-hash-table :test 'eq :weakness :key :synchronized t)
   "Weak hash table mapping AST node cons cells to their monotonic integer ID.")
 
 (defvar *id-node-table*
-  (make-hash-table :test 'eql :weakness :value)
+  (make-hash-table :test 'eql :weakness :value :synchronized t)
   "Weak hash table mapping monotonic integer node IDs to their current AST node.")
 
 (defvar *symbolic-file-resolver* nil
-                                 "Optional hook (lambda (path) -> filepath-string) registered by the workspace package.")
+  "Optional hook (lambda (path) -> filepath-string) registered by the workspace package.")
 
 (defun ensure-node-id
        (node &optional existing-id)
   "Return the monotonic integer ID for NODE, assigning one if not yet registered."
   (when (consp node)
-    (let
-        ((id (or existing-id (gethash node *node-id-table*) (incf *next-node-id*))))
-      (setf (gethash node *node-id-table*) id)
-      (setf (gethash id *id-node-table*) node)
-      id)))
+    (bt:with-lock-held (*node-id-lock*)
+      (let
+          ((id (or existing-id (gethash node *node-id-table*) (incf *next-node-id*))))
+        (setf (gethash node *node-id-table*) id)
+        (setf (gethash id *id-node-table*) node)
+        id))))
 
 (defun get-node-id-handle (node)
   "Return the Hybrid EASE handle string (e.g. \"#n402\") for NODE."
@@ -150,10 +210,7 @@
                    (find-path-by-id child target-id (cons idx rev-path))
                    when found return found))))
        (resolve-id (target-id)
-         (or (find-path-by-id tree target-id '())
-             (let
-                 ((cached (gethash target-id *id-node-table*)))
-               (when cached (get-node-path cached)))))
+         (find-path-by-id tree target-id '()))
        (file-matches-p (coord-path seg)
          (when *symbolic-file-resolver*
            (let
@@ -205,14 +262,15 @@
                     (cond
                       ((eq tag :workspace)
                         (multiple-value-bind (found-node found-path)
-                                             (loop for d-node in
-                                                   (get-node-children curr) for d-idx from 0 do
-                                                   (loop for f-node in
-                                                         (get-node-children d-node) for f-idx from 0 for
-                                                         cpath =
-                                                         (list d-idx f-idx) when
-                                                         (file-matches-p cpath seg) do
-                                                         (return-from nil (values f-node cpath))))
+                            (block find-file
+                              (loop for d-node in
+                                    (get-node-children curr) for d-idx from 0 do
+                                    (loop for f-node in
+                                          (get-node-children d-node) for f-idx from 0 for
+                                          cpath =
+                                          (list d-idx f-idx) when
+                                          (file-matches-p cpath seg) do
+                                          (return-from find-file (values f-node cpath)))))
                           (if found-node
                             (setf curr found-node acc found-path)
                             (return nil))))

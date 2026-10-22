@@ -191,47 +191,14 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
   (structural-editing-mcp.analysis:search-ast tree query :path target-path))
 
 (defun perform-rename
-       (tree target-path old-name new-name)
-  "Recursively rename all leaf nodes matching OLD-NAME to NEW-NAME under TARGET-PATH."
-  (let
-      ((lower-old (string-downcase old-name))
-       (parsed-new
-         (first
-           (structural-editing-mcp.tree:get-node-children
-             (structural-editing-mcp.parser:string-to-sexp new-name)))))
-    (labels
-        ((replace-matched-leaf (path prefix)
-           (if (string= prefix "")
-             (match parsed-new
-                    ((node _ tag children) ` (:path ,path ,tag ,@children))
-                    ((leaf _ new-val) ` (:path ,path :leaf ,new-val))
-                    (_ ` (:path ,path :leaf (:raw . ,new-name))))
-             `
-             (:path ,path :leaf (:raw . , (concatenate 'string prefix new-name)))))
-         (match-prefixed-old (lower-str str)
-           (loop for p in '
-                 ("#'," "#'" ",@" "~@" "'" "`" "," "@" "~") when
-                 (and (> (length lower-str) (length p))
-                      (string= p lower-str :end2 (length p))
-                      (string= lower-old (subseq lower-str (length p))))
-                 return
-                 (subseq str 0 (length p))))
-         (walk (node)
-           (match node
-                  ((leaf path val)
-                   (let*
-                       ((str (structural-editing-mcp.parser::format-atom val))
-                        (lower-str (string-downcase str)))
-                     (cond
-                       ((string= lower-old lower-str) (replace-matched-leaf path ""))
-                       ((and (not (consp val)) (match-prefixed-old lower-str str))
-                         (replace-matched-leaf path (match-prefixed-old lower-str str)))
-                       (t node))))
-                  ((node path tag children) (list* :path path tag (mapcar #'walk children)))
-                  (_ node))))
-      (if target-path
-        (structural-editing-mcp.tree:update-node-at-path tree target-path #'walk)
-        (walk tree)))))
+       (tree target-path old-name new-name &optional dialect)
+  "Recursively rename all identifier leaf nodes matching OLD-NAME to NEW-NAME under TARGET-PATH."
+  (structural-editing-mcp.refactor:rename-identifier
+    tree
+    old-name
+    new-name
+    :target-path target-path
+    :dialect dialect))
 
 ;;; Tool Schema Builders & Definitions
 
@@ -735,16 +702,14 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
               (and target-node
                    (>= (length clean-sig) (length clean-exp))
                    (string-equal clean-exp clean-sig :end2 (length clean-exp)))
-            (return-from execute-mutation-tool-locked
-                         (fmt
-                           "Mutation aborted by expected_head content guard: expected ~S at ~A, but found ~S.~%~%~A"
-                           expected-head
-                           target-path
-                           (or sig "NIL")
-                           (format-node-slice
-                             structural-editing-mcp.workspace:*workspace-tree*
-                             (or (butlast target-path) target-path)
-                             (dict "depth" 2 "mode" "skeleton")))))))
+            (error 'structural-editing-mcp.conditions:expected-head-guard-error
+                   :expected-head expected-head
+                   :actual-head sig
+                   :target-path target-path
+                   :preview (format-node-slice
+                              structural-editing-mcp.workspace:*workspace-tree*
+                              (or (butlast target-path) target-path)
+                              (dict "depth" 2 "mode" "skeleton"))))))
       (let
           ((old-rev structural-editing-mcp.workspace:*workspace-revision*)
            (old-tree structural-editing-mcp.workspace:*workspace-tree*)
@@ -806,6 +771,15 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                                   (format nil "~A" c)
                                   structural-editing-mcp.conditions:+error-code-occ-conflict+
                                   "occ_conflict"))
+      (structural-editing-mcp.conditions:expected-head-guard-error
+          (c)
+        (send-tool-error-response id
+                                  (format nil "~A" c)
+                                  structural-editing-mcp.conditions:+error-code-occ-conflict+
+                                  "expected_head_mismatch"
+                                  (list "expected_head" (structural-editing-mcp.conditions:expected-head-guard-expected c)
+                                        "actual_head" (structural-editing-mcp.conditions:expected-head-guard-actual c)
+                                        "target_path" (structural-editing-mcp.conditions:expected-head-guard-target-path c))))
       (structural-editing-mcp.conditions:invalid-path-error
           (c)
         (send-tool-error-response id

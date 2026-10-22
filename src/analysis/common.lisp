@@ -3,28 +3,33 @@
 (declaim (optimize (speed 2) (safety 3)))
 
 (defun leaf-any-symbol-p (node)
-  "Return T if NODE is a leaf node containing a symbol (not keyword, boolean, or literal)."
+  "Return T if NODE is a leaf node containing a symbol (not keyword, boolean, or literal).
+Symbol-like raw atoms (verbatim case-sensitive identifiers) also count."
   (multiple-value-bind (path tag val) (parse-node node)
     (declare (ignore path))
     (and (eq tag :leaf)
-         (symbolp val)
+         (or (raw-atom-p val) (symbolp val))
+         (atom-symbol-name val)
          (not (keywordp val))
          (not (member val '(t nil))))))
 
 (defun leaf-symbol-name (node)
-  "Return downcased string name of leaf symbol node, or NIL if not a leaf symbol."
+  "Return downcased string name of leaf symbol node, or NIL if not a leaf symbol.
+Raw atoms return their verbatim text (case preserved)."
   (multiple-value-bind (path tag val) (parse-node node)
     (declare (ignore path))
-    (when (and (eq tag :leaf) (symbolp val))
-      (string-downcase (symbol-name val)))))
+    (when (eq tag :leaf)
+      (cond
+        ((symbolp val) (string-downcase (symbol-name val)))
+        ((raw-atom-p val) (atom-symbol-name val))))))
 
 (defun leaf-symbol-p (node name)
   "Return T if NODE is a leaf symbol matching NAME (case-insensitive string or symbol)."
   (multiple-value-bind (path tag val) (parse-node node)
     (declare (ignore path))
     (and (eq tag :leaf)
-         (symbolp val)
-         (string-equal (symbol-name val) (string name)))))
+         (let ((sym-name (atom-symbol-name val)))
+           (and sym-name (string-equal sym-name (string name)))))))
 
 (defun leaf-nil-p (node)
   "Return T if NODE is the symbol NIL."

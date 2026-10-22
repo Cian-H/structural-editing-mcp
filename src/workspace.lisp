@@ -121,7 +121,7 @@
     :id new-id
     :parent-id (or parent-id (workspace-context-id ctx))
     :base-revision (or base-revision (workspace-context-revision ctx))
-    :tree (copy-tree (workspace-context-tree ctx))
+    :tree (workspace-context-tree ctx)
     :file-registry (copy-hash-table (workspace-context-file-registry ctx))
     :clean-state (copy-hash-table (workspace-context-clean-state ctx) :test 'equal)
     :clean-sources (copy-hash-table (workspace-context-clean-sources ctx) :test 'equal)
@@ -367,12 +367,12 @@ The file is immediately marked as uncommitted (dirty) until committed."
                          (unless snap
                            (error 'workspace-error :message (format nil "Snapshot ~S not found in workspace ~S"
                                                                     name (workspace-context-id ctx))))
-                         (setf (workspace-context-tree ctx) (copy-tree (workspace-context-tree snap)))
+                         (setf (workspace-context-tree ctx) (workspace-context-tree snap))
                          (setf (workspace-context-file-registry ctx) (copy-hash-table (workspace-context-file-registry snap)))
                          (setf (workspace-context-clean-state ctx) (copy-hash-table (workspace-context-clean-state snap) :test 'equal))
                          (setf (workspace-context-clean-sources ctx) (copy-hash-table (workspace-context-clean-sources snap) :test 'equal))
                          (setf (workspace-context-next-file-id ctx) (workspace-context-next-file-id snap))
-                         (setf (workspace-context-revision ctx) (workspace-context-revision snap))
+                         (setf (workspace-context-revision ctx) (1+ (max (workspace-context-revision ctx) (workspace-context-revision snap))))
                          (setf (workspace-context-file-revisions ctx) (copy-hash-table (workspace-context-file-revisions snap) :test 'equal))
                          (setf (workspace-context-agent-views ctx) (copy-hash-table (workspace-context-agent-views snap) :test 'equal))
                          name))))
@@ -397,7 +397,7 @@ If FORCE is nil and uncommitted dirty files would be overwritten, signals WORKSP
                          (dolist (f target-files)
                            (when (probe-file f)
                              (let ((dialect (or (file-dialect f) :common-lisp))
-                                   (text (uiop:read-file-string f))
+                                   (text (uiop:read-file-string f :external-format :utf-8))
                                    (coords (find-file-path-coords f)))
                                (multiple-value-bind (parsed-node sources)
                                                     (string-to-sexp text :dialect dialect)
@@ -899,11 +899,9 @@ Non-Lisp files, ignored directories, and non-existent paths return NIL."
 
 (defun find-loaded-file-id (canonical-path)
   "Return existing file ID for CANONICAL-PATH from *FILE-REGISTRY*, or NIL."
-  (find-if
-    (lambda (id)
-      (let ((path (gethash id *file-registry*)))
-        (string= canonical-path (or (safe-truename path) path))))
-    (remove-if-not #'integerp (hash-table-keys *file-registry*))))
+  (loop for k being the hash-keys of *file-registry* using (hash-value path)
+        when (and (integerp k) (string= canonical-path path))
+        return k))
 
 (defun insert-file-into-workspace
        (parsed-file-node canonical-path dialect)
@@ -970,7 +968,7 @@ Returns the newly assigned numerical file ID."
   "Read and register file contents, returning file ID or NIL on failure."
   (handler-case
       (let
-          ((text (uiop:read-file-string canonical-path)))
+          ((text (uiop:read-file-string canonical-path :external-format :utf-8)))
         (parse-and-register-file canonical-path text dialect))
     (error (c)
       (format *error-output*
@@ -1018,7 +1016,7 @@ Returns a list of loaded numerical file IDs."
        (filepath file-node dialect)
   "Re-parse written file on disk to update clean state and clean sources."
   (let
-      ((written-text (uiop:read-file-string filepath)))
+      ((written-text (uiop:read-file-string filepath :external-format :utf-8)))
     (multiple-value-bind (re-parsed new-sources)
                          (string-to-sexp written-text :dialect dialect)
       (declare (ignore re-parsed))
@@ -1027,17 +1025,21 @@ Returns a list of loaded numerical file IDs."
 
 (defun write-file-node-to-disk
        (file-node dialect &optional fallback-path)
-  "Write a single :file node to its registered filepath on disk."
+  "Write a single :file node to its registered filepath on disk atomically via temp file."
   (let*
       ((path (get-node-path file-node))
        (filepath
          (or (get-filepath path) (when fallback-path (get-filepath fallback-path)))))
     (when filepath
-      (let
+      (let*
           ((clean-node (gethash filepath *file-clean-state*))
-           (clean-sources (gethash filepath *file-clean-sources*)))
-        (uiop:with-output-file
-          (out filepath :if-exists :supersede :if-does-not-exist :create)
+           (clean-sources (gethash filepath *file-clean-sources*))
+           (temp-path (format nil "~A.tmp-~A-~A" filepath (get-universal-time) (bt:thread-name (bt:current-thread)))))
+        (with-open-file (out temp-path
+                             :direction :output
+                             :if-exists :supersede
+                             :if-does-not-exist :create
+                             :external-format :utf-8)
           (if (and clean-node clean-sources)
             (structural-editing-mcp.parser:print-file-with-clean-sources
               file-node
@@ -1046,6 +1048,7 @@ Returns a list of loaded numerical file IDs."
               out
               dialect)
             (print-sexp file-node out 0 :dialect dialect)))
+        (uiop:rename-file-overwriting-target temp-path filepath)
         (update-written-file-clean-state filepath file-node dialect)))))
 
 (defun write-dirty-dialect-files

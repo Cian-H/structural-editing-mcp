@@ -41,7 +41,7 @@
   "Execute a queued worker task under a safe error handler."
   (when task
     (handler-case (funcall task)
-      (error (e)
+      (serious-condition (e)
         (format *error-output* "~&[Worker Error] ~A~%" e)
         (force-output *error-output*)))))
 
