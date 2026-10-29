@@ -577,12 +577,12 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
          ((type character)
           (cond
             ((char= val #\space) (write-string "#\\space" stream))
-            ((not (graphic-char-p val))
+            ((graphic-char-p val) (write-string "#\\" stream) (write-char val stream))
+            (t
               (let ((name (char-name val)))
                 (if name
                   (format stream "#\\~A" (string-downcase name))
-                  (format stream "~S" val))))
-            (t (format stream "~S" val))))
+                  (format stream "~S" val))))))
          ((type keyword) (format stream ":~A" (string-downcase (symbol-name val))))
          ((type symbol) (write-string (string-downcase (symbol-name val)) stream))
          ((type number) (format stream "~A" val))

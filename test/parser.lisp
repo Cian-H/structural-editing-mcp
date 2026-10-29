@@ -44,66 +44,88 @@
     (ok (not (search "(bar 1 2)" (sexp-to-string res))))))
 
 (deftest test-backquote-and-character-literals
-  (testing "backquote tokens do not hang the tokenizer"
-    (ok (equal '(:path () :file
-                 (:path (0) :paren
-                  (:path (0 0) :quasiquote
-                   (:path (0 0 0) :paren
-                    (:path (0 0 0 0) :leaf a)
-                    (:path (0 0 0 1) :unquote
-                     (:path (0 0 0 1 0) :leaf b))))))
-               (string-to-sexp "(` (a ,b))")))
+  (testing
+      "backquote tokens do not hang the tokenizer"
+    (ok
+      (equal
+        '(:path ()
+          :file
+          (:path (0)
+           :paren
+           (:path (0 0)
+            :quasiquote
+            (:path (0 0 0)
+             :paren
+             (:path (0 0 0 0) :leaf a)
+             (:path (0 0 0 1) :unquote (:path (0 0 0 1 0) :leaf b))))))
+        (string-to-sexp "(` (a ,b))")))
     (ok (string= "(`(a ,b))" (sexp-to-string (string-to-sexp "(` (a ,b))")))))
-
-  (testing "character literals parse without delimiter interference"
-    (let ((code "(char= ch #\\; #\\( #\\) #\\\" #\\\\)"))
-      (ok (equal '(:path () :file
-                   (:path (0) :paren
-                    (:path (0 0) :leaf char=)
-                    (:path (0 1) :leaf ch)
-                    (:path (0 2) :leaf #\;)
-                    (:path (0 3) :leaf #\()
-                    (:path (0 4) :leaf #\))
-                    (:path (0 5) :leaf #\")
-                    (:path (0 6) :leaf #\\)))
-                 (string-to-sexp code)))
-      (ok (string= "(char= ch #\\; #\\( #\\) #\\\" #\\\\)"
-                   (sexp-to-string (string-to-sexp code))))))
-
-  (testing "space and whitespace character literals"
+  (testing
+      "character literals parse without delimiter interference"
+    (let
+        ((code "(char= ch #\\; #\\( #\\) #\\\" #\\\\)"))
+      (ok
+        (equal
+          '(:path ()
+            :file
+            (:path (0)
+             :paren
+             (:path (0 0) :leaf char=)
+             (:path (0 1) :leaf ch)
+             (:path (0 2) :leaf #\;)
+             (:path (0 3) :leaf #\()
+             (:path (0 4) :leaf #\))
+             (:path (0 5) :leaf #\")
+             (:path (0 6) :leaf #\\)))
+          (string-to-sexp code)))
+      (ok
+        (string= "(char= ch #\\; #\\( #\\) #\\\" #\\\\)"
+                 (sexp-to-string (string-to-sexp code))))))
+  (testing
+      "space and whitespace character literals"
     (let ((code "(char= ch #\\  #\\Tab #\\Newline)"))
-      (ok (equal '(:path () :file
-                   (:path (0) :paren
-                    (:path (0 0) :leaf char=)
-                    (:path (0 1) :leaf ch)
-                    (:path (0 2) :leaf #\Space)
-                    (:path (0 3) :leaf #\Tab)
-                    (:path (0 4) :leaf #\Newline)))
-                 (string-to-sexp code)))))
-
-  (testing "unclosed string and block comment error handling"
+      (ok
+        (equal
+          '(:path ()
+            :file
+            (:path (0)
+             :paren
+             (:path (0 0) :leaf char=)
+             (:path (0 1) :leaf ch)
+             (:path (0 2) :leaf #\space)
+             (:path (0 3) :leaf #\tab)
+             (:path (0 4) :leaf #\newline)))
+          (string-to-sexp code)))))
+  (testing
+      "unicode character literals round-trip as actual characters instead of names"
+    (let
+        ((code "(member ch (quote (#\\λ #\\π #\\ü #\\日 #\\€ #\\→)))"))
+      (ok (string= code (sexp-to-string (string-to-sexp code))))))
+  (testing
+      "unclosed string and block comment error handling"
     (ok (signals (string-to-sexp "\"unclosed string") 'sexp-parse-error))
-    (ok (signals (string-to-sexp "#| unclosed block comment")
-                 'sexp-parse-error)))
-
+    (ok (signals (string-to-sexp "#| unclosed block comment") 'sexp-parse-error)))
   (testing "escaped strings and unicode handling"
-    (let* ((code "\"hello\\nworld\\t\\\"quoted\\\"\"")
-           (ast (string-to-sexp code))
-           (val (get-node-leaf-value (first (get-node-children ast)))))
-      (ok (equal (format nil "hello~Cworld~C\"quoted\"" #\Newline #\Tab) val)))
-    (let* ((code "\"unicode \\u0041 and \\x42\"")
-           (ast (string-to-sexp code))
-           (val (get-node-leaf-value (first (get-node-children ast)))))
+    (let*
+        ((code "\"hello\\nworld\\t\\\"quoted\\\"\"")
+         (ast (string-to-sexp code))
+         (val (get-node-leaf-value (first (get-node-children ast)))))
+      (ok (equal (format nil "hello~Cworld~C\"quoted\"" #\newline #\tab) val)))
+    (let*
+        ((code "\"unicode \\u0041 and \\x42\"")
+         (ast (string-to-sexp code))
+         (val (get-node-leaf-value (first (get-node-children ast)))))
       (ok (equal "unicode A and B" val)))
-    (let* ((code "\"braced \\u{0043}\"")
-           (ast (string-to-sexp code))
-           (val (get-node-leaf-value (first (get-node-children ast)))))
+    (let*
+        ((code "\"braced \\u{0043}\"")
+         (ast (string-to-sexp code))
+         (val (get-node-leaf-value (first (get-node-children ast)))))
       (ok (equal "braced C" val))))
-
   (testing "fennel multiline string literals"
-    (let* ((code "[[hello world]]")
-           (ast (string-to-sexp code :dialect :fennel))
-           (val (get-node-leaf-value (first (get-node-children ast)))))
+    (let*
+        ((code "[[hello world]]")
+         (ast (string-to-sexp code :dialect :fennel))
+         (val (get-node-leaf-value (first (get-node-children ast)))))
       (ok (equal "hello world" val)))))
 
 (deftest test-dialect-parsing-and-printing
