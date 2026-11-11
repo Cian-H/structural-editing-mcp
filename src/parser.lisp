@@ -650,6 +650,17 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
   "Return T if STR contains no newline characters."
   (not (find #\newline str)))
 
+(defun line-comment-node-p (node)
+  "Return T if NODE is a line comment (e.g. starting with ; or #!)."
+  (when (eq (get-node-tag node) :comment)
+    (let ((text (get-node-comment node)))
+      (and (stringp text)
+           (plusp (length text))
+           (or (char= (char text 0) #\;)
+               (and (>= (length text) 2)
+                    (char= (char text 0) #\#)
+                    (char= (char text 1) #\!)))))))
+
 (defun node-has-braces-p (node)
   "Return T if NODE's subtree contains a :curly or :set collection."
   (labels
@@ -847,6 +858,15 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
     "do" "doing" "when" "if" "unless" "else" "end" "finally" "initially")
   "Keywords that introduce clauses in a LOOP form.")
 
+(defun line-comment-string-p (str)
+  "Return T if STR begins with a line comment indicator (; or #!)."
+  (and (stringp str)
+       (plusp (length str))
+       (or (char= (char str 0) #\;)
+           (and (>= (length str) 2)
+                (char= (char str 0) #\#)
+                (char= (char str 1) #\!)))))
+
 (defun raw-multiline-text
        (open close blocks op-cat)
   "Compose BLOCKS into a multiline raw string with the head and short leading blocks inline."
@@ -865,6 +885,8 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
             (member prev-b '("'" "`" "," ",@" "#" "#'" "#_" "@" "~" "~@") :test #'string=)
             for should-inline =
             (cond
+              ((line-comment-string-p b)
+               nil)
               ((< i inline-n)
                (and (single-line-p b) (<= (+ col 1 (length b)) *inline-column-limit*)))
               ((eq op-cat :loop)
@@ -904,6 +926,7 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
                    (op-cat (classify-form-operator (get-node-symbol-name (first children)))))
                 (if
                     (and (every #'single-line-p blocks)
+                         (not (some #'line-comment-node-p children))
                          (<= (length flat) *max-line-column*)
                          (not (always-multiline-op-p op-cat children)))
                   flat
@@ -932,7 +955,9 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
                        children))
                    (flat (flat-collection-string open blocks close)))
                 (if
-                    (and (every #'single-line-p blocks) (<= (length flat) *max-line-column*))
+                    (and (every #'single-line-p blocks)
+                         (not (some #'line-comment-node-p children))
+                         (<= (length flat) *max-line-column*))
                   flat
                   (with-output-to-string (s)
                     (write-string open s)
@@ -1051,13 +1076,15 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
 
 (defun print-toplevel-sequence
        (children stream indent dialect)
-  "Print sequence of top-level CHILDREN separated by blank lines."
+  "Print sequence of top-level CHILDREN separated by blank lines (single newline between contiguous line comments)."
   (loop for
-        (c . rest) on children do
+        (c . rest) on children
+        for next = (first rest) do
         (print-sexp c stream indent :dialect dialect)
         (when rest
           (terpri stream)
-          (terpri stream))))
+          (unless (and (line-comment-node-p c) (line-comment-node-p next))
+            (terpri stream)))))
 
 (defun clean-source-for-child
        (child clean-children clean-sources)

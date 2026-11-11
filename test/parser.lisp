@@ -294,3 +294,20 @@
       (ok (= (length children) 4))
       (ok (eq (get-node-tag (second children)) :quote))
       (ok (eq (get-node-tag (third children)) :quote)))))
+
+(deftest test-comment-preservation-and-formatting
+  (testing "contiguous top-level comments do not receive extra blank lines"
+    (let* ((code (format nil ";;;; Module Title~%;;; Header line 1~%;;; Header line 2~%~%(define (foo x)~%  (+ x 1))"))
+           (ast (string-to-sexp code :dialect :scheme))
+           (out (sexp-to-string ast :dialect :scheme)))
+      (ok (search (format nil ";;;; Module Title~%;;; Header line 1~%;;; Header line 2~%~%(define") out))))
+  (testing "line comments inside forms are not flattened onto single line"
+    (let* ((code (format nil "(define (foo x)~%  ;; doc comment 1~%  ;; doc comment 2~%  (+ x 1))"))
+           (ast (string-to-sexp code :dialect :scheme))
+           (form (first (get-node-children ast)))
+           (out (sexp-to-string form :dialect :scheme)))
+      ;; Must not collapse to (define (foo x) ;; doc comment 1 (+ x 1))
+      (ok (search ";; doc comment 1" out))
+      (ok (search ";; doc comment 2" out))
+      (ok (search "(+ x 1))" out))
+      (ok (not (search ";; doc comment 1 (+ x 1))" out))))))

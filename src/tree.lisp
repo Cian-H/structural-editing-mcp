@@ -8,6 +8,7 @@
            :get-node-tag
            :get-node-children
            :get-node-leaf-value
+           :get-node-comment
            :compound-node-p
            :resolve-tree-scope
            :parse-node
@@ -66,6 +67,12 @@
   "Return the value of leaf NODE, or NIL if it is not a leaf."
   (match node
          ((leaf _ val) val)
+         (_ nil)))
+
+(defun get-node-comment (node)
+  "Return the text of comment NODE, or NIL if it is not a comment."
+  (match node
+         ((comment _ text) text)
          (_ nil)))
 
 (defun compound-node-p (node)
