@@ -18,6 +18,8 @@
            :ast-equal-p
            :ensure-node-id
            :get-node-id-handle
+           :compute-node-hash
+           :node-short-hash
            :resolve-symbolic-path
            :*symbolic-file-resolver*
            :*prefix-node-tags*
@@ -166,11 +168,47 @@ symbol-like raw atoms (e.g. case-sensitive identifiers such as Foo), otherwise N
         (setf (gethash id *id-node-table*) node)
         id))))
 
+(defun compute-node-hash (node)
+  "Compute a deterministic 64-bit FNV-1a structural hash of NODE, ignoring :path metadata."
+  (let ((h #xCBF29CE484222325))
+    (labels
+        ((mix-byte (b)
+           (setf h
+                 (logand #xFFFFFFFFFFFFFFFF (* (logxor h (logand b #xFF)) #x100000001B3))))
+         (mix-str (s)
+           (loop for ch across s
+                 do
+                 (let ((code (char-code ch)))
+                   (mix-byte (logand code #xFF))
+                   (when (> code #xFF) (mix-byte (ash code -8)))))
+           (mix-byte #xFF))
+         (walk (n)
+           (match n
+                  ((leaf _ val) (mix-byte 1)
+                   (let
+                       ((*print-readably* nil) (*print-pretty* nil))
+                     (mix-str (format nil "~S" val))))
+                  ((comment _ text) (mix-byte 2) (mix-str text))
+                  ((node _ tag children) (mix-byte 3)
+                   (mix-str (symbol-name tag))
+                   (dolist (c children) (walk c))
+                   (mix-byte (logand (length children) #xFF)))
+                  (_ (mix-byte 4)
+                     (let
+                         ((*print-readably* nil) (*print-pretty* nil))
+                       (mix-str (format nil "~S" n)))))))
+      (walk node)
+      h)))
+
+(defun node-short-hash (node)
+  "Return a 4-character lowercase hex structural hash for NODE."
+  (string-downcase (format nil "~4,'0x" (logand (compute-node-hash node) #xFFFF))))
+
 (defun get-node-id-handle (node)
-  "Return the Hybrid EASE handle string (e.g. \"#n402\") for NODE."
+  "Return the Hybrid EASE hashnode handle string (e.g. \"#n402:3a9f\") for NODE."
   (let ((id (ensure-node-id node)))
     (if id
-      (format nil "#n~D" id)
+      (format nil "#n~D:~A" id (node-short-hash node))
       "")))
 
 (defun node-atom-name (node)
@@ -191,33 +229,66 @@ symbol-like raw atoms (e.g. case-sensitive identifiers such as Foo), otherwise N
       (t nil))))
 
 (defun resolve-symbolic-path (tree selector)
-  "Resolve SELECTOR (integer list, \"#n402\" handle, or symbolic segment list like (\"preview.lisp\" \"defun:foo\" 2)) to a canonical integer path list in TREE."
+  "Resolve SELECTOR (integer list, \"#n402\" or \"#n402:a3f9\" handle, or symbolic segment list like (\"preview.lisp\" \"defun:foo\" 2)) to a canonical integer path list in TREE."
   (labels
-      ((parse-handle-id (str)
+      ((hex-string-p (s)
+         (and (plusp (length s))
+              (every
+                (lambda (c)
+                  (digit-char-p c 16))
+                s)))
+       (parse-handle-id (str)
          (when (stringp str)
-           (let ((trimmed (string-trim " " str)))
-             (cond
-               ((and (> (length trimmed) 2)
-                     (string-equal "#n" trimmed :end2 2)
-                     (every #'digit-char-p (subseq trimmed 2)))
-                 (parse-integer (subseq trimmed 2)))
-               ((and (> (length trimmed) 1)
-                     (char-equal (char trimmed 0) #\n)
-                     (every #'digit-char-p (subseq trimmed 1)))
-                 (parse-integer (subseq trimmed 1)))
-               (t nil)))))
-       (find-path-by-id (node target-id rev-path)
+           (let*
+               ((trimmed (string-trim " " str))
+                (colon-pos (position #\: trimmed))
+                (id-part
+                  (if colon-pos
+                    (subseq trimmed 0 colon-pos)
+                    trimmed))
+                (hash-part (when colon-pos (subseq trimmed (1+ colon-pos)))))
+             (when
+                 (or (null hash-part) (hex-string-p hash-part))
+               (cond
+                 ((and (> (length id-part) 2)
+                       (string-equal "#n" id-part :end2 2)
+                       (every #'digit-char-p (subseq id-part 2)))
+                   (values (parse-integer (subseq id-part 2)) hash-part))
+                 ((and (> (length id-part) 1)
+                       (char-equal (char id-part 0) #\n)
+                       (every #'digit-char-p (subseq id-part 1)))
+                   (values (parse-integer (subseq id-part 1)) hash-part))
+                 (t (values nil nil)))))))
+       (find-node-and-path-by-id
+           (node target-id rev-path)
          (when (consp node)
            (if
                (eql (gethash node *node-id-table*) target-id)
-             (or (get-node-path node) (reverse rev-path))
-             (loop for child in
-                   (get-node-children node) for idx from 0 for found
-                   =
-                   (find-path-by-id child target-id (cons idx rev-path))
-                   when found return found))))
-       (resolve-id (target-id)
-         (find-path-by-id tree target-id '()))
+             (values node (or (get-node-path node) (reverse rev-path)))
+             (loop for child in (get-node-children node)
+                   for idx from 0
+                   do
+                   (multiple-value-bind (found-node found-path)
+                                        (find-node-and-path-by-id child target-id (cons idx rev-path))
+                     (when found-node (return (values found-node found-path))))))))
+       (resolve-id
+           (target-id &optional expected-hash raw-handle)
+         (multiple-value-bind (found-node found-path)
+                              (find-node-and-path-by-id tree target-id '())
+           (when found-node
+             (when expected-hash
+               (let ((actual-hash (node-short-hash found-node)))
+                 (unless (string-equal actual-hash expected-hash)
+                   (error 'hash-mismatch-error
+                          :handle
+                          (or raw-handle (format nil "#n~D:~A" target-id expected-hash))
+                          :expected-hash
+                          expected-hash
+                          :actual-hash
+                          actual-hash
+                          :target-path
+                          found-path))))
+             found-path)))
        (file-matches-p (coord-path seg)
          (when *symbolic-file-resolver*
            (let
@@ -244,13 +315,16 @@ symbol-like raw atoms (e.g. case-sensitive identifiers such as Foo), otherwise N
       ((null selector) nil)
       ((and (listp selector) (every #'integerp selector)) selector)
       ((stringp selector)
-        (let ((hid (parse-handle-id selector)))
+        (multiple-value-bind (hid hhash)
+                             (parse-handle-id selector)
           (if hid
-            (resolve-id hid)
+            (resolve-id hid hhash selector)
             (resolve-symbolic-path tree (list selector)))))
       ((listp selector)
-        (loop with curr = tree with acc = '
-              () for seg in selector do
+        (loop with curr = tree
+              with acc = '()
+              for seg in selector
+              do
               (cond
                 ((null curr) (return nil))
                 ((integerp seg)
@@ -259,52 +333,50 @@ symbol-like raw atoms (e.g. case-sensitive identifiers such as Foo), otherwise N
                         (and children (<= 0 seg) (< seg (length children)))
                       (setf curr (nth seg children) acc (append acc (list seg)))
                       (return nil))))
-                ((and (stringp seg) (parse-handle-id seg))
-                  (let ((hpath (resolve-id (parse-handle-id seg))))
-                    (if hpath
-                      (setf acc hpath curr (get-node-at-path tree hpath))
-                      (return nil))))
                 ((stringp seg)
-                  (let ((tag (get-node-tag curr)))
-                    (cond
-                      ((eq tag :workspace)
-                        (multiple-value-bind (found-node found-path)
-                            (block find-file
-                              (loop for d-node in
-                                    (get-node-children curr) for d-idx from 0 do
-                                    (loop for f-node in
-                                          (get-node-children d-node) for f-idx from 0 for
-                                          cpath =
-                                          (list d-idx f-idx) when
-                                          (file-matches-p cpath seg) do
-                                          (return-from find-file (values f-node cpath)))))
-                          (if found-node
-                            (setf curr found-node acc found-path)
-                            (return nil))))
-                      ((and
-                         (not (member tag '(:file :paren :square :curly :set :leaf :comment)))
-                         *symbolic-file-resolver*)
-                        (multiple-value-bind (found-node found-idx)
-                                             (loop for f-node in
-                                                   (get-node-children curr) for f-idx from 0 when
-                                                   (file-matches-p (append acc (list f-idx)) seg)
-                                                   return
-                                                   (values f-node f-idx))
-                          (if found-node
-                            (setf curr found-node acc (append acc (list found-idx)))
-                            (return nil))))
-                      (t
-                        (multiple-value-bind (found-node found-idx)
-                                             (loop for c-node in
-                                                   (get-node-children curr) for c-idx from 0 when
-                                                   (form-matches-p c-node seg) return
-                                                   (values c-node c-idx))
-                          (if found-node
-                            (setf curr found-node acc (append acc (list found-idx)))
-                            (return nil)))))))
+                  (multiple-value-bind (hid hhash)
+                                       (parse-handle-id seg)
+                    (if hid
+                      (let ((hpath (resolve-id hid hhash seg)))
+                        (if hpath
+                          (setf acc hpath curr (get-node-at-path tree hpath))
+                          (return nil)))
+                      (let ((tag (get-node-tag curr)))
+                        (cond
+                          ((eq tag :workspace)
+                            (multiple-value-bind (found-node found-path)
+                                                 (block find-file
+                                                   (loop for d-node in (get-node-children curr)
+                                                         for d-idx from 0
+                                                         do
+                                                         (loop for f-node in (get-node-children d-node)
+                                                               for f-idx from 0
+                                                               for cpath = (list d-idx f-idx)
+                                                               when (file-matches-p cpath seg)
+                                                               do (return-from find-file (values f-node cpath)))))
+                              (if found-node
+                                (setf curr found-node acc found-path)
+                                (return nil))))
+                          ((and
+                             (not (member tag '(:file :paren :square :curly :set :leaf :comment)))
+                             *symbolic-file-resolver*)
+                            (multiple-value-bind (found-node found-idx)
+                                                 (loop for f-node in (get-node-children curr)
+                                                       for f-idx from 0
+                                                       when (file-matches-p (append acc (list f-idx)) seg) return (values f-node f-idx))
+                              (if found-node
+                                (setf curr found-node acc (append acc (list found-idx)))
+                                (return nil))))
+                          (t
+                            (multiple-value-bind (found-node found-idx)
+                                                 (loop for c-node in (get-node-children curr)
+                                                       for c-idx from 0
+                                                       when (form-matches-p c-node seg) return (values c-node c-idx))
+                              (if found-node
+                                (setf curr found-node acc (append acc (list found-idx)))
+                                (return nil)))))))))
                 (t (return nil)))
-              finally
-              (return (or acc '(:root)))))
+              finally (return (or acc '(:root)))))
       (t nil))))
 
 (defun get-node-at-path (tree path)
@@ -391,14 +463,20 @@ Only re-indexes the modified subtree at PATH rather than traversing the entire t
                               tree
                               :message
                               (fmt "Child index ~D out of bounds for node at path ~A" child-idx node-path))
-                       (list* :path
-                              node-path
-                              tag
-                              (loop for child in children for i of-type fixnum
-                                    from 0 collect
-                                    (if (= i child-idx)
-                                      (walk child (cdr p) (append curr-path (list i)))
-                                      child))))))
+                       (let
+                           ((old-id (gethash elem *node-id-table*))
+                            (new-node
+                              (list* :path
+                                     node-path
+                                     tag
+                                     (loop for child in children
+                                           for i of-type fixnum from 0
+                                           collect
+                                           (if (= i child-idx)
+                                             (walk child (cdr p) (append curr-path (list i)))
+                                             child)))))
+                         (when old-id (ensure-node-id new-node old-id))
+                         new-node))))
                   (_
                     (error 'invalid-path-error
                            :path

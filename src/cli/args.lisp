@@ -21,19 +21,37 @@
 Supports:
   - NIL or empty string -> NIL
   - \"[]\" -> NIL (workspace root)
-  - \"#n42\" or \"n42\" -> \"#n42\" (node handle)
+  - \"#n42\", \"#n42:a3f9\", \"n42\", or \"n42:a3f9\" -> handle string
   - \"0,0,2\" or \"[0, 0, 2]\" or \"0.0.2\" -> (0 0 2)
   - \"main.lisp/defun:main/2\" -> (\"main.lisp\" \"defun:main\" 2)"
   (when (null raw) (return-from parse-cli-path nil))
   (let
       ((s (trim-whitespace (format nil "~A" raw))))
     (when (or (zerop (length s)) (string= s "[]")) (return-from parse-cli-path nil))
-    ;; Node handle (#n42 or n42)
-    (when
-        (or
-          (and (> (length s) 2) (string-equal "#n" s :end2 2) (all-digits-p (subseq s 2)))
-          (and (> (length s) 1) (char-equal (char s 0) #\n) (all-digits-p (subseq s 1))))
-      (return-from parse-cli-path s))
+    ;; Node / hashnode handle (#n42, #n42:a3f9, n42, or n42:a3f9)
+    (let*
+        ((colon-pos (position #\: s))
+         (id-part
+           (if colon-pos
+             (subseq s 0 colon-pos)
+             s))
+         (hash-part (when colon-pos (subseq s (1+ colon-pos)))))
+      (when
+          (and
+            (or (null hash-part)
+                (and (plusp (length hash-part))
+                     (every
+                       (lambda (c)
+                         (digit-char-p c 16))
+                       hash-part)))
+            (or
+              (and (> (length id-part) 2)
+                   (string-equal "#n" id-part :end2 2)
+                   (all-digits-p (subseq id-part 2)))
+              (and (> (length id-part) 1)
+                   (char-equal (char id-part 0) #\n)
+                   (all-digits-p (subseq id-part 1)))))
+        (return-from parse-cli-path s)))
     ;; Strip surrounding brackets [ ... ] if present
     (when
         (and (>= (length s) 2)

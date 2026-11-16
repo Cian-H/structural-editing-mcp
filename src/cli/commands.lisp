@@ -33,9 +33,7 @@
     (run-mcp-tool "commit_workspace" (dict) :ws-id ws-id)))
 
 (defun set-common-mutation-flags (args flags)
-  "Populate expected_head, expected_revision, and force from FLAGS into ARGS."
-  (when-let ((eh (flag-get flags "expected-head")))
-    (setf (gethash "expected_head" args) eh))
+  "Populate expected_revision and force from FLAGS into ARGS."
   (when-let
       ((er (flag-int flags "expected-revision")))
     (setf (gethash "expected_revision" args) er))

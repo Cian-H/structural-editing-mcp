@@ -56,7 +56,7 @@ Examples:
   semcp slice 0,0,5,2
   semcp slice main.lisp/defun:main/3 -L src/")
     ("modify" .
-     "Usage: semcp modify <insert|overwrite|wrap> <path> <code|--stdin> [options]
+     "Usage: semcp modify <insert|overwrite|wrap> <path> [<code>] [-i|--commit]
 
 Mutate an AST node in memory (mirrors MCP 'ast_modify').
   insert     Insert <code> before <path> (or at --index <n>)
@@ -66,7 +66,6 @@ Mutate an AST node in memory (mirrors MCP 'ast_modify').
 Options:
   --index <n>              Child index for insert or range wrap start
   --end-index <n>          Ending child index for range wrap
-  --expected-head <str>    OCC guard: abort if target head changed
   --expected-revision <n>  OCC guard: abort if workspace revision changed
   -F, --force              Bypass >50-child overwrite safeguard
   --stdin                  Read <code> from standard input

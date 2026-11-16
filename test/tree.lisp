@@ -58,25 +58,40 @@
 
 (deftest test-node-ids-and-handles
   (testing
-      "assigns and preserves monotonic Node IDs (#n<id>) across reindexing"
+      "assigns and preserves hashnode handles (#n<id>:<hash>) across reindexing and detects stale hashes"
     (let*
         ((ast (string-to-sexp "(defun foo (x) (+ x 1))"))
          (fn-node (get-node-at-path ast '(0)))
          (id (ensure-node-id fn-node))
-         (handle (get-node-id-handle fn-node)))
+         (handle (get-node-id-handle fn-node))
+         (colon-pos (position #\: handle)))
       (ok (integerp id))
       (ok (stringp handle))
       (ok (and (> (length handle) 2) (string= "#n" (subseq handle 0 2))))
+      (ok (and colon-pos (= 4 (- (length handle) (1+ colon-pos)))))
       ;; Reindex tree to new path '(0 0)
       (let*
           ((reindexed (reindex-paths ast '(0 0)))
            (new-fn (get-node-at-path reindexed '(0 0 0)))
-           (new-handle (get-node-id-handle new-fn)))
+           (new-handle (get-node-id-handle new-fn))
+           (bare-handle (subseq handle 0 colon-pos))
+           (stale-handle (format nil "~A:0000" bare-handle)))
         ;; Node handle must be preserved across reindexing
         (ok (string= handle new-handle))
-        ;; Handle resolution returns updated path
+        ;; Full hashnode handle and bare #n<id> handle both resolve to updated path
         (ok (equal '(0 0 0) (resolve-symbolic-path reindexed handle)))
-        (ok (equal '(0 0 0) (get-node-path (get-node-at-path reindexed handle))))))))
+        (ok (equal '(0 0 0) (resolve-symbolic-path reindexed bare-handle)))
+        (ok (equal '(0 0 0) (get-node-path (get-node-at-path reindexed handle))))
+        ;; Mismatched hash suffix must signal hash-mismatch-error
+        (ok
+          (handler-case
+              (progn
+                (resolve-symbolic-path reindexed
+                                       (if (string= handle stale-handle)
+                                         (format nil "~A:ffff" bare-handle)
+                                         stale-handle))
+                nil)
+            (structural-editing-mcp.conditions:hash-mismatch-error () t)))))))
 
 (deftest test-symbolic-path-selectors
   (testing

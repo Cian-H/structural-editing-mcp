@@ -10,6 +10,7 @@
     (ok (equal (parse-cli-path "0.2.1") '(0 2 1))))
   (testing "Node handles and symbolic paths"
     (ok (equal (parse-cli-path "#n42") "#n42"))
+    (ok (equal (parse-cli-path "#n42:a3f9") "#n42:a3f9"))
     (ok
       (equal (parse-cli-path "main.lisp/defun:main/2") '("main.lisp" "defun:main" 2)))))
 

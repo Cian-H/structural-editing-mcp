@@ -316,23 +316,14 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
        (effective-params
          (let ((res (copy-list params)))
            (when mutation
-             (unless (member 'expected_head res :key #'car)
-               (setf res
-                     (append res
-                             '
-                             ((expected_head :type
-                                             :string
-                                             :doc
-                                             "Optional expected head/prefix of the target node (e.g. 'let' or 'defun foo'). Aborts with a fresh slice preview if the target node shifted.")))))
              (unless
                  (member 'expected_revision res :key #'car)
                (setf res
                      (append res
-                             '
-                             ((expected_revision :type
-                                                 :integer
-                                                 :doc
-                                                 "Optional expected workspace revision number for optimistic concurrency checking."))))))
+                             '((expected_revision :type
+                                :integer
+                                :doc
+                                "Optional expected workspace revision number for optimistic concurrency checking."))))))
            (when workspace
              (unless (member 'workspace_id res :key #'car)
                (setf res (append res '((workspace_id :type :workspace-id)))))
@@ -341,66 +332,58 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
            res))
        (props-var (gensym "PROPS"))
        (reqs-var (gensym "REQS")))
-    `
-    (progn
-      (let
-          ((,props-var (make-hash-table :test #'equal)) (,reqs-var '()))
-        ,@
-        (loop for p in effective-params for pname =
-              (first p) for key-str =
-              (string-downcase (substitute #\_ #\- (string pname)))
-              for req-p =
-              (getf (cdr p) :required) collect `
-              (setf (gethash ,key-str ,props-var) (build-prop-schema ',p))
-              when req-p collect `
-              (push ,key-str ,reqs-var))
-        (register-tool-definition
-          (make-tool ,name ,description ,props-var (nreverse ,reqs-var))))
-      (defun ,handler-fn
-             (args &key (path nil) (dialect nil) (agent-id "default") &allow-other-keys)
-        (declare (ignorable args path dialect agent-id))
-        (let*
-            ((raw-path (or path (to-list (gethash "path" args))))
-             (path
-               (if raw-path
-                 (or
-                   (structural-editing-mcp.tree:resolve-symbolic-path
-                     structural-editing-mcp.workspace:*workspace-tree*
-                     raw-path)
-                   raw-path)
-                 nil))
-             (dialect (or dialect (parse-dialect-arg (gethash "dialect" args))))
-             (agent-id
-               (or (gethash "agent_id" args) (gethash "agent-id" args) agent-id "default"))
-             ,@
-             (loop for p in effective-params for pname =
-                   (first p) unless
-                   (member pname '(path dialect agent-id agent_id))
-                   collect
-                   (let
-                       ((key-str (string-downcase (substitute #\_ #\- (string pname))))
-                        (default (getf (cdr p) :default))
-                        (has-default (not (eq (getf (cdr p) :default :missing) :missing))))
-                     (if has-default
-                       `
-                       (,pname
-                         (multiple-value-bind (val present-p)
-                                              (gethash ,key-str args)
-                           (if present-p
-                             val
-                             ,default)))
-                       `
-                       (,pname (gethash ,key-str args))))))
-          (declare (ignorable path dialect agent-id ,@ (mapcar #'first effective-params)))
-          ,@body))
-      (setf (gethash ,name *mcp-tool-handlers*) #',handler-fn)
-      ,@
-      (when mutation
-        `
-        ((unless
-             (member ,name *mutation-tools* :test #'string=)
-           (setf *mutation-tools* (append *mutation-tools* (list ,name))))))
-      ',handler-fn)))
+    `(progn
+       (let
+           ((,props-var (make-hash-table :test #'equal)) (,reqs-var '()))
+         ,@(loop for p in effective-params
+                 for pname = (first p)
+                 for key-str = (string-downcase (substitute #\_ #\- (string pname)))
+                 for req-p = (getf (cdr p) :required)
+                 collect `(setf (gethash ,key-str ,props-var) (build-prop-schema ',p))
+                 when req-p
+                 collect `(push ,key-str ,reqs-var))
+         (register-tool-definition
+           (make-tool ,name ,description ,props-var (nreverse ,reqs-var))))
+       (defun ,handler-fn
+              (args &key (path nil) (dialect nil) (agent-id "default") &allow-other-keys)
+         (declare (ignorable args path dialect agent-id))
+         (let*
+             ((raw-path (or path (to-list (gethash "path" args))))
+              (path
+                (if raw-path
+                  (or
+                    (structural-editing-mcp.tree:resolve-symbolic-path
+                      structural-editing-mcp.workspace:*workspace-tree*
+                      raw-path)
+                    raw-path)
+                  nil))
+              (dialect (or dialect (parse-dialect-arg (gethash "dialect" args))))
+              (agent-id
+                (or (gethash "agent_id" args) (gethash "agent-id" args) agent-id "default"))
+              ,@(loop for p in effective-params
+                      for pname = (first p)
+                      unless (member pname '(path dialect agent-id agent_id))
+                      collect
+                      (let
+                          ((key-str (string-downcase (substitute #\_ #\- (string pname))))
+                           (default (getf (cdr p) :default))
+                           (has-default (not (eq (getf (cdr p) :default :missing) :missing))))
+                        (if has-default
+                          `(,pname
+                             (multiple-value-bind (val present-p)
+                                                  (gethash ,key-str args)
+                               (if present-p
+                                 val
+                                 ,default)))
+                          `(,pname (gethash ,key-str args))))))
+           (declare (ignorable path dialect agent-id ,@(mapcar #'first effective-params)))
+           ,@body))
+       (setf (gethash ,name *mcp-tool-handlers*) #',handler-fn)
+       ,@(when mutation
+           `((unless
+                 (member ,name *mutation-tools* :test #'string=)
+               (setf *mutation-tools* (append *mutation-tools* (list ,name))))))
+       ',handler-fn)))
 
 (defun get-tools-list () *mcp-tool-definitions*)
 
@@ -662,10 +645,21 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                (structural-editing-mcp.tree:resolve-symbolic-path
                  structural-editing-mcp.workspace:*workspace-tree*
                  raw-target)
-               raw-target)
+               (if
+                   (and (listp raw-target) (every #'integerp raw-target))
+                 raw-target
+                 (error
+                   'structural-editing-mcp.conditions:invalid-path-error
+                   :path
+                   raw-target
+                   :tree
+                   structural-editing-mcp.workspace:*workspace-tree*
+                   :message
+                   (fmt
+                     "Could not resolve handle or symbolic path ~S (node may have been deleted or replaced)."
+                     raw-target))))
              nil))
-         (expected-rev (href args "expected_revision"))
-         (expected-head (href args "expected_head")))
+         (expected-rev (href args "expected_revision")))
       (when
           (and (integerp expected-rev)
                (/= expected-rev structural-editing-mcp.workspace:*workspace-revision*))
@@ -684,32 +678,6 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
         agent-id
         :target-path
         target-path)
-      (when
-          (and (stringp expected-head)
-               (plusp (length (string-trim " " expected-head)))
-               target-path)
-        (let*
-            ((target-node
-               (structural-editing-mcp.tree:resolve-tree-scope
-                 structural-editing-mcp.workspace:*workspace-tree*
-                 target-path))
-             (sig
-               (when target-node
-                 (extract-node-signature target-node :max-elements 4 :max-length 120)))
-             (clean-sig (string-left-trim "([{#'` " (or sig "")))
-             (clean-exp (string-left-trim "([{#'` " (string-trim " " expected-head))))
-          (unless
-              (and target-node
-                   (>= (length clean-sig) (length clean-exp))
-                   (string-equal clean-exp clean-sig :end2 (length clean-exp)))
-            (error 'structural-editing-mcp.conditions:expected-head-guard-error
-                   :expected-head expected-head
-                   :actual-head sig
-                   :target-path target-path
-                   :preview (format-node-slice
-                              structural-editing-mcp.workspace:*workspace-tree*
-                              (or (butlast target-path) target-path)
-                              (dict "depth" 2 "mode" "skeleton"))))))
       (let
           ((old-rev structural-editing-mcp.workspace:*workspace-revision*)
            (old-tree structural-editing-mcp.workspace:*workspace-tree*)
@@ -771,15 +739,32 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                                   (format nil "~A" c)
                                   structural-editing-mcp.conditions:+error-code-occ-conflict+
                                   "occ_conflict"))
-      (structural-editing-mcp.conditions:expected-head-guard-error
+      (structural-editing-mcp.conditions:hash-mismatch-error
           (c)
-        (send-tool-error-response id
-                                  (format nil "~A" c)
-                                  structural-editing-mcp.conditions:+error-code-occ-conflict+
-                                  "expected_head_mismatch"
-                                  (list "expected_head" (structural-editing-mcp.conditions:expected-head-guard-expected c)
-                                        "actual_head" (structural-editing-mcp.conditions:expected-head-guard-actual c)
-                                        "target_path" (structural-editing-mcp.conditions:expected-head-guard-target-path c))))
+        (let*
+            ((tpath (structural-editing-mcp.conditions:hash-mismatch-target-path c))
+             (preview
+               (ignore-errors
+                 (let
+                     ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+                   (structural-editing-mcp.workspace:with-workspace-context
+                     (ws)
+                     (format-node-slice
+                       structural-editing-mcp.workspace:*workspace-tree*
+                       (or (butlast tpath) tpath)
+                       (dict "depth" 2 "mode" "skeleton")))))))
+          (send-tool-error-response id
+                                    (format nil "~A~@[~%~%~A~]" c preview)
+                                    structural-editing-mcp.conditions:+error-code-occ-conflict+
+                                    "hash_mismatch"
+                                    (list "handle"
+                                          (structural-editing-mcp.conditions:hash-mismatch-handle c)
+                                          "expected_hash"
+                                          (structural-editing-mcp.conditions:hash-mismatch-expected c)
+                                          "actual_hash"
+                                          (structural-editing-mcp.conditions:hash-mismatch-actual c)
+                                          "target_path"
+                                          tpath))))
       (structural-editing-mcp.conditions:invalid-path-error
           (c)
         (send-tool-error-response id

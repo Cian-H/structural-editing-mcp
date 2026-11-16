@@ -19,9 +19,10 @@ whitespace diffs during automated code modifications.
   tree level.
 - **Multi-Dialect Support**: First-class support for Common Lisp, Clojure,
   Scheme / Racket, Emacs Lisp, and Fennel.
-- **Precise Path Addressing**: Hierarchical 0-indexed integer paths
-  (`[dialect, file, form, ...]`) provide unambiguous coordinates for any
-  expression or atom.
+- **Hashnode Handles & Precise Path Addressing**: Hierarchical 0-indexed integer paths
+  (`[dialect, file, form, ...]`), symbolic selectors (`"defun:foo"`), and
+  hash-verified node handles (`#n<id>:<hash>`) provide unambiguous,
+  stale-write-safe coordinates for any expression or atom.
 - **Multi-Branch In-Memory Workspace Staging**: Stage multi-file edits in an
   in-memory workspace tree (`*workspace-tree*`). Fork isolated branch workspaces
   for parallel agent workflows, create checkpoints, compute AST diffs, and
@@ -85,6 +86,14 @@ Given the following top-level form in file `[0, 0]`:
 - `[0, 0, 0, 3]` addresses the body expression `(+ a b)`
 - `[0, 0, 0, 3, 1]` addresses variable reference `a` inside the body
 
+### Hashnode Handles & Symbolic Selectors
+
+In addition to integer paths, `read_node` and `read_slice` emit **hashnode handles** in `#n<id>:<hash>` format (e.g. `#n402:3a9f`):
+
+- **`#n<id>`** identifies the specific AST node occurrence (preserved across path reindexing and child edits).
+- **`:<hash>`** is a 4-character FNV-1a structural hash of the subtree. Passing `#n402:3a9f` to any tool verifies that the node has not changed since your last read; if it has, the server aborts with a `hash_mismatch` error and returns a fresh preview with the updated handle.
+- Bare `#n<id>` handles (without `:<hash>`) and symbolic segment lists (e.g. `["main.lisp", "defun:add-numbers", 3]`) are also supported.
+
 --------------------------------------------------------------------------------
 
 ## Tool Reference
@@ -112,7 +121,7 @@ The MCP server exposes 22 specialized tools across five functional tiers:
 
 ### 3. Structural Editing (AST Surgery)
 
-All mutation tools automatically return an updated structural preview of the enclosing parent node, eliminating redundant verification reads.
+All mutation tools automatically return an updated structural preview of the enclosing parent node, eliminating redundant verification reads. Pass a hashnode handle (`#n<id>:<hash>`) for per-node stale-write protection, and optionally `expected_revision` for workspace-level optimistic concurrency control.
 
 | Tool | Parameters | Description |
 | :--- | :--- | :--- |

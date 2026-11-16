@@ -1305,7 +1305,7 @@
   (structural-editing-mcp.workspace:with-workspace-context
     ((structural-editing-mcp.workspace:get-workspace "default"))
     (testing
-        "expected_head content guard and symbolic path addressing"
+        "hashnode handle guard and symbolic path addressing"
       (structural-editing-mcp.workspace:init-workspace)
       (let*
           ((file-path (temp-test-path "test-mcp-guard.lisp")))
@@ -1319,7 +1319,7 @@
         (unwind-protect
             (progn
               (structural-editing-mcp.workspace:read-workspace-file file-path)
-              ;; 1. Preview shows balanced let stub and comment-free signature
+              ;; 1. Preview shows balanced let stub and hashnode handles
               (let*
                   ((read-msg
                      (structural-editing-mcp.mcp::dict "jsonrpc"
@@ -1334,67 +1334,75 @@
                                                                                          "arguments"
                                                                                          (structural-editing-mcp.mcp::dict "path" '(0 0)))))
                    (res (call-mcp-msg read-msg))
-                   (text (gethash "text" (first (gethash "content" (gethash "result" res))))))
-                (ok (search "let (var-a var-b)" text)))
-              ;; 2. Mutation with matching expected_head succeeds
-              (let*
-                  ((mod-ok-msg
-                     (structural-editing-mcp.mcp::dict "jsonrpc"
-                                                       "2.0"
-                                                       "id"
-                                                       9002
-                                                       "method"
-                                                       "tools/call"
-                                                       "params"
-                                                       (structural-editing-mcp.mcp::dict "name"
-                                                                                         "ast_modify"
-                                                                                         "arguments"
-                                                                                         (structural-editing-mcp.mcp::dict "path"
-                                                                                                                           '(0 0 0)
-                                                                                                                           "action"
-                                                                                                                           "overwrite"
-                                                                                                                           "new_node"
-                                                                                                                           "(defun guarded-fn () 100)"
-                                                                                                                           "expected_head"
-                                                                                                                           "defun guarded-fn"))))
-                   (res (call-mcp-msg mod-ok-msg)))
-                (ok (null (gethash "isError" (gethash "result" res))))
-                (ok
-                  (search "Successfully executed overwrite"
-                          (gethash "text" (first (gethash "content" (gethash "result" res)))))))
-              ;; 3. Mutation with mismatched expected_head aborts without corrupting code
-              (let*
-                  ((mod-bad-msg
-                     (structural-editing-mcp.mcp::dict "jsonrpc"
-                                                       "2.0"
-                                                       "id"
-                                                       9003
-                                                       "method"
-                                                       "tools/call"
-                                                       "params"
-                                                       (structural-editing-mcp.mcp::dict "name"
-                                                                                         "ast_modify"
-                                                                                         "arguments"
-                                                                                         (structural-editing-mcp.mcp::dict "path"
-                                                                                                                           '(0 0 0)
-                                                                                                                           "action"
-                                                                                                                           "overwrite"
-                                                                                                                           "new_node"
-                                                                                                                           "(defun guarded-fn () 999)"
-                                                                                                                           "expected_head"
-                                                                                                                           "let"))))
-                   (res (call-mcp-msg mod-bad-msg))
-                   (text (gethash "text" (first (gethash "content" (gethash "result" res))))))
-                (ok (search "Mutation aborted by expected_head content guard" text))
-                ;; Ensure code was NOT overwritten to 999
+                   (text (gethash "text" (first (gethash "content" (gethash "result" res)))))
+                   (fn-handle
+                     (structural-editing-mcp.tree:get-node-id-handle
+                       (structural-editing-mcp.tree:get-node-at-path
+                         structural-editing-mcp.workspace:*workspace-tree*
+                         '(0 0 0)))))
+                (ok (search "let (var-a var-b)" text))
+                (ok (search fn-handle text))
+                ;; 2. Mutation of child using hashnode handle of body leaf succeeds
                 (let*
-                    ((code
-                       (structural-editing-mcp.parser:sexp-to-string
+                    ((leaf-handle
+                       (structural-editing-mcp.tree:get-node-id-handle
                          (structural-editing-mcp.tree:get-node-at-path
                            structural-editing-mcp.workspace:*workspace-tree*
-                           '(0 0 0)))))
-                  (ok (search "100" code))
-                  (ok (null (search "999" code)))))
+                           '(0 0 0 3))))
+                     (mod-ok-msg
+                       (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                         "2.0"
+                                                         "id"
+                                                         9002
+                                                         "method"
+                                                         "tools/call"
+                                                         "params"
+                                                         (structural-editing-mcp.mcp::dict "name"
+                                                                                           "ast_modify"
+                                                                                           "arguments"
+                                                                                           (structural-editing-mcp.mcp::dict "path"
+                                                                                                                             leaf-handle
+                                                                                                                             "action"
+                                                                                                                             "overwrite"
+                                                                                                                             "new_node"
+                                                                                                                             "100"))))
+                     (res (call-mcp-msg mod-ok-msg)))
+                  (ok (null (gethash "isError" (gethash "result" res))))
+                  (ok
+                    (search "Successfully executed overwrite"
+                            (gethash "text" (first (gethash "content" (gethash "result" res)))))))
+                ;; 3. Mutation using stale hashnode handle of enclosing defun aborts with hash mismatch
+                (let*
+                    ((mod-bad-msg
+                       (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                         "2.0"
+                                                         "id"
+                                                         9003
+                                                         "method"
+                                                         "tools/call"
+                                                         "params"
+                                                         (structural-editing-mcp.mcp::dict "name"
+                                                                                           "ast_modify"
+                                                                                           "arguments"
+                                                                                           (structural-editing-mcp.mcp::dict "path"
+                                                                                                                             fn-handle
+                                                                                                                             "action"
+                                                                                                                             "overwrite"
+                                                                                                                             "new_node"
+                                                                                                                             "(defun guarded-fn () 999)"))))
+                     (res (call-mcp-msg mod-bad-msg))
+                     (text (gethash "text" (first (gethash "content" (gethash "result" res))))))
+                  (ok (gethash "isError" (gethash "result" res)))
+                  (ok (search "Hash mismatch for handle" text))
+                  ;; Ensure code was NOT overwritten to 999
+                  (let*
+                      ((code
+                         (structural-editing-mcp.parser:sexp-to-string
+                           (structural-editing-mcp.tree:get-node-at-path
+                             structural-editing-mcp.workspace:*workspace-tree*
+                             '(0 0 0)))))
+                    (ok (search "100" code))
+                    (ok (null (search "999" code))))))
               ;; 4. Mutation with mismatched expected_revision triggers OCC error
               (let*
                   ((mod-rev-msg
