@@ -10,6 +10,7 @@
         :structural-editing-mcp.refactor
         :structural-editing-mcp.workspace
         :structural-editing-mcp.mcp)
+  (:export #:temp-test-path)
   (:documentation "Root test suite package for structural-editing-mcp."))
 
 (defpackage :structural-editing-mcp-tests/version
@@ -73,6 +74,7 @@
         :structural-editing-mcp.parser
         :structural-editing-mcp.edit
         :structural-editing-mcp.workspace)
+  (:import-from :structural-editing-mcp-tests #:temp-test-path)
   (:documentation "Workspace staging, diffing, and merging test suite."))
 
 (defpackage :structural-editing-mcp-tests/mcp
@@ -87,4 +89,11 @@
         :structural-editing-mcp.refactor
         :structural-editing-mcp.workspace
         :structural-editing-mcp.mcp)
+  (:import-from :structural-editing-mcp-tests #:temp-test-path)
   (:documentation "MCP protocol handler and JSON-RPC dispatch test suite."))
+
+(in-package :structural-editing-mcp-tests)
+
+(defun temp-test-path (filename)
+  "Return a portable namestring for FILENAME inside the OS temporary directory."
+  (namestring (merge-pathnames filename (truename (uiop:temporary-directory)))))

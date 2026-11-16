@@ -222,8 +222,11 @@
       (ok (search "        v)" printed)))))
 
 (deftest test-toplevel-source-preservation
-  (testing "string-to-sexp returns original source slices for each top-level form"
-    (let* ((code ";;; Header comment
+  (testing
+      "string-to-sexp returns original source slices for each top-level form"
+    (let*
+        ((code
+           ";;; Header comment
 (defun foo (x)
   \"My special docstring with    spaces.\"
   (+ x 1))
@@ -231,15 +234,20 @@
 ;; Middle comment
 (defun bar (y)
   (* y 2))")
-           (ast nil)
-           (slices nil))
-      (multiple-value-setq (ast slices) (string-to-sexp code))
+         (ast nil)
+         (slices nil))
+      (multiple-value-setq (ast slices)
+                           (string-to-sexp code))
       (ok (= 4 (length slices)))
-      (ok (string= ";;; Header comment" (string-trim '(#\Newline #\Space) (aref slices 0))))
+      (ok
+        (string= ";;; Header comment"
+                 (string-trim '(#\newline #\return #\space) (aref slices 0))))
       (ok (search "\"My special docstring with    spaces.\"" (aref slices 1)))
       (ok (search "(* y 2)" (aref slices 3)))
-      (let ((output (with-output-to-string (s)
-                      (structural-editing-mcp.parser:print-file-with-clean-sources ast ast slices s))))
+      (let
+          ((output
+             (with-output-to-string (s)
+               (structural-editing-mcp.parser:print-file-with-clean-sources ast ast slices s))))
         (ok (string= code output))))))
 
 (deftest test-reader-macro-roundtrip

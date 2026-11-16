@@ -1,22 +1,23 @@
 (in-package :structural-editing-mcp-tests/workspace)
 
-(deftest test-workspace
-  (init-workspace)
-  (ok (equal '(:path () :workspace) *workspace-tree*))
-  (uiop:with-temporary-file (:pathname p :stream s :direction :output :type "lisp")
-                            (write-string "(defn add [a b] (+ a b))" s)
-                            :close-stream
-                            (let ((id (read-workspace-file p)))
-                              (ok (= 0 id))
-                              (ok (equal (namestring p) (namestring (get-filepath id))))
-                              (ok (= 1 (length (get-node-children *workspace-tree*))))
-                              (let ((dialect-node (first (get-node-children *workspace-tree*))))
-                                (ok (eq :common-lisp (get-node-tag dialect-node)))
-                                (ok (= 1 (length (get-node-children dialect-node)))))
-                              (setf *workspace-tree*
-                                    (overwrite-node *workspace-tree* '(0 0 0 1) (list :path '(0 0 0 1) :leaf 'sum)))
-                              (write-workspace)
-                              (ok (search "sum" (uiop:read-file-string p))))))
+(deftest test-workspace (init-workspace)
+                        (ok (equal '(:path () :workspace) *workspace-tree*))
+                        (uiop:with-temporary-file
+                          (:pathname p :stream s :direction :output :type "lisp")
+                          (write-string "(defn add [a b] (+ a b))" s)
+                          :close-stream
+                          (let ((id (read-workspace-file p)))
+                            (ok (= 0 id))
+                            (ok (equal (namestring (truename p)) (namestring (get-filepath id))))
+                            (ok (= 1 (length (get-node-children *workspace-tree*))))
+                            (let
+                                ((dialect-node (first (get-node-children *workspace-tree*))))
+                              (ok (eq :common-lisp (get-node-tag dialect-node)))
+                              (ok (= 1 (length (get-node-children dialect-node)))))
+                            (setf *workspace-tree*
+                                  (overwrite-node *workspace-tree* '(0 0 0 1) (list :path '(0 0 0 1) :leaf 'sum)))
+                            (write-workspace)
+                            (ok (search "sum" (uiop:read-file-string p))))))
 
 (deftest test-workspace-directory-scanning
   (testing "lisp-file-p recognizes all supported dialect extensions and ignores others"
@@ -70,44 +71,53 @@
             (ok (= (length (get-node-children dialect-node-after)) count1))))))))
 
 (deftest test-multi-dialect-workspace
-  (testing "multiple dialects are partitioned into separate sub-trees"
+  (testing
+      "multiple dialects are partitioned into separate sub-trees"
     (init-workspace)
-    (uiop:with-temporary-file (:pathname p-cl :stream s-cl :direction :output :type "lisp")
-                              (write-string "(defun cl-func () :common-lisp)" s-cl)
-                              :close-stream
-                              (uiop:with-temporary-file (:pathname p-clj :stream s-clj :direction :output :type "clj")
-                                                        (write-string "(defn clj-func [x] (str \"clojure: \" x))" s-clj)
-                                                        :close-stream
-                                                        (uiop:with-temporary-file (:pathname p-scm :stream s-scm :direction :output :type "scm")
-                                                                                  (write-string "(define (scm-func x) #t)" s-scm)
-                                                                                  :close-stream
-                                                                                  (let ((id-cl (read-workspace-file p-cl))
-                                                                                        (id-clj (read-workspace-file p-clj))
-                                                                                        (id-scm (read-workspace-file p-scm)))
-                                                                                    (ok (= 0 id-cl))
-                                                                                    (ok (= 1 id-clj))
-                                                                                    (ok (= 2 id-scm))
-                                                                                    ;; The workspace tree has 3 dialect children
-                                                                                    (let ((dialect-nodes (get-node-children *workspace-tree*)))
-                                                                                      (ok (= 3 (length dialect-nodes)))
-                                                                                      (ok (eq :common-lisp (get-node-tag (first dialect-nodes))))
-                                                                                      (ok (eq :clojure (get-node-tag (second dialect-nodes))))
-                                                                                      (ok (eq :scheme (get-node-tag (third dialect-nodes)))))
-                                                                                    ;; File nodes are under their respective dialect nodes
-                                                                                    (let ((cl-file (get-node-at-path *workspace-tree* '(0 0)))
-                                                                                          (clj-file (get-node-at-path *workspace-tree* '(1 0)))
-                                                                                          (scm-file (get-node-at-path *workspace-tree* '(2 0))))
-                                                                                      (ok (eq :file (get-node-tag cl-file)))
-                                                                                      (ok (eq :file (get-node-tag clj-file)))
-                                                                                      (ok (eq :file (get-node-tag scm-file)))
-                                                                                      (ok (equal (namestring p-cl) (namestring (get-filepath '(0 0)))))
-                                                                                      (ok (equal (namestring p-clj) (namestring (get-filepath '(1 0)))))
-                                                                                      (ok (equal (namestring p-scm) (namestring (get-filepath '(2 0)))))
-                                                                                      ;; Mutate Clojure form and persist across dialects
-                                                                                      (setf *workspace-tree*
-                                                                                            (overwrite-node *workspace-tree* '(1 0 0 1) (list :path '(1 0 0 1) :leaf 'clj-updated)))
-                                                                                      (write-workspace)
-                                                                                      (ok (search "clj-updated" (uiop:read-file-string p-clj))))))))))
+    (uiop:with-temporary-file
+      (:pathname p-cl :stream s-cl :direction :output :type "lisp")
+      (write-string "(defun cl-func () :common-lisp)" s-cl)
+      :close-stream
+      (uiop:with-temporary-file
+        (:pathname p-clj :stream s-clj :direction :output :type "clj")
+        (write-string "(defn clj-func [x] (str \"clojure: \" x))" s-clj)
+        :close-stream
+        (uiop:with-temporary-file
+          (:pathname p-scm :stream s-scm :direction :output :type "scm")
+          (write-string "(define (scm-func x) #t)" s-scm)
+          :close-stream
+          (let
+              ((id-cl (read-workspace-file p-cl))
+               (id-clj (read-workspace-file p-clj))
+               (id-scm (read-workspace-file p-scm)))
+            (ok (= 0 id-cl))
+            (ok (= 1 id-clj))
+            (ok (= 2 id-scm))
+            ;; The workspace tree has 3 dialect children
+            (let
+                ((dialect-nodes (get-node-children *workspace-tree*)))
+              (ok (= 3 (length dialect-nodes)))
+              (ok (eq :common-lisp (get-node-tag (first dialect-nodes))))
+              (ok (eq :clojure (get-node-tag (second dialect-nodes))))
+              (ok (eq :scheme (get-node-tag (third dialect-nodes)))))
+            ;; File nodes are under their respective dialect nodes
+            (let
+                ((cl-file (get-node-at-path *workspace-tree* '(0 0)))
+                 (clj-file (get-node-at-path *workspace-tree* '(1 0)))
+                 (scm-file (get-node-at-path *workspace-tree* '(2 0))))
+              (ok (eq :file (get-node-tag cl-file)))
+              (ok (eq :file (get-node-tag clj-file)))
+              (ok (eq :file (get-node-tag scm-file)))
+              (ok (equal (namestring (truename p-cl)) (namestring (get-filepath '(0 0)))))
+              (ok (equal (namestring (truename p-clj)) (namestring (get-filepath '(1 0)))))
+              (ok (equal (namestring (truename p-scm)) (namestring (get-filepath '(2 0)))))
+              ;; Mutate Clojure form and persist across dialects
+              (setf *workspace-tree*
+                    (overwrite-node *workspace-tree*
+                                    '(1 0 0 1)
+                                    (list :path '(1 0 0 1) :leaf 'clj-updated)))
+              (write-workspace)
+              (ok (search "clj-updated" (uiop:read-file-string p-clj))))))))))
 
 (deftest test-workspace-precision-persistence
   (testing "unmodified files in multi-file workspace are untouched on disk"
@@ -257,29 +267,32 @@
 
 (deftest test-workspace-merge-and-diff
   (testing "status, diff, and disjoint merge"
-    (let* ((ws-a (create-workspace "merge-ws-a"))
-           (ws-b (create-workspace "merge-ws-b" :parent-id "merge-ws-a" :base-revision 1))
-           (file-a "/tmp/test-merge-a.lisp")
-           (file-b "/tmp/test-merge-b.lisp"))
-      (with-open-file (f file-a :direction :output :if-exists :supersede)
+    (let*
+        ((ws-a (create-workspace "merge-ws-a"))
+         (ws-b (create-workspace "merge-ws-b" :parent-id "merge-ws-a" :base-revision 1))
+         (file-a (temp-test-path "test-merge-a.lisp"))
+         (file-b (temp-test-path "test-merge-b.lisp")))
+      (with-open-file
+          (f file-a :direction :output :if-exists :supersede)
         (write-string "(defun fa () 1)" f))
-      (with-open-file (f file-b :direction :output :if-exists :supersede)
+      (with-open-file
+          (f file-b :direction :output :if-exists :supersede)
         (write-string "(defun fb () 2)" f))
       ;; Load disjoint files
-      (with-workspace-context (ws-a)
-        (read-workspace-file file-a))
-      (with-workspace-context (ws-b)
-        (read-workspace-file file-b))
+      (with-workspace-context (ws-a) (read-workspace-file file-a))
+      (with-workspace-context (ws-b) (read-workspace-file file-b))
       ;; Check status
       (let ((st-a (workspace-status ws-a)))
         (ok (equal "merge-ws-a" (getf st-a :id)))
         (ok (= 1 (length (getf st-a :clean-files)))))
       ;; Check diff
-      (let ((df (diff-workspaces "merge-ws-b" "merge-ws-a")))
+      (let
+          ((df (diff-workspaces "merge-ws-b" "merge-ws-a")))
         (ok (find (safe-truename file-b) (getf df :source-only) :test #'equal))
         (ok (find (safe-truename file-a) (getf df :target-only) :test #'equal)))
       ;; Merge ws-b into ws-a
-      (let ((merge-res (merge-workspaces "merge-ws-b" "merge-ws-a")))
+      (let
+          ((merge-res (merge-workspaces "merge-ws-b" "merge-ws-a")))
         (ok (equal "disjoint" (getf merge-res :action)))
         (ok (= 1 (length (getf merge-res :merged-files))))
         (ok (= 2 (hash-table-count (workspace-context-clean-state ws-a)))))
@@ -289,14 +302,18 @@
       (delete-workspace "merge-ws-b"))))
 
 (deftest test-add-file-to-workspace
-  (testing "in-memory file creation and persistence"
-    (let* ((ws (create-workspace "in-mem-ws"))
-           (test-path "/tmp/test-in-mem-new.lisp"))
+  (testing
+      "in-memory file creation and persistence"
+    (let*
+        ((ws (create-workspace "in-mem-ws"))
+         (test-path (temp-test-path "test-in-mem-new.lisp")))
       (when (probe-file test-path) (delete-file test-path))
       (unwind-protect
           (progn
             ;; 1. Add file in memory
-            (let ((id (add-file-to-workspace test-path :content "(defun greet () \"hello\")" :ctx ws)))
+            (let
+                ((id
+                   (add-file-to-workspace test-path :content "(defun greet () \"hello\")" :ctx ws)))
               (ok (integerp id))
               ;; File is dirty / uncommitted
               (ok (member test-path (workspace-dirty-files-list ws) :test #'equal))
@@ -304,8 +321,7 @@
               ;; Not on disk yet
               (ok (not (probe-file test-path))))
             ;; 2. Write workspace to disk
-            (with-workspace-context (ws)
-              (write-workspace (list test-path)))
+            (with-workspace-context (ws) (write-workspace (list test-path)))
             ;; 3. File exists on disk now and is clean
             (ok (probe-file test-path))
             (ok (null (workspace-dirty-files-list ws))))
@@ -313,82 +329,112 @@
         (delete-workspace "in-mem-ws")))))
 
 (deftest test-ast-merge-and-rebase
-  (testing "disjoint AST-level form merging within the same file"
-    (let* ((ws-base (create-workspace "merge-base"))
-           (file-path "/tmp/test-ast-merge.lisp"))
-      (with-open-file (f file-path :direction :output :if-exists :supersede)
+  (testing
+      "disjoint AST-level form merging within the same file"
+    (let*
+        ((ws-base (create-workspace "merge-base"))
+         (file-path (temp-test-path "test-ast-merge.lisp")))
+      (with-open-file
+          (f file-path :direction :output :if-exists :supersede)
         (write-string "(defun fn-one () 1) (defun fn-two () 2)" f))
       (unwind-protect
           (progn
-            (with-workspace-context (ws-base)
-              (read-workspace-file file-path))
+            (with-workspace-context (ws-base) (read-workspace-file file-path))
             ;; Fork two branches
             (fork-workspace "merge-base" "branch-a")
             (fork-workspace "merge-base" "branch-b")
-            (let ((ws-a (get-workspace "branch-a"))
-                  (ws-b (get-workspace "branch-b")))
+            (let
+                ((ws-a (get-workspace "branch-a")) (ws-b (get-workspace "branch-b")))
               ;; Branch A modifies form 0 (fn-one)
               (with-workspace-context (ws-a)
                 (setf *workspace-tree*
-                      (structural-editing-mcp.edit:overwrite-expression *workspace-tree* '(0 0 0) "(defun fn-one () 100)")))
+                      (structural-editing-mcp.edit:overwrite-expression
+                        *workspace-tree*
+                        '(0 0 0)
+                        "(defun fn-one () 100)")))
               ;; Branch B modifies form 1 (fn-two)
               (with-workspace-context (ws-b)
                 (setf *workspace-tree*
-                      (structural-editing-mcp.edit:overwrite-expression *workspace-tree* '(0 0 1) "(defun fn-two () 200)")))
+                      (structural-editing-mcp.edit:overwrite-expression
+                        *workspace-tree*
+                        '(0 0 1)
+                        "(defun fn-two () 200)")))
               ;; Diff shows ast-mergeable
-              (let ((df (diff-workspaces "branch-a" "branch-b")))
+              (let
+                  ((df (diff-workspaces "branch-a" "branch-b")))
                 (ok (member (safe-truename file-path) (getf df :ast-mergeable) :test #'equal))
                 (ok (null (getf df :modified-in-both))))
               ;; Merge branch-a into branch-b
-              (let ((merge-res (merge-workspaces "branch-a" "branch-b")))
+              (let
+                  ((merge-res (merge-workspaces "branch-a" "branch-b")))
                 (ok (equal "disjoint-and-ast-merge" (getf merge-res :action)))
                 ;; Verify merged AST in branch-b has both modifications!
                 (with-workspace-context (ws-b)
-                  (let* ((node (get-node-at-path *workspace-tree* '(0 0)))
-                         (code (structural-editing-mcp.parser:sexp-to-string node)))
+                  (let*
+                      ((node (get-node-at-path *workspace-tree* '(0 0)))
+                       (code (structural-editing-mcp.parser:sexp-to-string node)))
                     (ok (search "100" code))
                     (ok (search "200" code)))))))
         (when (probe-file file-path) (delete-file file-path))
         (delete-workspace "branch-a")
         (delete-workspace "branch-b")
         (delete-workspace "merge-base"))))
-
-  (testing "detecting true AST collisions and rebasing with strategies"
-    (let* ((ws-base (create-workspace "rebase-base"))
-           (file-path "/tmp/test-ast-rebase.lisp"))
-      (with-open-file (f file-path :direction :output :if-exists :supersede)
+  (testing
+      "detecting true AST collisions and rebasing with strategies"
+    (let*
+        ((ws-base (create-workspace "rebase-base"))
+         (file-path (temp-test-path "test-ast-rebase.lisp")))
+      (with-open-file
+          (f file-path :direction :output :if-exists :supersede)
         (write-string "(defun conflict-fn () :original)" f))
       (unwind-protect
           (progn
-            (with-workspace-context (ws-base)
-              (read-workspace-file file-path))
+            (with-workspace-context (ws-base) (read-workspace-file file-path))
             (fork-workspace "rebase-base" "branch-upstream")
             (fork-workspace "rebase-base" "branch-feature")
-            (let ((ws-up (get-workspace "branch-upstream"))
-                  (ws-feat (get-workspace "branch-feature")))
+            (let
+                ((ws-up (get-workspace "branch-upstream"))
+                 (ws-feat (get-workspace "branch-feature")))
               ;; Upstream changes conflict-fn to :upstream-val
               (with-workspace-context (ws-up)
                 (setf *workspace-tree*
-                      (structural-editing-mcp.edit:overwrite-expression *workspace-tree* '(0 0 0) "(defun conflict-fn () :upstream-val)")))
+                      (structural-editing-mcp.edit:overwrite-expression
+                        *workspace-tree*
+                        '(0 0 0)
+                        "(defun conflict-fn () :upstream-val)")))
               ;; Feature branch changes conflict-fn to :feature-val
               (with-workspace-context (ws-feat)
                 (setf *workspace-tree*
-                      (structural-editing-mcp.edit:overwrite-expression *workspace-tree* '(0 0 0) "(defun conflict-fn () :feature-val)")))
+                      (structural-editing-mcp.edit:overwrite-expression
+                        *workspace-tree*
+                        '(0 0 0)
+                        "(defun conflict-fn () :feature-val)")))
               ;; Diff shows colliding modifications
-              (let ((df (diff-workspaces "branch-feature" "branch-upstream")))
-                (ok (member (safe-truename file-path) (getf df :modified-in-both) :test #'equal))
+              (let
+                  ((df (diff-workspaces "branch-feature" "branch-upstream")))
+                (ok
+                  (member (safe-truename file-path) (getf df :modified-in-both) :test #'equal))
                 (ok (getf df :conflict-details)))
               ;; Merge without strategy signals error
-              (ok (signals (merge-workspaces "branch-feature" "branch-upstream")
-                           'workspace-merge-conflict-error))
+              (ok
+                (signals
+                  (merge-workspaces "branch-feature" "branch-upstream")
+                  'workspace-merge-conflict-error))
               ;; Rebase with strategy :error signals error
-              (ok (signals (rebase-workspace "branch-feature" :onto-id "branch-upstream" :strategy :error)
-                           'workspace-merge-conflict-error))
+              (ok
+                (signals
+                  (rebase-workspace "branch-feature" :onto-id "branch-upstream" :strategy :error)
+                  'workspace-merge-conflict-error))
               ;; Rebase with strategy :theirs accepts upstream
-              (let ((rebase-res (rebase-workspace "branch-feature" :onto-id "branch-upstream" :strategy :theirs)))
+              (let
+                  ((rebase-res
+                     (rebase-workspace "branch-feature" :onto-id "branch-upstream" :strategy :theirs)))
                 (ok (equal "rebase" (getf rebase-res :action)))
                 (with-workspace-context (ws-feat)
-                  (let ((code (structural-editing-mcp.parser:sexp-to-string (get-node-at-path *workspace-tree* '(0 0 0)))))
+                  (let
+                      ((code
+                         (structural-editing-mcp.parser:sexp-to-string
+                           (get-node-at-path *workspace-tree* '(0 0 0)))))
                     (ok (search "upstream-val" code :test #'char-equal)))))))
         (when (probe-file file-path) (delete-file file-path))
         (delete-workspace "branch-feature")
