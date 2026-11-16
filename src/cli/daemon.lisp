@@ -46,8 +46,8 @@
 
 (defun daemon-send-request (sock-path req-dict)
   "Connect to local Unix socket SOCK-PATH, send REQ-DICT as JSON line, return parsed response dict or NIL."
-  #+
-  (and sbcl (not win32))
+  (declare (ignorable sock-path req-dict))
+  #+(and sbcl (not win32))
   (handler-case
       (let
           ((sock (make-instance 'sb-bsd-sockets:local-socket :type :stream)))
@@ -73,9 +73,8 @@
                     (let ((yason:*parse-json-arrays-as-vectors* nil)) (yason:parse line))))))
           (ignore-errors (sb-bsd-sockets:socket-close sock))))
     (error () nil))
-  #-
-  (and sbcl (not win32))
-  (progn (declare (ignore sock-path req-dict)) nil))
+  #-(and sbcl (not win32))
+  nil)
 
 (defun daemon-ping (session-dir)
   "Ping the daemon for SESSION-DIR. Returns status dict or NIL if unreachable."
@@ -150,8 +149,8 @@ Returns (values output-string exit-code) or NIL if daemon is unreachable."
 (defun run-daemon-foreground
        (session-dir &key ready-hook)
   "Run the in-RAM workspace daemon on SESSION-DIR/daemon.sock until stopped."
-  #+
-  (and sbcl (not win32))
+  (declare (ignorable session-dir ready-hook))
+  #+(and sbcl (not win32))
   (let*
       ((dir (uiop:ensure-directory-pathname session-dir))
        (sock-path (daemon-socket-path dir))
@@ -201,10 +200,8 @@ Returns (values output-string exit-code) or NIL if daemon is unreachable."
       (ignore-errors (delete-file sock-path))
       (ignore-errors (delete-file pid-path)))
     t)
-  #-
-  (and sbcl (not win32))
-  (progn (declare (ignore session-dir ready-hook))
-         (error "Daemon mode requires SBCL with Unix domain sockets.")))
+  #-(and sbcl (not win32))
+  (error "Daemon mode requires SBCL with Unix domain sockets."))
 
 (defun start-daemon-background (session-dir)
   "Launch the daemon in a detached background process and wait for it to become ready."
