@@ -9,5 +9,21 @@
         :structural-editing-mcp.analysis
         :structural-editing-mcp.conditions
         :structural-editing-mcp.workspace)
-  (:import-from :serapeum :dict :trim-whitespace :ellipsize :fmt :href :defconst :string-case)
-  (:export :start-server :handle-message :dict :start-worker-pool :stop-worker-pool))
+  (:import-from :serapeum
+    :dict
+    :trim-whitespace
+    :ellipsize
+    :fmt
+    :href
+    :defconst
+    :string-case)
+  (:export :start-server
+           :handle-message
+           :dict
+           :start-worker-pool
+           :stop-worker-pool
+           :execute-tool-call
+           :get-tools-list
+           :*mcp-tool-definitions*
+           :*mcp-tool-handlers*
+           :mutation-tool-p))

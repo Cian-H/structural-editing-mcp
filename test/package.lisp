@@ -92,6 +92,18 @@
   (:import-from :structural-editing-mcp-tests #:temp-test-path)
   (:documentation "MCP protocol handler and JSON-RPC dispatch test suite."))
 
+(defpackage :structural-editing-mcp-tests/cli
+  (:use :cl
+        :rove
+        :structural-editing-mcp.conditions
+        :structural-editing-mcp.version
+        :structural-editing-mcp.workspace
+        :structural-editing-mcp.mcp
+        :structural-editing-mcp.cli)
+  (:import-from :structural-editing-mcp-tests #:temp-test-path)
+  (:documentation
+    "CLI argument parsing, session persistence, and command dispatch test suite."))
+
 (in-package :structural-editing-mcp-tests)
 
 (defun temp-test-path (filename)

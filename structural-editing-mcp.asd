@@ -35,6 +35,15 @@
                                                (:file "core")
                                                (:file "tools")
                                                (:file "server")))
+                                     (:module "cli"
+                                              :serial
+                                              t
+                                              :components
+                                              ((:file "package") (:file "args")
+                                               (:file "session")
+                                               (:file "daemon")
+                                               (:file "commands")
+                                               (:file "cli")))
                                      (:file "main"))
                                     :in-order-to
                                     ((test-op (test-op "structural-editing-mcp/tests"))))
@@ -52,6 +61,7 @@
    (:file "edit")
    (:file "analysis")
    (:file "workspace")
-   (:file "mcp"))
+   (:file "mcp")
+   (:file "cli"))
   :perform
   (test-op (o c) (uiop:symbol-call :rove :run c :style :dot)))

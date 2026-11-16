@@ -170,6 +170,53 @@ The structural linter (`ast_lint`) includes 19 rules designed to catch syntax in
 
 --------------------------------------------------------------------------------
 
+## Command-Line Interface (`semcp`)
+
+In addition to running as a stdio MCP server (the default when invoked with no arguments or `semcp mcp`), `semcp` provides a full CLI that mirrors all 22 MCP tools and extends them for shell scripts, CI pipelines, and interactive terminal workflows.
+
+### Execution & Persistence Modes
+
+1. **One-Shot Mode (Default without `.semcp/`)**:
+   Pass file or directory paths directly. Read and analysis commands load them ephemerally; mutations preview in memory unless `-i` / `--commit` is passed to write changes to disk immediately.
+   ```bash
+   semcp read src/main.lisp
+   semcp lint src/ --fail-on warning
+   semcp modify overwrite 0,0,0,1 new-name -L app.lisp -i
+   ```
+
+2. **Staged Session Mode (`.semcp/state.json`)**:
+   Initialize a persistent workspace session with `semcp init`. Subsequent commands auto-discover `.semcp/`, stage AST edits and forked branches in memory across CLI calls, and only touch disk when you run `semcp commit`.
+   ```bash
+   semcp init src/
+   semcp ws fork feat-1
+   semcp modify overwrite 0,0,2,1 new-fn -w feat-1
+   semcp diff feat-1 default
+   semcp merge feat-1 --into default
+   semcp commit
+   ```
+
+3. **In-RAM Daemon Mode (`.semcp/daemon.sock`)**:
+   For sub-millisecond execution without re-parsing or re-serializing `state.json` on every command, start the background daemon to hold `*workspace-registry*` in RAM over a Unix domain socket:
+   ```bash
+   semcp daemon start src/       # Start background daemon (loads .semcp/state.json if present)
+   semcp daemon status           # Inspect PID, socket, and workspace/file counts
+   semcp modify ...              # Automatically forwarded to the live in-RAM daemon
+   semcp daemon save             # Flush in-RAM state to .semcp/state.json
+   semcp daemon stop             # Save state and stop the daemon
+   ```
+   Pass `--no-daemon` to bypass a running daemon for a single command.
+
+### CLI Subcommands & Extensions
+
+- **Inspection**: `read` (`read_node`), `slice` (`read_slice`), `search` (`ast_search`)
+- **AST Surgery & Refactoring**: `modify` (`ast_modify`), `remove` (`ast_remove`, plus `delete`/`unwrap`/`promote` shortcuts), `relocate` (`ast_relocate`), `rename` (`ast_rename`), `replace-pattern` (`ast_replace_pattern`), `extract-var` (`ast_extract_variable`), `extract-fn` (`ast_extract_function`) — all support `--stdin` and `-i` / `--commit`
+- **Static Analysis**: `lint` (`ast_lint`, with `--fail-on <error|warning|any>` exit code `2`), `complexity`, `duplicates`, `bindings`, `suggest`
+- **Workspaces**: `init`, `load`, `ws` / `workspace` (`workspace_manage`), `create-file`, `status`, `diff`, `rebase`, `merge`, `commit`
+- **Utilities**: `call <tool> [json|--stdin]` (raw MCP tool invocation), `tools [--json]`, `completions <bash|zsh|fish>`, `semcp <cmd> --help`
+- **Machine Output**: Pass `--json` on any command for structured JSON output.
+
+--------------------------------------------------------------------------------
+
 ## Installation & Pre-Built Artifacts
 
 ### 1. Download Pre-Built Binaries
@@ -331,6 +378,13 @@ structural-editing-mcp/
 │   │   ├── package.lisp    # Analysis package definition and exports
 │   │   ├── patterns.lisp   # Structural pattern matching utilities
 │   │   └── suggestions.lisp# Unified refactoring plan advisor
+│   ├── cli/                # Command-line interface & in-RAM daemon subsystem
+│   │   ├── args.lisp       # Flag, argument, and AST path parser
+│   │   ├── cli.lisp        # Top-level CLI dispatcher, help text, JSON output
+│   │   ├── commands.lisp   # Subcommand handlers mirroring & extending MCP tools
+│   │   ├── daemon.lisp     # Unix-socket in-RAM workspace daemon
+│   │   ├── package.lisp    # CLI package definition and exports
+│   │   └── session.lisp    # Persistent .semcp/state.json serialization
 │   ├── mcp/                # Model Context Protocol subsystem
 │   │   ├── core.lisp       # define-mcp-tool macro and tool dispatch registry
 │   │   ├── package.lisp    # MCP package definition and exports
