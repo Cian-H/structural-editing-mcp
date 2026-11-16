@@ -75,26 +75,19 @@
                              (declare (ignore p-path p-tag))
                              (let*
                                  ((new-children
-                                    (loop for
-                                          child
-                                          in
-                                          p-children
-                                          for
-                                          i
-                                          from
-                                          0
+                                    (loop for child in p-children
+                                          for i from 0
                                           collect
                                           (if (= i child-idx)
-                                            (list :path nil :leaf (intern (string-upcase var-name)))
+                                            (first (get-node-children (string-to-sexp var-name :dialect dialect)))
                                             child)))
-                                  (new-parent ` (:path nil :paren ,@new-children))
+                                  (new-parent `(:path nil :paren ,@new-children))
                                   (let-str
                                     (if (member dialect '(:clojure :fennel))
                                       (fmt "(let [~A ~A])" var-name (sexp-to-string target-node :dialect dialect))
                                       (fmt "(let ((~A ~A)))" var-name (sexp-to-string target-node :dialect dialect))))
                                   (let-ast (first (get-node-children (string-to-sexp let-str :dialect dialect)))))
-                               `
-                               (:path nil :paren ,@ (get-node-children let-ast) ,new-parent)))))))
+                               `(:path nil :paren ,@(get-node-children let-ast) ,new-parent)))))))
 
 (defun find-file-path-and-top-index (tree target-path)
   "Find the file node path and top-level form index in that file for TARGET-PATH."
@@ -144,37 +137,42 @@
 (defun case-sensitive-dialect-p (dialect)
   (member dialect '(:clojure :scheme :fennel)))
 
-(defun rename-identifier (tree old-name new-name &key target-path dialect)
+(defun rename-identifier
+       (tree old-name new-name &key target-path dialect)
   "Recursively rename all identifier leaf nodes matching OLD-NAME to NEW-NAME under TARGET-PATH."
-  (let* ((case-sensitive (case-sensitive-dialect-p dialect))
-         (matcher (if case-sensitive #'string= #'string-equal))
-         (parsed-new (first (get-node-children (string-to-sexp new-name :dialect dialect)))))
+  (let*
+      ((case-sensitive (case-sensitive-dialect-p dialect))
+       (matcher
+         (if case-sensitive
+           #'string=
+           #'string-equal))
+       (parsed-new
+         (first (get-node-children (string-to-sexp new-name :dialect dialect)))))
     (labels
-        ((matches-old-p (str)
-           (and (stringp str) (funcall matcher old-name str)))
+        ((matches-old-p (str) (and (stringp str) (funcall matcher old-name str)))
          (replace-leaf (path)
            (match parsed-new
-             ((node _ tag children) (list* :path path tag children))
-             ((leaf _ new-val) (list :path path :leaf new-val))
-             (_ (list :path path :leaf (cons :raw new-name)))))
+                  ((node _ tag children) (list* :path path tag children))
+                  ((leaf _ new-val) (list :path path :leaf new-val))
+                  (_ (list :path path :leaf (cons :raw new-name)))))
          (walk (node)
            (match node
-             ((leaf path val)
-              (cond
-                ((stringp val) node)
-                ((and (consp val) (eq (car val) :raw))
-                 (if (matches-old-p (cdr val))
-                   (replace-leaf path)
-                   node))
-                ((symbolp val)
-                 (if (matches-old-p (symbol-name val))
-                   (replace-leaf path)
-                   node))
-                (t node)))
-             ((comment _ _) node)
-             ((node path tag children)
-              (list* :path path tag (mapcar #'walk children)))
-             (_ node))))
+                  ((leaf path val)
+                   (cond
+                     ((stringp val) node)
+                     ((and (consp val) (eq (car val) :raw))
+                       (if (matches-old-p (cdr val))
+                         (replace-leaf path)
+                         node))
+                     ((symbolp val)
+                       (if
+                           (matches-old-p (string-downcase (symbol-name val)))
+                         (replace-leaf path)
+                         node))
+                     (t node)))
+                  ((comment _ _) node)
+                  ((node path tag children) (list* :path path tag (mapcar #'walk children)))
+                  (_ node))))
       (if target-path
         (update-node-at-path tree target-path #'walk)
         (walk tree)))))

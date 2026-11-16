@@ -209,7 +209,13 @@ return a verbatim (:raw . text) atom instead so that round-tripping never alters
   (declare (type string string) (type fixnum start end))
   (let ((val (classify-token string start end)))
     (cond
-      ((characterp val) val)
+      ((characterp val)
+        (if
+            (or
+              (string-equal (format-atom val) (subseq string start end))
+              (char= val #\space))
+          val
+          (cons :raw (subseq string start end))))
       ((string= (format-atom val) string :start2 start :end2 end) val)
       (t (cons :raw (subseq string start end))))))
 

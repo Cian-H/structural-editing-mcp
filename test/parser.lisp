@@ -288,20 +288,50 @@
       (ok (string= close "]")))))
 
 (deftest test-exact-atom-and-prefix-roundtrip
-  (testing "preserves case and numerical formatting for literals"
-    (let* ((code "(defn Foo [x] (String. \"s\") 3.14159265358979 #x1F 1N :Kw)")
-           (ast (string-to-sexp code :dialect :clojure))
-           (out (sexp-to-string ast :dialect :clojure)))
+  (testing
+      "preserves case and numerical formatting for literals"
+    (let*
+        ((code "(defn Foo [x] (String. \"s\") 3.14159265358979 #x1F 1N :Kw)")
+         (ast (string-to-sexp code :dialect :clojure))
+         (out (sexp-to-string ast :dialect :clojure)))
       (ok (string= code out))))
-  (testing "prefixes are addressable single nodes and do not shift child indices"
-    (let* ((code "(list 'x '(a b) c)")
-           (ast (string-to-sexp code))
-           (form (first (get-node-children ast)))
-           (children (get-node-children form)))
+  (testing
+      "prefixes are addressable single nodes and do not shift child indices"
+    (let*
+        ((code "(list 'x '(a b) c)")
+         (ast (string-to-sexp code))
+         (form (first (get-node-children ast)))
+         (children (get-node-children form)))
       ;; list, 'x, '(a b), c -> exactly 4 children
       (ok (= (length children) 4))
       (ok (eq (get-node-tag (second children)) :quote))
-      (ok (eq (get-node-tag (third children)) :quote)))))
+      (ok (eq (get-node-tag (third children)) :quote))))
+  (testing
+      "preserves exact character literal names such as #\\del"
+    (let*
+        ((code "(list #\\del #\\newline)")
+         (ast (string-to-sexp code :dialect :scheme))
+         (out (sexp-to-string ast :dialect :scheme)))
+      (ok (string= code out))))
+  (testing
+      "rename-identifier and extract-variable preserve case in case-sensitive dialects"
+    (let*
+        ((ast (string-to-sexp "(let ((x 1)) (+ x Foo))" :dialect :scheme))
+         (renamed (rename-identifier ast "x" "y" :dialect :scheme))
+         (renamed-out (sexp-to-string renamed :dialect :scheme))
+         (extracted (extract-variable ast '(0 2 1) "myVar" :dialect :scheme))
+         (extracted-out (sexp-to-string extracted :dialect :scheme)))
+      (ok (search "(y 1)" renamed-out))
+      (ok (search "(+ y Foo)" renamed-out))
+      (ok
+        (null
+          (search "(y 1)"
+                  (sexp-to-string
+                    (rename-identifier ast "X" "y" :dialect :scheme)
+                    :dialect
+                    :scheme))))
+      (ok (search "((myVar x))" extracted-out))
+      (ok (search "(+ myVar Foo)" extracted-out)))))
 
 (deftest test-comment-preservation-and-formatting
   (testing "contiguous top-level comments do not receive extra blank lines"
