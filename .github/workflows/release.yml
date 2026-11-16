@@ -190,6 +190,8 @@ jobs:
           TAG="${{ needs.check-version.outputs.tag }}"
           VERSION="${{ needs.check-version.outputs.version }}"
           gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
             --title "structural-editing-mcp ${VERSION}" \
             --notes "Automated CalVer release ${VERSION}.
 
