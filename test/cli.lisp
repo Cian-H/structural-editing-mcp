@@ -115,75 +115,76 @@
       (uiop:delete-directory-tree tmp-dir :validate t :if-does-not-exist :ignore))))
 
 (deftest test-cli-in-ram-daemon
-  (let*
-      ((tmp-dir
-         (merge-pathnames
-           (format nil "semcp-cli-daemon-~A/" (get-universal-time))
-           (truename (uiop:temporary-directory))))
-       (session-dir (namestring (merge-pathnames ".semcp/" tmp-dir)))
-       (test-file (namestring (merge-pathnames "daemon-app.lisp" tmp-dir)))
-       (ready nil))
-    (ensure-directories-exist test-file)
-    (with-open-file
-        (out test-file :direction :output :if-exists :supersede)
-      (write-string "(defun ping () :pong)" out))
-    (unwind-protect
-        (progn
-          (multiple-value-bind (out code)
-                               (execute-cli (list "init" test-file "--session" session-dir))
-            (ok (zerop code))
-            (ok (search "1 file loaded" out)))
-          (let
-              ((daemon-thread
-                 (bt:make-thread
-                   (lambda ()
-                     (run-daemon-foreground session-dir
-                                            :ready-hook
-                                            (lambda ()
-                                              (setf ready t))))
-                   :name
-                   "test-semcp-daemon")))
-            (loop repeat 40 until ready do (sleep 0.02))
-            (ok ready)
-            (testing
-                "Daemon status, in-RAM fork, modify, merge, commit, and stop"
-              (multiple-value-bind (out code)
-                                   (execute-cli (list "daemon" "status" "--session" session-dir))
-                (ok (zerop code))
-                (ok (search "Daemon running" out)))
-              (multiple-value-bind (out code)
-                                   (execute-cli (list "ws" "fork" "ram-feat" "--session" session-dir))
-                (ok (zerop code))
-                (ok (search "ram-feat" out)))
-              (multiple-value-bind (out code)
-                                   (execute-cli
-                                     (list "modify"
-                                           "overwrite"
-                                           "0,0,0,1"
-                                           "pong"
-                                           "-w"
-                                           "ram-feat"
-                                           "--session"
-                                           session-dir))
-                (ok (zerop code))
-                (ok (search "pong" out)))
-              (multiple-value-bind (out code)
-                                   (execute-cli
-                                     (list "merge" "ram-feat" "--into" "default" "--session" session-dir))
-                (ok (zerop code))
-                (ok (search "Successfully merged" out)))
-              (multiple-value-bind (out code)
-                                   (execute-cli (list "commit" "--session" session-dir))
-                (ok (zerop code))
-                (ok (search "committed" out)))
-              (ok (search "pong" (uiop:read-file-string test-file)))
-              (multiple-value-bind (out code)
-                                   (execute-cli (list "daemon" "stop" "--session" session-dir))
-                (ok (zerop code))
-                (ok (search "Stopped" out))))
-            (bt:join-thread daemon-thread)
-            (ok (null (probe-file (daemon-socket-path session-dir))))))
-      (uiop:delete-directory-tree tmp-dir :validate t :if-does-not-exist :ignore))))
+  (unless (uiop:os-windows-p)
+    (let*
+        ((tmp-dir
+           (merge-pathnames
+             (format nil "semcp-cli-daemon-~A/" (get-universal-time))
+             (truename (uiop:temporary-directory))))
+         (session-dir (namestring (merge-pathnames ".semcp/" tmp-dir)))
+         (test-file (namestring (merge-pathnames "daemon-app.lisp" tmp-dir)))
+         (ready nil))
+      (ensure-directories-exist test-file)
+      (with-open-file
+          (out test-file :direction :output :if-exists :supersede)
+        (write-string "(defun ping () :pong)" out))
+      (unwind-protect
+          (progn
+            (multiple-value-bind (out code)
+                                 (execute-cli (list "init" test-file "--session" session-dir))
+              (ok (zerop code))
+              (ok (search "1 file loaded" out)))
+            (let
+                ((daemon-thread
+                   (bt:make-thread
+                     (lambda ()
+                       (run-daemon-foreground session-dir
+                                              :ready-hook
+                                              (lambda ()
+                                                (setf ready t))))
+                     :name
+                     "test-semcp-daemon")))
+              (loop repeat 40 until ready do (sleep 0.02))
+              (ok ready)
+              (testing
+                  "Daemon status, in-RAM fork, modify, merge, commit, and stop"
+                (multiple-value-bind (out code)
+                                     (execute-cli (list "daemon" "status" "--session" session-dir))
+                  (ok (zerop code))
+                  (ok (search "Daemon running" out)))
+                (multiple-value-bind (out code)
+                                     (execute-cli (list "ws" "fork" "ram-feat" "--session" session-dir))
+                  (ok (zerop code))
+                  (ok (search "ram-feat" out)))
+                (multiple-value-bind (out code)
+                                     (execute-cli
+                                       (list "modify"
+                                             "overwrite"
+                                             "0,0,0,1"
+                                             "pong"
+                                             "-w"
+                                             "ram-feat"
+                                             "--session"
+                                             session-dir))
+                  (ok (zerop code))
+                  (ok (search "pong" out)))
+                (multiple-value-bind (out code)
+                                     (execute-cli
+                                       (list "merge" "ram-feat" "--into" "default" "--session" session-dir))
+                  (ok (zerop code))
+                  (ok (search "Successfully merged" out)))
+                (multiple-value-bind (out code)
+                                     (execute-cli (list "commit" "--session" session-dir))
+                  (ok (zerop code))
+                  (ok (search "committed" out)))
+                (ok (search "pong" (uiop:read-file-string test-file)))
+                (multiple-value-bind (out code)
+                                     (execute-cli (list "daemon" "stop" "--session" session-dir))
+                  (ok (zerop code))
+                  (ok (search "Stopped" out))))
+              (bt:join-thread daemon-thread)
+              (ok (null (probe-file (daemon-socket-path session-dir))))))
+        (uiop:delete-directory-tree tmp-dir :validate t :if-does-not-exist :ignore)))))
 
 (deftest
     test-cli-persistent-session-and-branching

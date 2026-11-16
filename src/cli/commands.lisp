@@ -80,23 +80,25 @@
              positionals
              (unless (flag-bool flags "empty") (list (namestring (uiop:getcwd)))))))
     (declare (ignore session-dir))
-    (init-workspace)
-    (when load-list (load-into-workspace load-list))
-    (let
-        ((state-file (save-session dir))
-         (count (length (workspace-all-files-list (get-workspace "default")))))
-      (values
-        (fmt
-          "Initialized semcp session in ~A (~D file~:P loaded)."
-          (namestring dir)
-          count)
-        0
-        (dict "session_dir"
-              (namestring dir)
-              "state_file"
-              (namestring state-file)
-              "files_loaded"
-              count)))))
+    (with-workspace-context
+        ((get-workspace "default"))
+      (init-workspace)
+      (when load-list (load-into-workspace load-list))
+      (let
+          ((state-file (save-session dir))
+           (count (length (workspace-all-files-list (get-workspace "default")))))
+        (values
+          (fmt
+            "Initialized semcp session in ~A (~D file~:P loaded)."
+            (namestring dir)
+            count)
+          0
+          (dict "session_dir"
+                (namestring dir)
+                "state_file"
+                (namestring state-file)
+                "files_loaded"
+                count))))))
 
 (defun cmd-load (positionals flags ws-id)
   "Load files or directories into the workspace."

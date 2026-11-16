@@ -1,7 +1,6 @@
 (in-package :structural-editing-mcp.cli)
 
-#+sbcl
-
+#+(and sbcl (not win32))
 (eval-when
     (:compile-toplevel :load-toplevel :execute)
   (require :sb-bsd-sockets))
@@ -22,9 +21,11 @@
 
 (defun current-pid ()
   "Return current OS process ID as an integer."
-  #+sbcl
+  #+
+  (and sbcl (not win32))
   (sb-unix:unix-getpid)
-  #-sbcl
+  #-
+  (and sbcl (not win32))
   0)
 
 (defun find-daemon-session-dir (flags)
@@ -45,7 +46,8 @@
 
 (defun daemon-send-request (sock-path req-dict)
   "Connect to local Unix socket SOCK-PATH, send REQ-DICT as JSON line, return parsed response dict or NIL."
-  #+sbcl
+  #+
+  (and sbcl (not win32))
   (handler-case
       (let
           ((sock (make-instance 'sb-bsd-sockets:local-socket :type :stream)))
@@ -71,8 +73,9 @@
                     (let ((yason:*parse-json-arrays-as-vectors* nil)) (yason:parse line))))))
           (ignore-errors (sb-bsd-sockets:socket-close sock))))
     (error () nil))
-  #-sbcl
-  nil)
+  #-
+  (and sbcl (not win32))
+  (progn (declare (ignore sock-path req-dict)) nil))
 
 (defun daemon-ping (session-dir)
   "Ping the daemon for SESSION-DIR. Returns status dict or NIL if unreachable."
@@ -147,7 +150,8 @@ Returns (values output-string exit-code) or NIL if daemon is unreachable."
 (defun run-daemon-foreground
        (session-dir &key ready-hook)
   "Run the in-RAM workspace daemon on SESSION-DIR/daemon.sock until stopped."
-  #+sbcl
+  #+
+  (and sbcl (not win32))
   (let*
       ((dir (uiop:ensure-directory-pathname session-dir))
        (sock-path (daemon-socket-path dir))
@@ -197,8 +201,10 @@ Returns (values output-string exit-code) or NIL if daemon is unreachable."
       (ignore-errors (delete-file sock-path))
       (ignore-errors (delete-file pid-path)))
     t)
-  #-sbcl
-  (error "Daemon mode requires SBCL."))
+  #-
+  (and sbcl (not win32))
+  (progn (declare (ignore session-dir ready-hook))
+         (error "Daemon mode requires SBCL with Unix domain sockets.")))
 
 (defun start-daemon-background (session-dir)
   "Launch the daemon in a detached background process and wait for it to become ready."

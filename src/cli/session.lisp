@@ -190,7 +190,9 @@ Returns the .semcp directory pathname if found, or NIL."
                            (unless (string= id "default") (push id to-remove)))
                          *workspace-registry*)
                        (dolist (id to-remove) (remhash id *workspace-registry*))))
-  (init-workspace (get-workspace "default")))
+  (let ((default-ws (get-workspace "default")))
+    (setf *current-workspace* default-ws)
+    (init-workspace default-ws)))
 
 (defun load-session (session-dir)
   "Load workspace registry state from SESSION-DIR/state.json."
