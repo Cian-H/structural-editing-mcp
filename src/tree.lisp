@@ -162,11 +162,15 @@ symbol-like raw atoms (e.g. case-sensitive identifiers such as Foo), otherwise N
   "Return the monotonic integer ID for NODE, assigning one if not yet registered."
   (when (consp node)
     (bt:with-lock-held (*node-id-lock*)
-      (let
-          ((id (or existing-id (gethash node *node-id-table*) (incf *next-node-id*))))
-        (setf (gethash node *node-id-table*) id)
-        (setf (gethash id *id-node-table*) node)
-        id))))
+                       (let ((cur-id (gethash node *node-id-table*)))
+                         (cond
+                           ((and cur-id (or (null existing-id) (eql cur-id existing-id))) cur-id)
+                           (t
+                             (let
+                                 ((id (or existing-id cur-id (incf *next-node-id*))))
+                               (setf (gethash node *node-id-table*) id)
+                               (unless (gethash id *id-node-table*) (setf (gethash id *id-node-table*) node))
+                               id)))))))
 
 (defun compute-node-hash (node)
   "Compute a deterministic 64-bit FNV-1a structural hash of NODE, ignoring :path metadata."
