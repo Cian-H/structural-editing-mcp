@@ -301,7 +301,6 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
 ;;; ---------------------------------------------------------------------------
 ;;; P0 Rules: Safety, Destructive Returns, Macro Hygiene, & TCO
 ;;; ---------------------------------------------------------------------------
-
 (defparameter *destructive-sequence-functions*
   '("delete" "delete-if" "delete-if-not" "sort" "stable-sort" "nreverse" "nconc" "nreconc")
   "Names of destructive functions whose return values must be captured.")
@@ -332,8 +331,8 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
              ((null n) nil)
              ((eq (get-node-tag n) :leaf) nil)
              ((prefix-tag-p (get-node-tag n))
-              (dolist (c (get-node-children n))
-                (scan c (or in-backquote (eq (get-node-tag n) :quasiquote)))))
+               (dolist (c (get-node-children n))
+                 (scan c (or in-backquote (eq (get-node-tag n) :quasiquote)))))
              ((compound-node-p n)
                (let*
                    ((children (get-node-children n))
@@ -356,7 +355,7 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
                                      (or (string-prefix-p "," name) (string-prefix-p "#" name))
                                    (push (list :name name :path (get-node-path var-node)) unhygienic))))))))))
                  (dolist (c children) (scan c in-backquote)))))))
-      (dolist (b body-nodes) (scan b t)))
+      (dolist (b body-nodes) (scan b nil)))
     (nreverse unhygienic)))
 
 (defun check-unhygienic-macro-binding (node path dialect)
@@ -433,7 +432,6 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
 ;;; ---------------------------------------------------------------------------
 ;;; P1 Rules: State & Scoping Hazards
 ;;; ---------------------------------------------------------------------------
-
 (defparameter *literal-mutating-functions*
   '("nconc" "nreverse" "nreconc" "sort" "stable-sort" "delete" "delete-if"
     "set-car!" "set-cdr!" "vector-set!" "assoc!" "dissoc!" "conj!")
@@ -562,7 +560,6 @@ Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the
 ;;; ---------------------------------------------------------------------------
 ;;; P2 Rules: Idiomatic Traps & Dead Code
 ;;; ---------------------------------------------------------------------------
-
 (defun check-dead-cond-clauses
        (node path dialect)
   "Detect dead clauses appearing after an unconditional default branch (t, otherwise, :else) in cond."
