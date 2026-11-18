@@ -139,10 +139,10 @@ Supports:
     (normalize-flag-name short-name)))
 
 (defun set-flag-value (flags key val)
-  "Store VAL for normalized flag KEY in FLAGS hash table."
+  "Store VAL for normalized flag KEY in FLAGS hash table (repeatable flags accumulate in reverse order)."
   (if
       (member key *cli-repeatable-flags* :test #'string=)
-    (setf (gethash key flags) (append (gethash key flags) (list val)))
+    (push val (gethash key flags))
     (setf (gethash key flags) val)))
 
 (defun parse-cli-args (argv)
@@ -152,44 +152,38 @@ Supports --flag value, --flag=value, -f value, repeatable flags, and --."
       ((flags (make-hash-table :test #'equal))
        (positionals '())
        (stop-flags nil)
-       (i 0)
-       (len (length argv)))
-    (loop while (< i len)
-          for arg = (nth i argv)
-          do
-          (cond
-            (stop-flags (push arg positionals) (incf i))
-            ((string= arg "--") (setf stop-flags t) (incf i))
-            ((and (> (length arg) 2) (string-prefix-p "--" arg))
-              (let*
-                  ((body (subseq arg 2)) (eq-pos (position #\= body)))
-                (if eq-pos
-                  (let
-                      ((key (normalize-flag-name (subseq body 0 eq-pos)))
-                       (val (subseq body (1+ eq-pos))))
-                    (set-flag-value flags key val)
-                    (incf i))
-                  (let ((key (normalize-flag-name body)))
-                    (cond
-                      ((member key *cli-boolean-flags* :test #'string=)
-                        (setf (gethash key flags) t)
-                        (incf i))
-                      ((< (1+ i) len) (set-flag-value flags key (nth (1+ i) argv)) (incf i 2))
-                      (t (error "Flag --~A requires a value." key)))))))
-            ((and (> (length arg) 1) (char= (char arg 0) #\-))
-              (let*
-                  ((short (subseq arg 1 2)) (key (resolve-short-flag short)))
-                (cond
-                  ((> (length arg) 2)
-                    ;; -fVALUE inline
+       (rest argv))
+    (flet
+        ((consume-flag (key raw-flag)
+           (cond
+             ((member key *cli-boolean-flags* :test #'string=) (setf (gethash key flags) t))
+             (rest (set-flag-value flags key (pop rest)))
+             (t (error "Flag ~A requires a value." raw-flag)))))
+      (loop while rest
+            for arg = (pop rest)
+            do
+            (cond
+              (stop-flags (push arg positionals))
+              ((string= arg "--") (setf stop-flags t))
+              ((and (> (length arg) 2) (string-prefix-p "--" arg))
+                (let*
+                    ((body (subseq arg 2)) (eq-pos (position #\= body)))
+                  (if eq-pos
+                    (set-flag-value flags
+                                    (normalize-flag-name (subseq body 0 eq-pos))
+                                    (subseq body (1+ eq-pos)))
+                    (let ((key (normalize-flag-name body)))
+                      (consume-flag key (format nil "--~A" key))))))
+              ((and (> (length arg) 1) (char= (char arg 0) #\-))
+                (let*
+                    ((short (subseq arg 1 2)) (key (resolve-short-flag short)))
+                  (if (> (length arg) 2)
                     (set-flag-value flags key (subseq arg 2))
-                    (incf i))
-                  ((member key *cli-boolean-flags* :test #'string=)
-                    (setf (gethash key flags) t)
-                    (incf i))
-                  ((< (1+ i) len) (set-flag-value flags key (nth (1+ i) argv)) (incf i 2))
-                  (t (error "Flag -~A requires a value." short)))))
-            (t (push arg positionals) (incf i))))
+                    (consume-flag key (format nil "-~A" short)))))
+              (t (push arg positionals)))))
+    (dolist (rflag *cli-repeatable-flags*)
+      (let ((vals (gethash rflag flags)))
+        (when vals (setf (gethash rflag flags) (nreverse vals)))))
     (let*
         ((ordered (nreverse positionals))
          (command (first ordered))
