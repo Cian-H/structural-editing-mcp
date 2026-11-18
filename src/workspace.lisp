@@ -447,14 +447,18 @@ Returns (values resolved-form conflict-p)."
        (max-len base-forms src-forms tgt-forms)
   (let
       ((merged-forms '()) (conflicts '()) (conflict-p nil))
-    (dotimes (i max-len)
-      (let
-          ((b (nth i base-forms)) (s (nth i src-forms)) (tg (nth i tgt-forms)))
-        (multiple-value-bind (resolved form-conflict-p)
-                             (reconcile-single-form b s tg)
-          (if form-conflict-p
-            (progn (setf conflict-p t) (push i conflicts))
-            (when resolved (push resolved merged-forms))))))
+    (loop for i below max-len
+          for b-cell = base-forms then (cdr b-cell)
+          for s-cell = src-forms then (cdr s-cell)
+          for t-cell = tgt-forms then (cdr t-cell)
+          do
+          (let
+              ((b (car b-cell)) (s (car s-cell)) (tg (car t-cell)))
+            (multiple-value-bind (resolved form-conflict-p)
+                                 (reconcile-single-form b s tg)
+              (if form-conflict-p
+                (progn (setf conflict-p t) (push i conflicts))
+                (when resolved (push resolved merged-forms))))))
     (values merged-forms conflict-p conflicts)))
 
 (defun merge-file-ast
