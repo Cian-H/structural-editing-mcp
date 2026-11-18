@@ -45,9 +45,10 @@
       (when (and dir (probe-file (daemon-socket-path dir))) dir))))
 
 (defun daemon-send-request (sock-path req-dict)
-  "Connect to local Unix socket SOCK-PATH, send REQ-DICT as JSON line, return parsed response dict or NIL."
+  "Connect to local Unix socket SOCK-PATH, send REQ-DICT as JSON line, return parsed response dict or (values NIL condition)."
   (declare (ignorable sock-path req-dict))
-  #+(and sbcl (not win32))
+  #+
+  (and sbcl (not win32))
   (handler-case
       (let
           ((sock (make-instance 'sb-bsd-sockets:local-socket :type :stream)))
@@ -72,8 +73,13 @@
                   (when (and line (plusp (length line)))
                     (let ((yason:*parse-json-arrays-as-vectors* nil)) (yason:parse line))))))
           (ignore-errors (sb-bsd-sockets:socket-close sock))))
-    (error () nil))
-  #-(and sbcl (not win32))
+    (sb-bsd-sockets:socket-error (e) (values nil e))
+    (error (e)
+      (format *error-output* "~&[Daemon Request Error] ~A~%" e)
+      (force-output *error-output*)
+      (values nil e)))
+  #-
+  (and sbcl (not win32))
   nil)
 
 (defun daemon-ping (session-dir)
@@ -208,11 +214,17 @@ Returns (values output-string exit-code) or NIL if daemon is unreachable."
   (let*
       ((dir (uiop:ensure-directory-pathname session-dir))
        (exe (first (uiop:raw-command-line-arguments)))
-       (cmd (list exe "daemon" "start" "--foreground" "--session" (namestring dir))))
-    (uiop:launch-program cmd :input nil :output nil :error-output nil)
+       (cmd (list exe "daemon" "start" "--foreground" "--session" (namestring dir)))
+       (proc (uiop:launch-program cmd :input nil :output nil :error-output nil)))
     (loop repeat 40
           for ping = (daemon-ping dir)
           when ping return ping
+          unless (uiop:process-alive-p proc)
+          do
+          (error
+            "semcp daemon exited prematurely (exit code ~A) on ~A"
+            (ignore-errors (uiop:wait-process proc))
+            (namestring (daemon-socket-path dir)))
           do (sleep 0.05)
           finally
           (error
