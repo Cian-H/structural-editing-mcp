@@ -203,8 +203,13 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 ;;; Tool Schema Builders & Definitions
 
 (defun prop-path
-       (&optional (desc "0-indexed array of integers specifying the AST path."))
-  (dict "type" "array" "items" (dict "type" "integer") "description" desc))
+       (&optional
+        (desc
+          "AST target selector: a hashnode handle string (e.g. \"#n402:3a9f\"), a 0-indexed integer array (e.g. [0, 0, 2]), or a symbolic path array (e.g. [\"main.lisp\", \"defun:foo\", 2])."))
+  (dict "oneOf"
+        (list (dict "type" "string") (dict "type" "array"))
+        "description"
+        desc))
 
 (defun prop-string (desc &key enum)
   (let
@@ -266,7 +271,7 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
 
 (defparameter +prop-path+
   (prop-path
-    "0-indexed array of integers specifying the AST path. Omit or pass [] for the workspace root, [0] for dialect 0 (e.g. :common-lisp), [0, 0] for file 0 in dialect 0, [0, 0, 2] for top-level form 2 in file 0, [0, 0, 3, 1] for child 1 of form 3."))
+    "AST target selector: pass a hashnode handle string (e.g. \"#n402:3a9f\") from a previous preview for stale-write-safe addressing, a 0-indexed integer array (e.g. [0, 0, 2], or [] for workspace root), or a symbolic path array (e.g. [\"main.lisp\", \"defun:foo\", 2])."))
 
 (defparameter +prop-load-files+
   (prop-string-array
