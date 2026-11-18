@@ -15,12 +15,16 @@
 
 (asdf:load-system :structural-editing-mcp)
 
-(let ((out (or (uiop:getenv "OUTPUT_BINARY")
-               (first (uiop:command-line-arguments))
-               "semcp"))
-      (compress (if (member :sb-core-compression *features*) t nil)))
+(let
+    ((out
+       (or (uiop:getenv "OUTPUT_BINARY") (first (uiop:command-line-arguments)) "semcp"))
+     (compress (not (null (member :sb-core-compression *features*)))))
   (sb-ext:save-lisp-and-die out
-                            :executable t
-                            :save-runtime-options t
-                            :toplevel 'structural-editing-mcp:main
-                            :compression compress))
+                            :executable
+                            t
+                            :save-runtime-options
+                            t
+                            :toplevel
+                            'structural-editing-mcp:main
+                            :compression
+                            compress))

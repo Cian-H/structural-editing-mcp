@@ -645,7 +645,7 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                  path)
              path))
          (target-path
-           (if raw-target
+           (when raw-target
              (or
                (structural-editing-mcp.tree:resolve-symbolic-path
                  structural-editing-mcp.workspace:*workspace-tree*
@@ -662,8 +662,7 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                    :message
                    (fmt
                      "Could not resolve handle or symbolic path ~S (node may have been deleted or replaced)."
-                     raw-target))))
-             nil))
+                     raw-target))))))
          (expected-rev (href args "expected_revision")))
       (when
           (and (integerp expected-rev)
