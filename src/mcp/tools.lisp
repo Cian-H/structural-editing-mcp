@@ -5,7 +5,6 @@
 ;;; ----------------------------------------------------------------------
 ;;; Tool Definitions (Unified Declarations & Handlers)
 ;;; ----------------------------------------------------------------------
-
 (define-mcp-tool "read_node"
                  (:description
                    "Inspect any node in the AST or workspace. Returns rendered code and a nested tree of child paths up to 'depth' levels. Supports 'mode': 'skeleton' for compact metadata stubs on wide trees. BEST PRACTICE: Always read parent forms (e.g. [0, 10]) to see the entire expression and its child paths at once—do NOT probe child indices one-by-one. Use 'read_slice' to cast a vertical ray down to a specific nested node without lateral context blowout. Pass 'load_files' on initial call to populate the workspace from disk."
@@ -229,6 +228,23 @@
          structural-editing-mcp.workspace:*workspace-tree* pattern replacement))
   (fmt "Successfully executed pattern replacement across workspace."))
 
+(defun resolve-effective-dialect (dialect path)
+  "Resolve effective Lisp dialect from explicit DIALECT, workspace partition at PATH, or *current-dialect*."
+  (or dialect
+      (when
+          (and (consp path)
+               (eq
+                 (structural-editing-mcp.tree:get-node-tag
+                   structural-editing-mcp.workspace:*workspace-tree*)
+                 :workspace))
+        (let
+            ((d-node
+               (structural-editing-mcp.tree:get-node-at-path
+                 structural-editing-mcp.workspace:*workspace-tree*
+                 (list (first path)))))
+          (when d-node (structural-editing-mcp.tree:get-node-tag d-node))))
+      structural-editing-mcp.parser:*current-dialect*))
+
 (define-mcp-tool "ast_extract_variable"
                  (:description
                    "Extracts an AST node into a local `let` binding wrapped around its immediate parent. Preserves sub-expression structure and automatically replaces the node with the bound variable."
@@ -242,21 +258,7 @@
                                  :required
                                  t))
   (let
-      ((eff-dialect
-         (or dialect
-             (when
-                 (and (consp path)
-                      (eq
-                        (structural-editing-mcp.tree:get-node-tag
-                          structural-editing-mcp.workspace:*workspace-tree*)
-                        :workspace))
-               (let
-                   ((d-node
-                      (structural-editing-mcp.tree:get-node-at-path
-                        structural-editing-mcp.workspace:*workspace-tree*
-                        (list (first path)))))
-                 (when d-node (structural-editing-mcp.tree:get-node-tag d-node))))
-             structural-editing-mcp.parser:*current-dialect*)))
+      ((eff-dialect (resolve-effective-dialect dialect path)))
     (setf
       structural-editing-mcp.workspace:*workspace-tree*
       (structural-editing-mcp.refactor:extract-variable
@@ -284,21 +286,7 @@
                           :doc
                           "Optional list of parameter names for the new function."))
   (let
-      ((eff-dialect
-         (or dialect
-             (when
-                 (and (consp path)
-                      (eq
-                        (structural-editing-mcp.tree:get-node-tag
-                          structural-editing-mcp.workspace:*workspace-tree*)
-                        :workspace))
-               (let
-                   ((d-node
-                      (structural-editing-mcp.tree:get-node-at-path
-                        structural-editing-mcp.workspace:*workspace-tree*
-                        (list (first path)))))
-                 (when d-node (structural-editing-mcp.tree:get-node-tag d-node))))
-             structural-editing-mcp.parser:*current-dialect*)))
+      ((eff-dialect (resolve-effective-dialect dialect path)))
     (setf
       structural-editing-mcp.workspace:*workspace-tree*
       (structural-editing-mcp.refactor:extract-function
