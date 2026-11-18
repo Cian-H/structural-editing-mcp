@@ -7,18 +7,18 @@
 
 (in-package :structural-editing-mcp.version)
 
-(eval-always
-  (defun resolve-version ()
-    "Resolve the system version from ASDF component metadata or version.txt."
-    (or (ignore-errors
-          (asdf:component-version (asdf:find-system :structural-editing-mcp nil)))
-        (ignore-errors
-          (string-trim '(#\Space #\Tab #\Newline #\Return)
-                       (uiop:read-file-line
-                         (asdf:system-relative-pathname :structural-editing-mcp "version.txt"))))
-        "2026.11.11")))
+(defun resolve-version ()
+  "Resolve the system version from ASDF component metadata or version.txt."
+  (or
+    (ignore-errors
+      (asdf:component-version (asdf:find-system :structural-editing-mcp nil)))
+    (ignore-errors
+      (string-trim '(#\space #\tab #\newline #\return)
+                   (uiop:read-file-line
+                     (asdf:system-relative-pathname :structural-editing-mcp "version.txt"))))
+    "unknown"))
 
-(defparameter +version+ #.(resolve-version)
+(defparameter +version+ (resolve-version)
                         "The current CalVer version string of structural-editing-mcp.")
 
 (defun get-version ()
