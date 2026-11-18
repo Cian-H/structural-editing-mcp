@@ -365,15 +365,18 @@
             (format-dialect-preview s children path tag :limit limit :offset offset))
           (t
             (let*
-                ((code (structural-editing-mcp.parser:sexp-to-string node))
-                 (skeleton-p
+                ((num-children (length children))
+                 (skeleton-by-mode-or-count-p
                    (or (equal mode "skeleton")
-                       (and (not (equal mode "full"))
-                            (or
-                              (>= (length children) *skeleton-threshold-children*)
-                              (> (length code) *skeleton-threshold-chars*)))
-                       (and (equal mode "full")
-                            (or (>= (length children) 200) (> (length code) 20000))))))
+                       (and (not (equal mode "full")) (>= num-children *skeleton-threshold-children*))
+                       (and (equal mode "full") (>= num-children 200))))
+                 (code
+                   (unless skeleton-by-mode-or-count-p
+                     (structural-editing-mcp.parser:sexp-to-string node)))
+                 (skeleton-p
+                   (or skeleton-by-mode-or-count-p
+                       (and (not (equal mode "full")) (> (length code) *skeleton-threshold-chars*))
+                       (and (equal mode "full") (> (length code) 20000)))))
               (when (eq tag :file)
                 (let
                     ((filepath (structural-editing-mcp.workspace:get-filepath path)))
