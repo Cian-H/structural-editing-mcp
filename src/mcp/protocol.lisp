@@ -30,6 +30,8 @@
 
 ;;; Worker Thread Pool
 
+(defvar *worker-queue-tail* nil)
+
 (defvar *worker-queue* nil)
 (defvar *worker-queue-lock* (bt:make-lock "worker-queue-lock"))
 (defvar *worker-queue-cvar* (bt:make-condition-variable :name "worker-queue-cvar"))
@@ -46,37 +48,44 @@
         (force-output *error-output*)))))
 
 (defun worker-loop ()
-  (let ((yason:*parse-json-arrays-as-vectors* nil))
-    (loop
-      (let ((task nil))
-        (bt:with-lock-held (*worker-queue-lock*)
-          (loop while (and *worker-pool-running* (null *worker-queue*))
-                do (bt:condition-wait *worker-queue-cvar* *worker-queue-lock*))
-          (when (null *worker-queue*) (unless *worker-pool-running* (return)))
-          (setf task (pop *worker-queue*)))
-        (process-worker-task task)))))
+  (loop
+    (let ((task nil))
+      (bt:with-lock-held (*worker-queue-lock*)
+                         (loop while (and *worker-pool-running* (null *worker-queue*))
+                               do (bt:condition-wait *worker-queue-cvar* *worker-queue-lock*))
+                         (when (null *worker-queue*) (unless *worker-pool-running* (return)))
+                         (setf task (pop *worker-queue*))
+                         (when (null *worker-queue*) (setf *worker-queue-tail* nil)))
+      (process-worker-task task))))
 
-(defun start-worker-pool (&optional (num-workers *default-worker-count*))
+(defun start-worker-pool
+       (&optional (num-workers *default-worker-count*))
   "Initialize and start the worker thread pool for parallel JSON-RPC request processing."
-  (setf *worker-queue* nil)
-  (setf *worker-pool-running* t)
+  (bt:with-lock-held (*worker-queue-lock*)
+                     (setf *worker-queue* nil *worker-queue-tail* nil *worker-pool-running* t))
   (setf *worker-threads*
         (loop repeat num-workers
               collect
-              (bt:make-thread (lambda () (worker-loop))
-                              :name "mcp-worker-thread"))))
+              (bt:make-thread
+                (lambda ()
+                  (worker-loop))
+                :name
+                "mcp-worker-thread"))))
 
 (defun stop-worker-pool ()
   "Stop all worker threads in the worker pool."
-  (setf *worker-pool-running* nil)
   (bt:with-lock-held (*worker-queue-lock*)
-    (loop repeat (* 2 (max 1 (length *worker-threads*)))
-          do (bt:condition-notify *worker-queue-cvar*)))
+                     (setf *worker-pool-running* nil)
+                     (loop repeat (* 2 (max 1 (length *worker-threads*)))
+                           do (bt:condition-notify *worker-queue-cvar*)))
   (dolist (th *worker-threads*) (ignore-errors (bt:join-thread th)))
   (setf *worker-threads* nil))
 
 (defun enqueue-task (task-thunk)
   "Enqueue TASK-THUNK for processing by the worker pool."
-  (bt:with-lock-held (*worker-queue-lock*)
-    (setf *worker-queue* (nconc *worker-queue* (list task-thunk)))
-    (bt:condition-notify *worker-queue-cvar*)))
+  (let ((cell (list task-thunk)))
+    (bt:with-lock-held (*worker-queue-lock*)
+                       (if *worker-queue-tail*
+                         (setf (cdr *worker-queue-tail*) cell *worker-queue-tail* cell)
+                         (setf *worker-queue* cell *worker-queue-tail* cell))
+                       (bt:condition-notify *worker-queue-cvar*))))
