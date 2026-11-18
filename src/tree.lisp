@@ -265,6 +265,15 @@ symbol-like raw atoms (e.g. case-sensitive identifiers such as Foo), otherwise N
                  (t (values nil nil)))))))
        (find-node-and-path-by-id
            (node target-id rev-path)
+         (when (and (null rev-path) (consp node))
+           (let
+               ((cached
+                  (bt:with-lock-held (*node-id-lock*) (gethash target-id *id-node-table*))))
+             (when cached
+               (let ((cpath (get-node-path cached)))
+                 (when
+                     (and cpath (eq (get-node-at-path node cpath) cached))
+                   (return-from find-node-and-path-by-id (values cached cpath)))))))
          (when (consp node)
            (if
                (eql (gethash node *node-id-table*) target-id)
