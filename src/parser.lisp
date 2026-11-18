@@ -62,6 +62,20 @@
     (when (< target len)
       (char string target))))
 
+(defun parse-braced-hex-escape
+       (string index close-pos esc out)
+  "Write a braced hex escape from STRING between INDEX+2 and CLOSE-POS to OUT, returning the next index."
+  (if
+      (and close-pos
+           (> close-pos (+ index 2))
+           (loop for k from (+ index 2) below close-pos
+                 always (digit-char-p (char string k) 16)))
+    (let
+        ((code (parse-integer string :start (+ index 2) :end close-pos :radix 16)))
+      (write-char (or (code-char code) #\?) out)
+      (1+ close-pos))
+    (progn (write-char esc out) (1+ index))))
+
 (defun parse-string-escape (string index len out)
   "Parse an escape sequence in a string literal starting at INDEX (after the backslash).
 Returns the updated index."
@@ -88,18 +102,7 @@ Returns the updated index."
             ((and (< (1+ index) len) (char= (char string (1+ index)) #\{))
               (let
                   ((close-pos (position #\} string :start (+ index 2) :end (min len (+ index 10)))))
-                (if
-                    (and close-pos
-                         (> close-pos (+ index 2))
-                         (every
-                           (lambda (c)
-                             (digit-char-p c 16))
-                           (subseq string (+ index 2) close-pos)))
-                  (let
-                      ((code (parse-integer string :start (+ index 2) :end close-pos :radix 16)))
-                    (write-char (or (code-char code) #\?) out)
-                    (setf index (1+ close-pos)))
-                  (progn (write-char esc out) (incf index)))))
+                (setf index (parse-braced-hex-escape string index close-pos esc out))))
             ((and (<= (+ index 5) len)
                   (every
                     (lambda (c)
@@ -127,18 +130,7 @@ Returns the updated index."
             ((and (< (1+ index) len) (char= (char string (1+ index)) #\{))
               (let
                   ((close-pos (position #\} string :start (+ index 2) :end (min len (+ index 6)))))
-                (if
-                    (and close-pos
-                         (> close-pos (+ index 2))
-                         (every
-                           (lambda (c)
-                             (digit-char-p c 16))
-                           (subseq string (+ index 2) close-pos)))
-                  (let
-                      ((code (parse-integer string :start (+ index 2) :end close-pos :radix 16)))
-                    (write-char (or (code-char code) #\?) out)
-                    (setf index (1+ close-pos)))
-                  (progn (write-char esc out) (incf index)))))
+                (setf index (parse-braced-hex-escape string index close-pos esc out))))
             ((and (<= (+ index 3) len)
                   (every
                     (lambda (c)
