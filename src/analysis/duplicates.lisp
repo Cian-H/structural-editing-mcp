@@ -146,18 +146,28 @@
 
 (defun candidate-subsumed-p (cand candidates)
   "Return T if CAND is subsumed by any other candidate in CANDIDATES."
-  (let* ((c-paths (getf cand :paths))
-         (c-count (length c-paths)))
-    (some (lambda (other)
-            (unless (eq cand other)
-              (let ((o-paths (getf other :paths))
-                    (o-count (length (getf other :paths))))
-                (and (= c-count o-count)
-                     (> (getf other :node-count) (getf cand :node-count))
-                     (every (lambda (cp)
-                              (some (lambda (op) (path-prefix-p op cp)) o-paths))
-                            c-paths)))))
-          candidates)))
+  (let*
+      ((c-paths (getf cand :paths))
+       (c-count (length c-paths))
+       (c-node-count (getf cand :node-count)))
+    (some
+      (lambda (other)
+        (unless (eq cand other)
+          (when (> (getf other :node-count) c-node-count)
+            (let ((o-paths (getf other :paths)))
+              (and (= c-count (length o-paths))
+                   (every
+                     (lambda (cp)
+                       (some
+                         (lambda (op)
+                           (loop for p-cell = op then (cdr p-cell)
+                                 for t-cell = cp then (cdr t-cell)
+                                 while p-cell
+                                 when (or (null t-cell) (not (eql (car p-cell) (car t-cell)))) return nil
+                                 finally (return t)))
+                         o-paths))
+                     c-paths))))))
+      candidates)))
 
 (defun filter-subsumed-candidates (candidates)
   "Filter out candidates that are completely subsumed by larger subtrees with identical occurrences."
