@@ -17,37 +17,38 @@
   (when (and *current-lint-tree* (consp path))
     (get-node-at-path *current-lint-tree* (butlast path))))
 
-(defun form-in-statement-position-p (node path)
+(defun form-in-statement-position-p
+       (node path &optional parent-node)
   "Return T if NODE at PATH is in statement position where its return value is discarded.
-Checks if the parent is a sequence (progn, let, defun, etc.) and NODE is not the final expression."
+Checks if the parent (or PARENT-NODE if supplied) is a sequence and NODE is not the final expression."
   (declare (ignore node))
-  (when (and *current-lint-tree* (consp path))
-    (let* ((parent (lint-parent-node path))
-           (child-idx (first (last path))))
-      (when (and parent (compound-node-p parent))
-        (let* ((children (get-node-children parent))
-               (num-children (length children))
-               (head (first children))
-               (head-name (when (and head (leaf-any-symbol-p head))
-                            (leaf-symbol-name head))))
+  (let
+      ((parent
+         (or parent-node
+             (when (and *current-lint-tree* (consp path)) (lint-parent-node path)))))
+    (when
+        (and parent (consp path) (compound-node-p parent))
+      (let*
+          ((children (get-node-children parent))
+           (num-children (length children))
+           (child-idx (lastcar path))
+           (head (first children))
+           (head-name (when (and head (leaf-any-symbol-p head)) (leaf-symbol-name head))))
+        (when
+            (and head-name (< child-idx (1- num-children)))
           (cond
-            ;; In (progn e1 e2 ... en), e_i for i < n-1 is in statement position
-            ((equal head-name "progn")
-              (< child-idx (1- num-children)))
-            ;; In (defun / defmacro / defmethod / defn name (...) e1 ... en)
-            ((member head-name '("defun" "defmacro" "defmethod" "defn" "defn-") :test #'string=)
-              (let ((body-start (if (member head-name '("defn" "defn-") :test #'string=)
-                                  (if (and (>= num-children 3) (eq (get-node-tag (third children)) :square)) 3 2)
-                                  3)))
-                (and (>= child-idx body-start)
-                     (< child-idx (1- num-children)))))
-            ;; In (let / let* (...) e1 ... en)
-            ((member head-name '("let" "let*") :test #'string=)
-              (and (>= child-idx 2)
-                   (< child-idx (1- num-children))))
-            ;; In (do ...)
-            ((equal head-name "do")
-              (< child-idx (1- num-children)))
+            ((member head-name '("progn" "do") :test #'string=) t)
+            ((member head-name '("let" "let*") :test #'string=) (>= child-idx 2))
+            ((member head-name '("defun" "defmacro" "defmethod") :test #'string=)
+              (>= child-idx 3))
+            ((member head-name '("defn" "defn-") :test #'string=)
+              (let
+                  ((body-start
+                     (if
+                         (and (>= num-children 3) (eq (get-node-tag (third children)) :square))
+                       3
+                       2)))
+                (>= child-idx body-start)))
             (t nil)))))))
 
 (defun if-form-p (node)
