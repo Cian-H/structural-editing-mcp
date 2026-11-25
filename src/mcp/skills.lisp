@@ -169,74 +169,180 @@
     (list :name
           "structural-editing-navigation"
           :description
-          "Navigate and mutate Lisp ASTs cleanly without context blowout, safeguards, or redundant reads."
+          "Navigate, search, and mutate Lisp, Clojure, Scheme, Emacs Lisp, and Fennel ASTs without parenthesis corruption, context blowout, or redundant verification reads. Use when loading files, inspecting unfamiliar or deeply nested expressions, or applying structural edits (ast_modify, ast_remove, ast_relocate)."
+          :compatibility
+          "Requires structural-editing-mcp AST inspection and mutation tools."
+          :metadata
+          (list (cons "author" "structural-editing-mcp") (cons "version" "1.0"))
+          :allowed-tools
+          "read_node read_slice ast_search ast_modify ast_remove ast_relocate"
           :files
           (list
             (cons "SKILL.md"
                   "---
 name: structural-editing-navigation
-description: Navigate and mutate Lisp ASTs cleanly without context blowout, safeguards, or redundant reads.
+description: Navigate, search, and mutate Lisp, Clojure, Scheme, Emacs Lisp, and Fennel ASTs without parenthesis corruption, context blowout, or redundant verification reads. Use when loading files, inspecting unfamiliar or deeply nested expressions, or applying structural edits (ast_modify, ast_remove, ast_relocate).
+compatibility: Requires structural-editing-mcp AST inspection and mutation tools.
+metadata:
+  author: structural-editing-mcp
+  version: \"1.0\"
+allowed-tools: read_node read_slice ast_search ast_modify ast_remove ast_relocate
 ---
 
 # Structural Editing Navigation & Mutation
 
-## Recommended Patterns
+## Recommended Workflow
 1. **Skeleton first:** Call `read_node` with `mode: \"skeleton\"` and `limit`/`offset` on unfamiliar files or wide trees.
 2. **Vertical rays for depth:** Use `read_slice` to inspect deeply nested expressions without lateral sibling bloat.
-3. **Target exact child paths or hashnode handles:** Pass `#n...` handles or exact child integer paths (e.g. `[0, 1, 5, 2]`) to `ast_modify` / `ast_remove`.
+3. **Target exact child paths:** Pass `#n...` hashnode handles, exact child integer paths (e.g. `[0, 1, 5, 2]`), or symbolic paths (`[\"file.lisp\", \"defun:foo\", 2]`).
 4. **Trust mutation previews:** `ast_modify`, `ast_remove`, and `ast_relocate` automatically return the updated enclosing parent preview.
 
-## Patterns to Avoid
-- Do **not** call `read_node` immediately after `ast_modify` just to verify the edit.
+## Guardrails (Avoid Common Failures)
+- Do **not** call `read_node` immediately after `ast_modify`, `ast_remove`, or `ast_relocate` just to verify the edit.
 - Do **not** overwrite large parent nodes (`>50` children); target the specific child index instead.
-- Do **not** pass multiple top-level forms to a single `ast_modify` `insert`; insert one well-formed S-expression per call.
-- Use `ast_remove` with `action: \"delete\"` (not `\"remove\"`).
+- Do **not** pass multiple top-level forms in one `ast_modify` `insert`; insert one well-formed S-expression per call.
+- Use `ast_remove` with `action: \"delete\"` (never `\"remove\"`).
+
+## Progressive References
+- Read `skill://structural-editing-navigation/references/path-addressing.md` via `resources/read` when resolving symbolic paths, `#n` hashnode handles, or `read_slice` coordinates.
+- Read `skill://structural-editing-navigation/references/mutation-actions.md` via `resources/read` if you encounter a `Parse error`, `Unknown action`, or `Safeguard:` failure.
+")
+            (cons "references/path-addressing.md"
+                  "# AST Path Addressing & Context Budget Reference
+
+## Coordinate Hierarchy
+- `[]`: Workspace root (lists active dialect partitions)
+- `[dialect_idx]`: Dialect partition (lists loaded files)
+- `[dialect_idx, file_idx]`: File node (lists top-level forms)
+- `[dialect_idx, file_idx, form_idx, ...]`: Nested S-expressions and leaves
+
+## Selector Formats
+1. **Hashnode Handle (`\"#n402:3a9f\"`):** Stale-write-safe handle printed in previews; validates node hash before mutating.
+2. **Integer Array (`[0, 1, 5, 2]`):** 0-indexed coordinates down the tree.
+3. **Symbolic Path (`[\"main.lisp\", \"defun:foo\", 2]`):** Resolves file basename and named top-level forms.
+
+## Context Control
+- Start unfamiliar reads with `read_node(..., mode=\"skeleton\", depth=1, limit=50)`.
+- Use `ast_search` to jump directly to matching symbol paths instead of scanning files sequentially.
+- Use `read_slice` whenever depth >= 3 inside a wide file or form to elide lateral siblings.
+")
+            (cons "references/mutation-actions.md"
+                  "# Mutation Tool Actions & Syntax Rules
+
+## Exact Action Enums
+- `ast_modify`: `\"insert\"` | `\"overwrite\"` | `\"wrap\"`
+- `ast_remove`: `\"delete\"` | `\"unwrap\"` | `\"promote\"`
+- `ast_relocate`: `\"move\"` | `\"copy\"` | `\"swap\"` | `\"merge\"` | `\"split\"`
+
+## Single-Form S-Expression Rules
+- `ast_modify` `insert` parses a single S-expression per call; batch multiple top-level additions as separate calls (parallelizing distinct files or calling sequentially for shifting sibling indices).
+- For `ast_modify` `wrap`, pass delimiter keywords (`\":paren\"`, `\":square\"`, `\":curly\"`) or an enclosing form prefix such as `\"(when cond)\"`.
+- Always balance delimiters in `new_node` before calling `ast_modify`.
 ")))
     (list :name
           "multi-agent-workspace-branching"
           :description
-          "Isolate concurrent edits, resolve AST conflicts cleanly, and persist safely with workspace_manage."
+          "Isolate concurrent AST edits into branch workspaces, diff and rebase safely, resolve OCC or merge conflicts, and commit dirty files to disk. Use when running multi-step refactors, coordinating parallel agents, or recovering from occ_conflict, hash_mismatch, or merge collisions."
+          :compatibility
+          "Requires structural-editing-mcp workspace lifecycle tools."
+          :metadata
+          (list (cons "author" "structural-editing-mcp") (cons "version" "1.0"))
+          :allowed-tools
+          "workspace_manage workspace_create_file workspace_status workspace_diff workspace_rebase workspace_merge commit_workspace read_node"
           :files
           (list
             (cons "SKILL.md"
                   "---
 name: multi-agent-workspace-branching
-description: Isolate concurrent edits, resolve AST conflicts cleanly, and persist safely with workspace_manage.
+description: Isolate concurrent AST edits into branch workspaces, diff and rebase safely, resolve OCC or merge conflicts, and commit dirty files to disk. Use when running multi-step refactors, coordinating parallel agents, or recovering from occ_conflict, hash_mismatch, or merge collisions.
+compatibility: Requires structural-editing-mcp workspace lifecycle tools.
+metadata:
+  author: structural-editing-mcp
+  version: \"1.0\"
+allowed-tools: workspace_manage workspace_create_file workspace_status workspace_diff workspace_rebase workspace_merge commit_workspace read_node
 ---
 
 # Multi-Agent Workspace Branching
 
-## Recommended Patterns
+## Recommended Workflow
 1. **Fork before multi-step edits:** Call `workspace_manage` (`action: \"fork\"`, `target_id: \"agent-<id>\"`) and pass `workspace_id` to subsequent calls.
-2. **Checkpoint risky refactors:** Use `workspace_manage` (`action: \"snapshot\"`) before large structural rewrites.
-3. **Inspect before merging:** Run `workspace_status` and `workspace_diff` against `\"default\"` before `workspace_rebase` or `workspace_merge`.
-4. **Sync on OCC conflicts:** If `occ_conflict` or `hash_mismatch` occurs, call `read_node` on the enclosing parent once to refresh your view/handle.
+2. **Checkpoint risky refactors:** Call `workspace_manage` (`action: \"snapshot\"`) before sweeping structural rewrites.
+3. **Stage new files in memory:** Use `workspace_create_file` instead of writing directly to disk.
+4. **Inspect before merging:** Run `workspace_status` and `workspace_diff` against `\"default\"` before `workspace_rebase` or `workspace_merge`.
+5. **Commit only after verification:** Call `commit_workspace` after merging into `\"default\"` and running tests.
 
-## Patterns to Avoid
-- Do **not** edit `\"default\"` concurrently from multiple agents without branching.
-- Do **not** call `commit_workspace` until edits are merged and tests pass.
+## Guardrails (Avoid Common Failures)
+- Do **not** mutate `\"default\"` concurrently from multiple agents without branching.
+- Do **not** discard uncommitted changes with `workspace_manage` `clear` or `reload` unless intended (or handle `input_required` confirmation when elicited).
+
+## Progressive References
+- Read `skill://multi-agent-workspace-branching/references/error-recovery.md` via `resources/read` only if you encounter `occ_conflict`, `hash_mismatch`, `Merge conflict`, or `Workspace not found`.
+")
+            (cons "references/error-recovery.md"
+                  "# Workspace Conflict & Error Recovery
+
+## Optimistic Concurrency (`occ_conflict` / `-32002`)
+- Cause: Another agent or `workspace_create_file` incremented the workspace revision since your last `read_node` / `read_slice`.
+- Fix: Call `read_node` once on the suggested parent path (or `[]` after adding files) to sync your agent revision, check shifted indices, and retry.
+
+## Stale Hashnode Handle (`hash_mismatch` / `-32002`)
+- Cause: The node at your `#n<id>:<hash>` handle was mutated after you read it.
+- Fix: Use the updated skeleton preview returned inside the error message to grab the fresh handle or path and retry.
+
+## Merge / Rebase Collisions
+- Run `workspace_diff` between your branch and `\"default\"` to inspect `astMergeable` vs `modifiedInBoth` files.
+- Rebase first via `workspace_rebase` (`strategy: \"three-way\"`, `\"theirs\"`, or `\"ours\"`); if elicitation (`resultType: \"input_required\"`) is active, reply with `inputResponses` containing `resolution`.
+- Remember `merge-file-ast` matches top-level forms by index: append new top-level forms at the end of files when branching in parallel to avoid index shifts.
 ")))
     (list :name
           "ast-refactoring-and-analysis"
           :description
-          "Combine static analysis tools with semantic AST refactorings for safe code quality improvements."
+          "Combine static analysis (lint, complexity, duplicate clones, lexical bindings) with semantic AST refactorings (rename, pattern replacement, variable and function extraction). Use when auditing code quality, eliminating duplicated subtrees, or performing API migrations across Lisp files."
+          :compatibility
+          "Requires structural-editing-mcp analysis and refactoring tools."
+          :metadata
+          (list (cons "author" "structural-editing-mcp") (cons "version" "1.0"))
+          :allowed-tools
+          "ast_suggest_refactorings ast_lint ast_complexity_metrics ast_find_duplicates ast_analyze_bindings ast_rename ast_replace_pattern ast_extract_variable ast_extract_function"
           :files
           (list
             (cons "SKILL.md"
                   "---
 name: ast-refactoring-and-analysis
-description: Combine static analysis tools with semantic AST refactorings for safe code quality improvements.
+description: Combine static analysis (lint, complexity, duplicate clones, lexical bindings) with semantic AST refactorings (rename, pattern replacement, variable and function extraction). Use when auditing code quality, eliminating duplicated subtrees, or performing API migrations across Lisp files.
+compatibility: Requires structural-editing-mcp analysis and refactoring tools.
+metadata:
+  author: structural-editing-mcp
+  version: \"1.0\"
+allowed-tools: ast_suggest_refactorings ast_lint ast_complexity_metrics ast_find_duplicates ast_analyze_bindings ast_rename ast_replace_pattern ast_extract_variable ast_extract_function
 ---
 
 # AST Refactoring & Static Analysis
 
 ## Recommended Workflow
-1. Run `ast_suggest_refactorings` (or `ast_lint` + `ast_complexity_metrics` + `ast_find_duplicates` + `ast_analyze_bindings`) to locate high-value targets.
-2. Use `ast_rename` for symbol renames (safely ignores strings and comments).
-3. Use `ast_replace_pattern` with `?var` wildcards for API migrations instead of manual `overwrite` loops.
-4. Use `ast_extract_variable` and `ast_extract_function` to decompose complex or duplicated subtrees.
+1. Start with `ast_suggest_refactorings` (or run `ast_lint`, `ast_complexity_metrics`, `ast_find_duplicates`, and `ast_analyze_bindings` directly) and read `structuredContent` for typed paths and severities.
+2. For large repositories, augment analysis calls with `task` metadata when `io.modelcontextprotocol/tasks` is enabled and poll via `tasks/get`.
+3. Use `ast_rename` for identifier renames (ignores comments and string literals automatically).
+4. Use `ast_replace_pattern` with `?var` wildcards for structural API migrations instead of manual `ast_modify` `overwrite` loops.
+5. Use `ast_extract_variable` and `ast_extract_function` to decompose high-complexity forms or duplicated subtrees.
+
+## Progressive References
+- Read `skill://ast-refactoring-and-analysis/references/pattern-and-extraction.md` via `resources/read` when authoring `ast_replace_pattern` wildcard templates or planning variable/function extractions.
+")
+            (cons "references/pattern-and-extraction.md"
+                  "# Pattern Replacement & Extraction Reference
+
+## `ast_replace_pattern` Wildcards
+- Prefix pattern variables with `?` (e.g., `pattern: \"(old-call ?a ?b)\"`, `replacement: \"(new-call ?b :arg ?a)\"`).
+- Matched subtrees bind structurally regardless of whitespace or formatting differences.
+
+## Choosing the Right Refactoring Tool
+- **Symbol-only rename:** `ast_rename` (safe across comments and string literals; pass `path` to restrict scope).
+- **Repeated expression inside a function:** `ast_extract_variable` wraps a local `let` binding cleanly around the immediate parent.
+- **Reusable logic or duplicate clone:** `ast_extract_function` emits a new top-level definition right before the enclosing form and replaces the call site.
+- **Wrapper elimination:** `ast_remove` with `action: \"unwrap\"` strips redundant `progn` or wrapper forms cleanly.
 "))))
-  "Built-in MCP skills catalog following SEP-2640.")
+  "Built-in MCP skills catalog following SEP-2640 and agentskills.io best practices.")
 
 (defun skill-primary-uri (skill) (fmt "skill://~A/SKILL.md" (getf skill :name)))
 
@@ -244,7 +350,7 @@ description: Combine static analysis tools with semantic AST refactorings for sa
   (fmt "skill://~A/~A" (getf skill :name) rel-path))
 
 (defun build-skill-descriptor (skill)
-  "Build SEP-2640 skill entry dict with uri, frontmatter, and SHA-256 resources manifest."
+  "Build SEP-2640 skill entry dict with uri, agentskills.io frontmatter, and SHA-256 resources manifest."
   (let
       ((resources
          (coerce
@@ -257,13 +363,17 @@ description: Combine static analysis tools with semantic AST refactorings for sa
                        (length bytes)
                        "sha256"
                        (sha256-hex body)))
-           'vector)))
-    (dict "uri"
-          (skill-primary-uri skill)
-          "frontmatter"
-          (dict "name" (getf skill :name) "description" (getf skill :description))
-          "resources"
-          resources)))
+           'vector))
+       (fm (dict "name" (getf skill :name) "description" (getf skill :description))))
+    (when-let ((compat (getf skill :compatibility)))
+      (setf (gethash "compatibility" fm) compat))
+    (when-let ((meta (getf skill :metadata)))
+      (let ((md (make-hash-table :test #'equal)))
+        (dolist (pair meta) (setf (gethash (car pair) md) (cdr pair)))
+        (setf (gethash "metadata" fm) md)))
+    (when-let ((allowed (getf skill :allowed-tools)))
+      (setf (gethash "allowed-tools" fm) allowed))
+    (dict "uri" (skill-primary-uri skill) "frontmatter" fm "resources" resources)))
 
 (defun read-skill-resource-uri (uri)
   "Resolve skill://<name>/<rel> to (values content mime-type) or NIL."

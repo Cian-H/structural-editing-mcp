@@ -1663,7 +1663,7 @@
                                           "params"
                                           (structural-editing-mcp.mcp::dict "uri" "workspace://default/status"))))))(deftest test-mcp-skills
   (testing
-      "skills/list and skills/get expose SEP-2640 skills with SHA-256 digests"
+      "skills/list and skills/get expose SEP-2640 skills following agentskills.io best practices"
     (let*
         ((list-res
            (gethash "result"
@@ -1696,6 +1696,7 @@
                                                         "params"
                                                         (structural-editing-mcp.mcp::dict "uri"
                                                                                           "skill://structural-editing-navigation/SKILL.md")))))
+         (fm (gethash "frontmatter" get-res))
          (read-res
            (gethash "result"
                     (call-mcp-msg
@@ -1708,6 +1709,18 @@
                                                         "params"
                                                         (structural-editing-mcp.mcp::dict "uri"
                                                                                           "skill://structural-editing-navigation/SKILL.md")))))
+         (ref-res
+           (gethash "result"
+                    (call-mcp-msg
+                      (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                        "2.0"
+                                                        "id"
+                                                        4031
+                                                        "method"
+                                                        "resources/read"
+                                                        "params"
+                                                        (structural-editing-mcp.mcp::dict "uri"
+                                                                                          "skill://structural-editing-navigation/references/path-addressing.md")))))
          (dir-res
            (gethash "result"
                     (call-mcp-msg
@@ -1724,13 +1737,20 @@
       (ok
         (member "skill://structural-editing-navigation/SKILL.md" uris :test #'equal))
       (ok (= (length (gethash "sha256" manifest-entry)) 64))
-      (ok
-        (equal
-          (gethash "name" (gethash "frontmatter" get-res))
-          "structural-editing-navigation"))
+      (ok (equal (gethash "name" fm) "structural-editing-navigation"))
+      (ok (search "Use when" (gethash "description" fm)))
+      (ok (stringp (gethash "compatibility" fm)))
+      (ok (stringp (gethash "allowed-tools" fm)))
       (ok
         (search "Skeleton first" (gethash "text" (first (gethash "contents" read-res)))))
-      (ok (= (length (gethash "resources" dir-res)) 1)))))(deftest test-mcp-tasks
+      (ok
+        (search "references/path-addressing.md"
+                (gethash "text" (first (gethash "contents" read-res)))))
+      (ok
+        (search "Hashnode Handle" (gethash "text" (first (gethash "contents" ref-res)))))
+      (ok (= (length (gethash "resources" dir-res)) 2)))))
+
+(deftest test-mcp-tasks
   (structural-editing-mcp.workspace:with-workspace-context
     ((structural-editing-mcp.workspace:get-workspace "default"))
     (structural-editing-mcp.workspace:init-workspace)
