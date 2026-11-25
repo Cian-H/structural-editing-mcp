@@ -1531,4 +1531,134 @@
         (ok (listp (gethash "content" res)))
         (ok (hash-table-p sc))
         (ok (equal (gethash "id" sc) "default"))
-        (ok (integerp (gethash "revision" sc)))))))
+        (ok (integerp (gethash "revision" sc)))))))(deftest test-mcp-resources
+  (structural-editing-mcp.workspace:with-workspace-context
+    ((structural-editing-mcp.workspace:get-workspace "default"))
+    (structural-editing-mcp.workspace:init-workspace)
+    (structural-editing-mcp.workspace:add-file-to-workspace
+      "/tmp/res-test.lisp"
+      :content
+      "(defun res-fn () 1)"
+      :dialect
+      :common-lisp)
+    (testing
+        "resources/list and resources/read return workspace status and AST file"
+      (let*
+          ((list-res
+             (gethash "result"
+                      (call-mcp-msg
+                        (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                          "2.0"
+                                                          "id"
+                                                          301
+                                                          "method"
+                                                          "resources/list"
+                                                          "params"
+                                                          (make-hash-table)))))
+           (uris
+             (mapcar
+               (lambda (r)
+                 (gethash "uri" r))
+               (gethash "resources" list-res)))
+           (status-res
+             (gethash "result"
+                      (call-mcp-msg
+                        (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                          "2.0"
+                                                          "id"
+                                                          302
+                                                          "method"
+                                                          "resources/read"
+                                                          "params"
+                                                          (structural-editing-mcp.mcp::dict "uri" "workspace://default/status")))))
+           (ast-res
+             (gethash "result"
+                      (call-mcp-msg
+                        (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                          "2.0"
+                                                          "id"
+                                                          303
+                                                          "method"
+                                                          "resources/read"
+                                                          "params"
+                                                          (structural-editing-mcp.mcp::dict "uri"
+                                                                                            "ast://default/common-lisp/tmp/res-test.lisp"))))))
+        (ok (member "workspace://default/status" uris :test #'equal))
+        (ok (member "ast://default/common-lisp/tmp/res-test.lisp" uris :test #'equal))
+        (ok
+          (search "\"id\":\"default\""
+                  (gethash "text" (first (gethash "contents" status-res)))))
+        (ok
+          (search "(defun res-fn () 1)"
+                  (gethash "text" (first (gethash "contents" ast-res)))))))
+    (testing
+        "resources/read returns -32602 for missing URI"
+      (let*
+          ((err-json
+             (call-mcp-msg
+               (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                 "2.0"
+                                                 "id"
+                                                 304
+                                                 "method"
+                                                 "resources/read"
+                                                 "params"
+                                                 (structural-editing-mcp.mcp::dict "uri" "workspace://missing/status"))))
+           (err (gethash "error" err-json)))
+        (ok (= (gethash "code" err) -32602))))
+    (testing
+        "resources/subscribe emits notifications/resources/updated on mutation"
+      (call-mcp-msg
+        (structural-editing-mcp.mcp::dict "jsonrpc"
+                                          "2.0"
+                                          "id"
+                                          3051
+                                          "method"
+                                          "tools/call"
+                                          "params"
+                                          (structural-editing-mcp.mcp::dict "name"
+                                                                            "read_node"
+                                                                            "arguments"
+                                                                            (structural-editing-mcp.mcp::dict "path" '(0 0)))))
+      (call-mcp-msg
+        (structural-editing-mcp.mcp::dict "jsonrpc"
+                                          "2.0"
+                                          "id"
+                                          305
+                                          "method"
+                                          "resources/subscribe"
+                                          "params"
+                                          (structural-editing-mcp.mcp::dict "uri" "workspace://default/status")))
+      (let*
+          ((capture (make-string-output-stream))
+           (mod-msg
+             (structural-editing-mcp.mcp::dict "jsonrpc"
+                                               "2.0"
+                                               "id"
+                                               306
+                                               "method"
+                                               "tools/call"
+                                               "params"
+                                               (structural-editing-mcp.mcp::dict "name"
+                                                                                 "ast_modify"
+                                                                                 "arguments"
+                                                                                 (structural-editing-mcp.mcp::dict "path"
+                                                                                                                   '(0 0 0 2)
+                                                                                                                   "action"
+                                                                                                                   "overwrite"
+                                                                                                                   "new_node"
+                                                                                                                   "(x)")))))
+        (let ((*standard-output* capture))
+          (structural-editing-mcp.mcp:handle-message mod-msg))
+        (let ((out (get-output-stream-string capture)))
+          (ok (search "notifications/resources/updated" out))
+          (ok (search "workspace://default/status" out))))
+      (call-mcp-msg
+        (structural-editing-mcp.mcp::dict "jsonrpc"
+                                          "2.0"
+                                          "id"
+                                          307
+                                          "method"
+                                          "resources/unsubscribe"
+                                          "params"
+                                          (structural-editing-mcp.mcp::dict "uri" "workspace://default/status"))))))

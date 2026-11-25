@@ -454,7 +454,10 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
 
 (defun server-capabilities-dict ()
   "Build the MCP server capabilities object."
-  (dict "tools" (dict "listChanged" yason:false)))
+  (dict "tools"
+        (dict "listChanged" yason:false)
+        "resources"
+        (dict "subscribe" t "listChanged" t)))
 
 (defun maybe-wrap-mcp-2-0-result (res)
   "Attach resultType=\"complete\" when responding to a 2026-07-28 MCP 2.0 request."
@@ -1002,7 +1005,23 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                 ((res (dict "content" (list (dict "type" "text" "text" content)))))
               (when structured (setf (gethash "structuredContent" res) structured))
               (when (mcp-2-0-request-p) (setf (gethash "resultType" res) "complete"))
-              (send-result id res))))
+              (send-result id res)
+              (when
+                  (and
+                    (or (mutation-tool-p name)
+                        (member name
+                                '("workspace_create_file" "workspace_merge"
+                                  "workspace_rebase"
+                                  "workspace_manage")
+                                :test
+                                #'string=))
+                    (fboundp 'notify-workspace-resources-changed))
+                (funcall 'notify-workspace-resources-changed
+                         ws-id
+                         :list-changed-p
+                         (not
+                           (null
+                             (member name '("workspace_create_file" "workspace_manage") :test #'string=))))))))
       (structural-editing-mcp.conditions:occ-conflict-error
           (c)
         (send-tool-error-response id

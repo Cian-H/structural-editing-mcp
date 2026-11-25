@@ -43,6 +43,11 @@
                        ("ping" (when id (send-result id (dict))))
                        ("tools/list" (handle-tools-list id params))
                        ("tools/call" (handle-tools-call id params))
+                       ("resources/list" (handle-resources-list id params))
+                       ("resources/templates/list" (handle-resources-templates-list id params))
+                       ("resources/read" (handle-resources-read id params))
+                       ("resources/subscribe" (handle-resources-subscribe id params))
+                       ("resources/unsubscribe" (handle-resources-unsubscribe id params))
                        (t (when id (send-error id -32601 (fmt "Method not found: ~A" method))))))))))
 
 (defun start-server ()
