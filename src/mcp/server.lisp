@@ -51,6 +51,10 @@
                        ("resources/directory/read" (handle-resources-directory-read id params))
                        ("skills/list" (handle-skills-list id params))
                        ("skills/get" (handle-skills-get id params))
+                       ("tasks/get" (handle-tasks-get id params))
+                       ("tasks/list" (handle-tasks-list id params))
+                       ("tasks/cancel" (handle-tasks-cancel id params))
+                       ("tasks/update" (handle-tasks-update id params))
                        (t (when id (send-error id -32601 (fmt "Method not found: ~A" method))))))))))
 
 (defun start-server ()

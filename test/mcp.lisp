@@ -1730,4 +1730,71 @@
           "structural-editing-navigation"))
       (ok
         (search "Skeleton first" (gethash "text" (first (gethash "contents" read-res)))))
-      (ok (= (length (gethash "resources" dir-res)) 1)))))
+      (ok (= (length (gethash "resources" dir-res)) 1)))))(deftest test-mcp-tasks
+  (structural-editing-mcp.workspace:with-workspace-context
+    ((structural-editing-mcp.workspace:get-workspace "default"))
+    (structural-editing-mcp.workspace:init-workspace)
+    (testing
+        "task-augmented tools/call returns CreateTaskResult and completes via tasks/get"
+      (let*
+          ((call-res
+             (gethash "result"
+                      (call-mcp-msg
+                        (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                          "2.0"
+                                                          "id"
+                                                          501
+                                                          "method"
+                                                          "tools/call"
+                                                          "params"
+                                                          (structural-editing-mcp.mcp::dict "name"
+                                                                                            "workspace_status"
+                                                                                            "arguments"
+                                                                                            (make-hash-table)
+                                                                                            "task"
+                                                                                            (structural-editing-mcp.mcp::dict "ttlMs" 60000))))))
+           (task-id (gethash "taskId" call-res))
+           (final-res nil))
+        (ok (equal (gethash "resultType" call-res) "task"))
+        (ok (stringp task-id))
+        (loop repeat 50
+              for poll =
+              (gethash "result"
+                       (call-mcp-msg
+                         (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                           "2.0"
+                                                           "id"
+                                                           502
+                                                           "method"
+                                                           "tasks/get"
+                                                           "params"
+                                                           (structural-editing-mcp.mcp::dict "taskId" task-id))))
+              do (setf final-res poll)
+              (when (equal (gethash "status" poll) "completed") (return)) (sleep 0.01))
+        (ok (equal (gethash "status" final-res) "completed"))
+        (ok (hash-table-p (gethash "result" final-res)))
+        (let*
+            ((cancel-res
+               (gethash "result"
+                        (call-mcp-msg
+                          (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                            "2.0"
+                                                            "id"
+                                                            503
+                                                            "method"
+                                                            "tasks/cancel"
+                                                            "params"
+                                                            (structural-editing-mcp.mcp::dict "taskId" task-id)))))
+             (list-res
+               (gethash "result"
+                        (call-mcp-msg
+                          (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                            "2.0"
+                                                            "id"
+                                                            504
+                                                            "method"
+                                                            "tasks/list"
+                                                            "params"
+                                                            (make-hash-table))))))
+          (ok (equal (gethash "taskId" cancel-res) task-id))
+          (ok (listp (gethash "tasks" list-res))))))))

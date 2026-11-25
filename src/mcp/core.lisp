@@ -459,7 +459,10 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
         "resources"
         (dict "subscribe" t "listChanged" t)
         "extensions"
-        (dict "io.modelcontextprotocol/skills" (dict "directoryRead" t))))
+        (dict "io.modelcontextprotocol/skills"
+              (dict "directoryRead" t)
+              "io.modelcontextprotocol/tasks"
+              (dict "requests" (dict "tools" (dict "call" (dict)))))))
 
 (defun maybe-wrap-mcp-2-0-result (res)
   "Attach resultType=\"complete\" when responding to a 2026-07-28 MCP 2.0 request."
@@ -996,6 +999,29 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
        (dialect (parse-dialect-arg (href args "dialect")))
        (agent-id (or (href args "agent_id") (href args "agent") "default"))
        (ws-id (or (href args "workspace_id") (href args "workspace") "default")))
+    (when
+        (and (fboundp 'task-requested-p) (funcall 'task-requested-p params))
+      (handler-case
+          (let*
+              ((ws (structural-editing-mcp.workspace:get-workspace ws-id))
+               (ttl-ms (funcall 'extract-task-ttl-ms params))
+               (task-res
+                 (funcall 'create-and-start-tool-task
+                          name
+                          ws-id
+                          ttl-ms
+                          (lambda ()
+                            (structural-editing-mcp.workspace:with-workspace-context
+                              (ws)
+                              (execute-tool-call name path args dialect agent-id))))))
+            (return-from handle-tools-call (send-result id task-res)))
+        (structural-editing-mcp.conditions:workspace-error
+            (c)
+          (return-from handle-tools-call
+                       (send-tool-error-response id
+                                                 (format nil "Workspace error: ~A" c)
+                                                 structural-editing-mcp.conditions:+error-code-workspace-error+
+                                                 "workspace_error")))))
     (handler-case
         (let*
             ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))

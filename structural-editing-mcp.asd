@@ -35,6 +35,7 @@
                                                (:file "core")
                                                (:file "resources")
                                                (:file "skills")
+                                               (:file "tasks")
                                                (:file "tools")
                                                (:file "server")))
                                      (:module "cli"
