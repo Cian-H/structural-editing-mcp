@@ -161,13 +161,12 @@
                                    (funcall thunk)
                 (bt:with-lock-held (*task-registry-lock*)
                                    (setf (mcp-task-updated-at-ms task) (current-time-ms))
-                                   (cond
-                                     ((mcp-task-cancel-requested-p task) (setf (mcp-task-status task) :cancelled))
-                                     (t
-                                       (let
-                                           ((res (dict "content" (list (dict "type" "text" "text" content)))))
-                                         (when structured (setf (gethash "structuredContent" res) structured))
-                                         (setf (mcp-task-result task) res (mcp-task-status task) :completed))))))
+                                   (if (mcp-task-cancel-requested-p task)
+                                     (setf (mcp-task-status task) :cancelled)
+                                     (setf (mcp-task-result task)
+                                           (build-tool-call-result content structured :wrap-2-0 nil)
+                                           (mcp-task-status task)
+                                           :completed))))
             (error (e)
               (bt:with-lock-held (*task-registry-lock*)
                                  (setf (mcp-task-updated-at-ms task) (current-time-ms))
@@ -210,16 +209,14 @@
 (defun handle-tasks-list (id params)
   "Handle tasks/list returning active and non-expired tasks."
   (declare (ignore params))
-  (let
+  (let*
       ((items
          (bt:with-lock-held (*task-registry-lock*)
                             (prune-expired-tasks-unlocked (current-time-ms))
                             (loop for task being the hash-values of *task-registry*
-                                  collect (task-to-dict task)))))
-    (let
-        ((res (dict "tasks" (coerce items 'vector))))
-      (when (mcp-2-0-request-p) (setf (gethash "resultType" res) "complete"))
-      (send-result id res))))
+                                  collect (task-to-dict task))))
+       (res (dict "tasks" (coerce items 'vector))))
+    (send-result id (maybe-wrap-mcp-2-0-result res))))
 
 (defun handle-tasks-cancel (id params)
   "Handle tasks/cancel cooperatively."
@@ -251,17 +248,14 @@
               (multiple-value-bind (content structured)
                                    (funcall cont responses)
                 (bt:with-lock-held (*task-registry-lock*)
-                                   (let
-                                       ((res (dict "content" (list (dict "type" "text" "text" content)))))
-                                     (when structured (setf (gethash "structuredContent" res) structured))
-                                     (setf (mcp-task-result task)
-                                           res
-                                           (mcp-task-status task)
-                                           :completed
-                                           (mcp-task-continuation task)
-                                           nil
-                                           (mcp-task-updated-at-ms task)
-                                           (current-time-ms)))))
+                                   (setf (mcp-task-result task)
+                                         (build-tool-call-result content structured :wrap-2-0 nil)
+                                         (mcp-task-status task)
+                                         :completed
+                                         (mcp-task-continuation task)
+                                         nil
+                                         (mcp-task-updated-at-ms task)
+                                         (current-time-ms))))
             (error (e)
               (bt:with-lock-held (*task-registry-lock*)
                                  (setf (mcp-task-status task)

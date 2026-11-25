@@ -179,7 +179,7 @@
        (id params)
   "Handle MCP resources/templates/list."
   (declare (ignore params))
-  (let
+  (let*
       ((templates
          (vector
            (dict "uriTemplate"
@@ -205,10 +205,9 @@
                  "description"
                  "In-memory rendered source of a file loaded in a workspace."
                  "mimeType"
-                 "text/x-lisp"))))
-    (let ((res (dict "resourceTemplates" templates)))
-      (when (mcp-2-0-request-p) (setf (gethash "resultType" res) "complete"))
-      (send-result id res))))
+                 "text/x-lisp")))
+       (res (dict "resourceTemplates" templates)))
+    (send-result id (maybe-wrap-mcp-2-0-result res))))
 
 (defun handle-resources-read (id params)
   "Handle MCP resources/read, returning -32602 if the URI does not exist."

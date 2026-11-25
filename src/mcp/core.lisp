@@ -403,13 +403,12 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
          (let*
              ((raw-path (or path (to-list (gethash "path" args))))
               (path
-                (if raw-path
+                (when raw-path
                   (or
                     (structural-editing-mcp.tree:resolve-symbolic-path
                       structural-editing-mcp.workspace:*workspace-tree*
                       raw-path)
-                    raw-path)
-                  nil))
+                    raw-path)))
               (dialect (or dialect (parse-dialect-arg (gethash "dialect" args))))
               (agent-id
                 (or (gethash "agent_id" args) (gethash "agent-id" args) agent-id "default"))
@@ -1038,6 +1037,16 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                        (when cont (remhash token *pending-input-requests*))
                        cont)))
 
+(defun build-tool-call-result
+       (content &optional structured &key (wrap-2-0 t))
+  "Build a CallToolResult dict with text content, optional structuredContent, and optional 2.0 resultType."
+  (let
+      ((res (dict "content" (list (dict "type" "text" "text" content)))))
+    (when structured (setf (gethash "structuredContent" res) structured))
+    (if wrap-2-0
+      (maybe-wrap-mcp-2-0-result res)
+      res)))
+
 (defun handle-tools-call (id params)
   (let*
       ((name (href params "name"))
@@ -1061,11 +1070,8 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
         (handler-case
             (multiple-value-bind (content structured)
                                  (funcall cont in-responses)
-              (let
-                  ((res (dict "content" (list (dict "type" "text" "text" content)))))
-                (when structured (setf (gethash "structuredContent" res) structured))
-                (when (mcp-2-0-request-p) (setf (gethash "resultType" res) "complete"))
-                (return-from handle-tools-call (send-result id res))))
+              (return-from handle-tools-call
+                           (send-result id (build-tool-call-result content structured))))
           (error (e)
             (return-from handle-tools-call
                          (send-tool-error-response id
@@ -1096,33 +1102,29 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                                                  structural-editing-mcp.conditions:+error-code-workspace-error+
                                                  "workspace_error")))))
     (handler-case
-        (let*
+        (let
             ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
           (multiple-value-bind (content structured)
                                (structural-editing-mcp.workspace:with-workspace-context
                                  (ws)
                                  (execute-tool-call name path args dialect agent-id))
-            (let
-                ((res (dict "content" (list (dict "type" "text" "text" content)))))
-              (when structured (setf (gethash "structuredContent" res) structured))
-              (when (mcp-2-0-request-p) (setf (gethash "resultType" res) "complete"))
-              (send-result id res)
-              (when
-                  (and
-                    (or (mutation-tool-p name)
-                        (member name
-                                '("workspace_create_file" "workspace_merge"
-                                  "workspace_rebase"
-                                  "workspace_manage")
-                                :test
-                                #'string=))
-                    (fboundp 'notify-workspace-resources-changed))
-                (funcall 'notify-workspace-resources-changed
-                         ws-id
-                         :list-changed-p
-                         (not
-                           (null
-                             (member name '("workspace_create_file" "workspace_manage") :test #'string=))))))))
+            (send-result id (build-tool-call-result content structured))
+            (when
+                (and
+                  (or (mutation-tool-p name)
+                      (member name
+                              '("workspace_create_file" "workspace_merge"
+                                "workspace_rebase"
+                                "workspace_manage")
+                              :test
+                              #'string=))
+                  (fboundp 'notify-workspace-resources-changed))
+              (funcall 'notify-workspace-resources-changed
+                       ws-id
+                       :list-changed-p
+                       (not
+                         (null
+                           (member name '("workspace_create_file" "workspace_manage") :test #'string=)))))))
       (input-required-signal (sig)
         (let
             ((token (register-mrtr-continuation (mrtr-continuation sig))))
