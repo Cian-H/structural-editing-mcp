@@ -1467,4 +1467,68 @@
                                                                                                                            99999))))
                    (res (call-mcp-msg mod-rev-msg)))
                 (ok (gethash "isError" (gethash "result" res)))))
-          (when (probe-file file-path) (delete-file file-path)))))))
+          (when (probe-file file-path) (delete-file file-path)))))))(deftest
+    test-mcp-annotations-and-structured-content
+  (testing
+      "tools/list emits annotations with JSON false and outputSchema"
+    (let*
+        ((capture (make-string-output-stream))
+         (msg
+           (structural-editing-mcp.mcp::dict "jsonrpc"
+                                             "2.0"
+                                             "id"
+                                             201
+                                             "method"
+                                             "tools/list"
+                                             "params"
+                                             (make-hash-table)))
+         (raw-json
+           (let ((*standard-output* capture))
+             (structural-editing-mcp.mcp:handle-message msg)
+             (get-output-stream-string capture)))
+         (parsed (parse-mcp-response raw-json))
+         (tools (gethash "tools" (gethash "result" parsed)))
+         (read-node
+           (find "read_node"
+                 tools
+                 :test
+                 #'equal
+                 :key
+                 (lambda (x)
+                   (gethash "name" x))))
+         (commit-ws
+           (find "commit_workspace"
+                 tools
+                 :test
+                 #'equal
+                 :key
+                 (lambda (x)
+                   (gethash "name" x)))))
+      (ok (search "\"destructiveHint\":false" raw-json))
+      (ok (eq (gethash "readOnlyHint" (gethash "annotations" read-node)) t))
+      (ok (hash-table-p (gethash "outputSchema" read-node)))
+      (ok (eq (gethash "destructiveHint" (gethash "annotations" commit-ws)) t))))
+  (testing
+      "tools/call returns structuredContent alongside text content"
+    (structural-editing-mcp.workspace:with-workspace-context
+      ((structural-editing-mcp.workspace:get-workspace "default"))
+      (structural-editing-mcp.workspace:init-workspace)
+      (let*
+          ((msg
+             (structural-editing-mcp.mcp::dict "jsonrpc"
+                                               "2.0"
+                                               "id"
+                                               202
+                                               "method"
+                                               "tools/call"
+                                               "params"
+                                               (structural-editing-mcp.mcp::dict "name"
+                                                                                 "workspace_status"
+                                                                                 "arguments"
+                                                                                 (make-hash-table))))
+           (res (gethash "result" (call-mcp-msg msg)))
+           (sc (gethash "structuredContent" res)))
+        (ok (listp (gethash "content" res)))
+        (ok (hash-table-p sc))
+        (ok (equal (gethash "id" sc) "default"))
+        (ok (integerp (gethash "revision" sc)))))))

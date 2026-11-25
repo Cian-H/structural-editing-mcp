@@ -230,9 +230,47 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
     (when required (setf (gethash "required" s) required))
     s))
 
+(defun make-tool-annotations
+       (&key title
+        (read-only nil ro-p)
+        (destructive nil dest-p)
+        (idempotent nil idem-p)
+        (open-world nil ow-p))
+  "Build an MCP ToolAnnotations dict using yason:false for false booleans."
+  (let ((d (make-hash-table :test #'equal)))
+    (when title (setf (gethash "title" d) title))
+    (when ro-p
+      (setf (gethash "readOnlyHint" d)
+            (if read-only
+              t
+              yason:false)))
+    (when dest-p
+      (setf (gethash "destructiveHint" d)
+            (if destructive
+              t
+              yason:false)))
+    (when idem-p
+      (setf (gethash "idempotentHint" d)
+            (if idempotent
+              t
+              yason:false)))
+    (when ow-p
+      (setf (gethash "openWorldHint" d)
+            (if open-world
+              t
+              yason:false)))
+    d))
+
 (defun make-tool
-       (name desc props &optional required)
-  (dict "name" name "description" desc "inputSchema" (tool-schema props required)))
+       (name desc props &optional required title annotations output-schema)
+  "Build an MCP tool definition hash table with optional title, annotations, and outputSchema."
+  (let
+      ((d
+         (dict "name" name "description" desc "inputSchema" (tool-schema props required))))
+    (when title (setf (gethash "title" d) title))
+    (when annotations (setf (gethash "annotations" d) annotations))
+    (when output-schema (setf (gethash "outputSchema" d) output-schema))
+    d))
 
 (defparameter *mutation-tools* '
   ("ast_modify" "ast_remove"
@@ -311,7 +349,11 @@ Otherwise, PATH specifies the target location (parent is (butlast path), index i
       (t (dict "type" (string-downcase (string ptype)) "description" pdoc)))))
 
 (defmacro define-mcp-tool
-          (name (&key description mutation (workspace t)) params &body body)
+          (name
+           (&key description title mutation (workspace t) annotations output-schema)
+           params
+           &body
+           body)
   "Define an MCP tool, registering its JSON schema in *MCP-TOOL-DEFINITIONS*
 and its execution handler in *MCP-TOOL-HANDLERS*."
   (let*
@@ -348,7 +390,13 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                  when req-p
                  collect `(push ,key-str ,reqs-var))
          (register-tool-definition
-           (make-tool ,name ,description ,props-var (nreverse ,reqs-var))))
+           (make-tool ,name
+                      ,description
+                      ,props-var
+                      (nreverse ,reqs-var)
+                      ,title
+                      ,annotations
+                      ,output-schema)))
        (defun ,handler-fn
               (args &key (path nil) (dialect nil) (agent-id "default") &allow-other-keys)
          (declare (ignorable args path dialect agent-id))
@@ -466,7 +514,7 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
 ;;; Tool Analysis & Workspace Execution Helpers
 
 (defun run-tool-lint (tree path dialect args)
-  "Run AST linter and return formatted findings."
+  "Run AST linter and return (values formatted-report structured-dict)."
   (let*
       ((rules (to-list (gethash "rules" args)))
        (findings
@@ -476,12 +524,28 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                                                    :dialect
                                                    dialect
                                                    :rules
-                                                   rules)))
-    (structural-editing-mcp.analysis:format-lint-findings findings)))
+                                                   rules))
+       (items
+         (coerce
+           (loop for f in findings
+                 collect
+                 (dict "rule"
+                       (string-downcase (string (structural-editing-mcp.analysis:lint-finding-rule f)))
+                       "path"
+                       (coerce (or (structural-editing-mcp.analysis:lint-finding-path f) '()) 'vector)
+                       "severity"
+                       (string-downcase
+                         (string (structural-editing-mcp.analysis:lint-finding-severity f)))
+                       "message"
+                       (structural-editing-mcp.analysis:lint-finding-message f)))
+           'vector)))
+    (values
+      (structural-editing-mcp.analysis:format-lint-findings findings)
+      (dict "count" (length findings) "findings" items))))
 
 (defun run-tool-complexity
        (tree path dialect args)
-  "Run cyclomatic complexity analysis and return report."
+  "Run cyclomatic complexity analysis and return (values formatted-report structured-dict)."
   (let*
       ((min-cc (or (gethash "min_complexity" args) 1))
        (min-d (or (gethash "min_depth" args) 1))
@@ -495,11 +559,34 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
            :min-complexity
            min-cc
            :min-depth
-           min-d)))
-    (structural-editing-mcp.analysis:format-complexity-report results)))
+           min-d))
+       (items
+         (coerce
+           (loop for r in results
+                 collect
+                 (dict "name"
+                       (or (structural-editing-mcp.analysis:complexity-metrics-name r) "")
+                       "kind"
+                       (string-downcase
+                         (string
+                           (or (structural-editing-mcp.analysis:complexity-metrics-kind r) :unknown)))
+                       "path"
+                       (coerce
+                         (or (structural-editing-mcp.analysis:complexity-metrics-path r) '())
+                         'vector)
+                       "cyclomaticComplexity"
+                       (structural-editing-mcp.analysis:complexity-metrics-cyclomatic-complexity r)
+                       "maxNestingDepth"
+                       (structural-editing-mcp.analysis:complexity-metrics-max-nesting-depth r)
+                       "formCount"
+                       (structural-editing-mcp.analysis:complexity-metrics-form-count r)))
+           'vector)))
+    (values
+      (structural-editing-mcp.analysis:format-complexity-report results)
+      (dict "count" (length results) "metrics" items))))
 
 (defun run-tool-duplicates (tree path args)
-  "Run duplicate subtree detector and return formatted report."
+  "Run duplicate subtree detector and return (values formatted-report structured-dict)."
   (let*
       ((min-nodes (or (gethash "min_nodes" args) (gethash "min_size" args) 4))
        (min-depth (or (gethash "min_depth" args) 2))
@@ -522,11 +609,33 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
            :min-occurrences
            min-occurrences
            :exact
-           exact)))
-    (structural-editing-mcp.analysis:format-duplicate-report results)))
+           exact))
+       (items
+         (coerce
+           (loop for g in results
+                 collect
+                 (dict "occurrenceCount"
+                       (structural-editing-mcp.analysis:duplicate-group-occurrence-count g)
+                       "nodeCount"
+                       (structural-editing-mcp.analysis:duplicate-group-node-count g)
+                       "depth"
+                       (structural-editing-mcp.analysis:duplicate-group-depth g)
+                       "paths"
+                       (coerce
+                         (mapcar
+                           (lambda (p)
+                             (coerce (or p '()) 'vector))
+                           (structural-editing-mcp.analysis:duplicate-group-paths g))
+                         'vector)
+                       "codeSnippet"
+                       (structural-editing-mcp.analysis:duplicate-group-code-snippet g)))
+           'vector)))
+    (values
+      (structural-editing-mcp.analysis:format-duplicate-report results)
+      (dict "count" (length results) "groups" items))))
 
 (defun run-tool-bindings (tree path dialect args)
-  "Run variable binding analysis and return formatted report."
+  "Run variable binding analysis and return (values formatted-report structured-dict)."
   (let*
       ((inc-unused
          (multiple-value-bind (val present-p)
@@ -550,12 +659,34 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
            :include-shadowed
            inc-shadowed
            :dialect
-           dialect)))
-    (structural-editing-mcp.analysis:format-binding-report findings)))
+           dialect))
+       (items
+         (coerce
+           (loop for f in findings
+                 collect
+                 (dict "kind"
+                       (string-downcase
+                         (string (structural-editing-mcp.analysis:binding-finding-kind f)))
+                       "variableName"
+                       (structural-editing-mcp.analysis:binding-finding-variable-name f)
+                       "path"
+                       (coerce
+                         (or (structural-editing-mcp.analysis:binding-finding-path f) '())
+                         'vector)
+                       "scopeKind"
+                       (string-downcase
+                         (string
+                           (or (structural-editing-mcp.analysis:binding-finding-scope-kind f) :unknown)))
+                       "message"
+                       (structural-editing-mcp.analysis:binding-finding-message f)))
+           'vector)))
+    (values
+      (structural-editing-mcp.analysis:format-binding-report findings)
+      (dict "count" (length findings) "findings" items))))
 
 (defun run-tool-suggestions
        (tree path dialect args)
-  "Aggregate analysis findings into prioritized suggestions."
+  "Aggregate analysis findings and return (values formatted-report structured-dict)."
   (let*
       ((min-p (or (gethash "min_priority" args) "low"))
        (cats (to-list (gethash "categories" args)))
@@ -569,8 +700,31 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
            :categories
            cats
            :dialect
-           dialect)))
-    (structural-editing-mcp.analysis:format-refactoring-suggestions suggestions)))
+           dialect))
+       (items
+         (coerce
+           (loop for s in suggestions
+                 collect
+                 (dict "category"
+                       (string-downcase
+                         (string (structural-editing-mcp.analysis:refactoring-suggestion-category s)))
+                       "priority"
+                       (string-downcase
+                         (string (structural-editing-mcp.analysis:refactoring-suggestion-priority s)))
+                       "path"
+                       (coerce
+                         (or (structural-editing-mcp.analysis:refactoring-suggestion-path s) '())
+                         'vector)
+                       "recommendedTool"
+                       (or
+                         (structural-editing-mcp.analysis:refactoring-suggestion-recommended-tool s)
+                         "")
+                       "description"
+                       (structural-editing-mcp.analysis:refactoring-suggestion-description s)))
+           'vector)))
+    (values
+      (structural-editing-mcp.analysis:format-refactoring-suggestions suggestions)
+      (dict "count" (length suggestions) "suggestions" items))))
 
 (defun manage-snapshot-restore
        (action ws-id snap-name)
@@ -649,6 +803,64 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
            :force
            force)))
     (fmt "Workspace ~S reloaded ~A file(s) from disk." ws-id (length reloaded))))
+
+(defun node-preview-structured-dict (node)
+  "Build structured metadata dict for an AST node preview."
+  (if (null node)
+    (dict "found" yason:false)
+    (let
+        ((path (structural-editing-mcp.tree:get-node-path node))
+         (handle (structural-editing-mcp.tree:get-node-id-handle node))
+         (tag (structural-editing-mcp.tree:get-node-tag node))
+         (children (structural-editing-mcp.tree:get-node-children node)))
+      (dict "found"
+            t
+            "revision"
+            structural-editing-mcp.workspace:*workspace-revision*
+            "path"
+            (coerce (or path '()) 'vector)
+            "handle"
+            (or handle "")
+            "tag"
+            (string-downcase (string tag))
+            "childCount"
+            (length children)))))
+
+(defun workspace-status-structured-dict (st)
+  "Convert workspace-status plist ST to a JSON-serializable dict."
+  (dict "id"
+        (getf st :id)
+        "parentId"
+        (or (getf st :parent-id) "")
+        "revision"
+        (getf st :revision)
+        "baseRevision"
+        (getf st :base-revision)
+        "dirtyFiles"
+        (coerce (or (getf st :dirty-files) '()) 'vector)
+        "cleanFiles"
+        (coerce (or (getf st :clean-files) '()) 'vector)
+        "snapshots"
+        (coerce (or (getf st :snapshots) '()) 'vector)))
+
+(defun workspace-diff-structured-dict (df)
+  "Convert diff-workspaces plist DF to a JSON-serializable dict."
+  (dict "sourceId"
+        (getf df :source-id)
+        "targetId"
+        (getf df :target-id)
+        "sourceOnly"
+        (coerce (or (getf df :source-only) '()) 'vector)
+        "targetOnly"
+        (coerce (or (getf df :target-only) '()) 'vector)
+        "sourceModifiedOnly"
+        (coerce (or (getf df :source-modified-only) '()) 'vector)
+        "targetModifiedOnly"
+        (coerce (or (getf df :target-modified-only) '()) 'vector)
+        "astMergeable"
+        (coerce (or (getf df :ast-mergeable) '()) 'vector)
+        "modifiedInBoth"
+        (coerce (or (getf df :modified-in-both) '()) 'vector)))
 
 ;;; Execution & Tool Dispatch
 
