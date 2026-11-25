@@ -36,7 +36,11 @@
            :+error-code-invalid-params+
            :+error-code-workspace-error+
            :+error-code-occ-conflict+
-           :+error-code-internal-error+)
+           :+error-code-internal-error+
+           :unsupported-protocol-version-error
+           :unsupported-version-requested
+           :unsupported-version-supported
+           :+error-code-unsupported-protocol-version+)
   (:documentation "Condition hierarchy for the structural editing system."))
 
 (in-package :structural-editing-mcp.conditions)
@@ -167,4 +171,30 @@
                                        "JSON-RPC server error code for optimistic concurrency control conflicts.")
 
 (defconstant +error-code-internal-error+ -32603
-                                         "JSON-RPC standard error code for internal server errors.")
+                                         "JSON-RPC standard error code for internal server errors.")(define-condition
+    unsupported-protocol-version-error
+    (structural-editing-error)
+  ((requested-version :initarg
+                      :requested-version
+                      :reader
+                      unsupported-version-requested
+                      :initform
+                      nil)
+   (supported-versions :initarg
+                       :supported-versions
+                       :reader
+                       unsupported-version-supported
+                       :initform
+                       nil))
+  (:report
+    (lambda (condition stream)
+      (format stream
+              "Unsupported MCP protocol version ~S. Supported versions: ~{~A~^, ~}"
+              (unsupported-version-requested condition)
+              (unsupported-version-supported condition))))
+  (:documentation
+    "Signaled when a client specifies an unsupported MCP protocol version."))
+
+(defconstant
+    +error-code-unsupported-protocol-version+ -32022
+                                              "JSON-RPC server error code for unsupported MCP protocol versions.")

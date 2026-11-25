@@ -392,19 +392,70 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
 
 (defun get-tools-list () *mcp-tool-definitions*)
 
+(defun server-instructions-string ()
+  "Return concise server workflow instructions for MCP discovery."
+  "Use read_node with mode='skeleton' on initial reads, read_slice for deep nested nodes, and workspace_manage (fork/snapshot) before multi-step edits.")
+
+(defun negotiate-protocol-version (requested)
+  "Select a mutually supported MCP protocol version, defaulting to +DEFAULT-LEGACY-PROTOCOL-VERSION+."
+  (cond
+    ((and (stringp requested)
+          (member requested +supported-protocol-versions+ :test #'string=))
+      requested)
+    (t +default-legacy-protocol-version+)))
+
+(defun server-capabilities-dict ()
+  "Build the MCP server capabilities object."
+  (dict "tools" (dict "listChanged" yason:false)))
+
+(defun maybe-wrap-mcp-2-0-result (res)
+  "Attach resultType=\"complete\" when responding to a 2026-07-28 MCP 2.0 request."
+  (when
+      (and (mcp-2-0-request-p) (hash-table-p res) (null (gethash "resultType" res)))
+    (setf (gethash "resultType" res) "complete"))
+  res)
+
 (defun handle-initialize (id params)
+  "Handle legacy/2025 initialize handshake with version negotiation."
+  (let*
+      ((requested (and (hash-table-p params) (href params "protocolVersion")))
+       (client-caps (and (hash-table-p params) (href params "capabilities")))
+       (version (negotiate-protocol-version requested)))
+    (setf *negotiated-protocol-version*
+          version
+          *negotiated-client-capabilities*
+          client-caps
+          *session-initialized-p*
+          t)
+    (send-result id
+                 (dict "protocolVersion"
+                       version
+                       "capabilities"
+                       (server-capabilities-dict)
+                       "serverInfo"
+                       (dict "name" "structural-editing-mcp" "version" +version+)
+                       "instructions"
+                       (server-instructions-string)))))
+
+(defun handle-server-discover (id params)
+  "Handle MCP 2.0 (2026-07-28) stateless server/discover request."
   (declare (ignore params))
   (send-result id
-               (dict "protocolVersion"
-                     "2024-11-05"
+               (dict "resultType"
+                     "complete"
+                     "supportedVersions"
+                     +supported-protocol-versions+
                      "capabilities"
-                     (dict "tools" (make-hash-table))
-                     "serverInfo"
-                     (dict "name" "structural-editing-mcp" "version" +version+))))
+                     (server-capabilities-dict)
+                     "_meta"
+                     (dict "io.modelcontextprotocol/serverInfo"
+                           (dict "name" "structural-editing-mcp" "version" +version+))
+                     "instructions"
+                     (server-instructions-string))))
 
 (defun handle-tools-list (id params)
   (declare (ignore params))
-  (send-result id (dict "tools" (get-tools-list))))
+  (send-result id (maybe-wrap-mcp-2-0-result (dict "tools" (get-tools-list)))))
 
 (defun parse-dialect-arg (dialect-str)
   "Parse an optional dialect string (e.g. \":clojure\" or \"common-lisp\") into a keyword."
@@ -626,10 +677,9 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                error-code
                "errorType"
                error-type)))
+    (when (mcp-2-0-request-p) (setf (gethash "resultType" payload) "complete"))
     (when extra-fields
-      (loop for
-            (k v) on extra-fields by #'cddr do
-            (setf (gethash k payload) v)))
+      (loop for (k v) on extra-fields by #'cddr do (setf (gethash k payload) v)))
     (send-result id payload)))
 
 (defun execute-mutation-tool-locked
@@ -724,19 +774,23 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
 (defun handle-tools-call (id params)
   (let*
       ((name (href params "name"))
-       (args (href params "arguments"))
+       (args (or (href params "arguments") (make-hash-table :test #'equal)))
        (path (to-list (href args "path")))
        (dialect (parse-dialect-arg (href args "dialect")))
        (agent-id (or (href args "agent_id") (href args "agent") "default"))
        (ws-id (or (href args "workspace_id") (href args "workspace") "default")))
     (handler-case
         (let*
-            ((ws (structural-editing-mcp.workspace:get-workspace ws-id))
-             (content
-               (structural-editing-mcp.workspace:with-workspace-context
-                 (ws)
-                 (execute-tool-call name path args dialect agent-id))))
-          (send-result id (dict "content" (list (dict "type" "text" "text" content)))))
+            ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+          (multiple-value-bind (content structured)
+                               (structural-editing-mcp.workspace:with-workspace-context
+                                 (ws)
+                                 (execute-tool-call name path args dialect agent-id))
+            (let
+                ((res (dict "content" (list (dict "type" "text" "text" content)))))
+              (when structured (setf (gethash "structuredContent" res) structured))
+              (when (mcp-2-0-request-p) (setf (gethash "resultType" res) "complete"))
+              (send-result id res))))
       (structural-editing-mcp.conditions:occ-conflict-error
           (c)
         (send-tool-error-response id

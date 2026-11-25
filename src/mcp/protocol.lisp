@@ -28,6 +28,48 @@
 (defun send-result (id result)
   (send-json (dict "jsonrpc" "2.0" "id" id "result" result)))
 
+(defparameter +supported-protocol-versions+
+  '("2026-07-28" "2025-11-25" "2025-06-18" "2025-03-26" "2024-11-05")
+  "Supported MCP protocol versions ordered from newest to oldest.")
+
+(defparameter +default-legacy-protocol-version+
+  "2025-11-25"
+  "Default protocol version returned on initialize when client omits protocolVersion.")
+
+(defvar *negotiated-protocol-version* nil
+                                      "Protocol version negotiated during initialize for the active stdio session.")
+
+(defvar *negotiated-client-capabilities* nil
+                                         "Client capabilities hash table captured during initialize.")
+
+(defvar *request-protocol-version* nil
+                                   "Effective MCP protocol version for the current request.")
+
+(defvar *request-client-capabilities* nil
+                                      "Effective client capabilities for the current request.")
+
+(defvar *session-initialized-p* nil
+                                "T once an initialize or notifications/initialized lifecycle message has been observed.")
+
+(defun mcp-2-0-request-p ()
+  "Return T if the current request targets the 2026-07-28 MCP 2.0 specification."
+  (equal *request-protocol-version* "2026-07-28"))
+
+(defun send-error-with-data
+       (id code message &optional data)
+  "Encode and send a JSON-RPC 2.0 error response with optional structured DATA."
+  (let ((err (dict "code" code "message" message)))
+    (when data (setf (gethash "data" err) data))
+    (send-json (dict "jsonrpc" "2.0" "id" id "error" err))))
+
+(defun send-notification
+       (method &optional params)
+  "Send a JSON-RPC 2.0 notification (no id) over stdout."
+  (let
+      ((msg (dict "jsonrpc" "2.0" "method" method)))
+    (when params (setf (gethash "params" msg) params))
+    (send-json msg)))
+
 ;;; Worker Thread Pool
 
 (defvar *worker-queue-tail* nil)

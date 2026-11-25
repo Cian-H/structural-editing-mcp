@@ -3,24 +3,47 @@
 (declaim (optimize (speed 2) (safety 3)))
 
 (defun handle-message (msg)
-  "Dispatch a parsed JSON-RPC message."
-  (let ((jsonrpc (href msg "jsonrpc"))
-        (id (href msg "id"))
-        (method (href msg "method"))
-        (params (href msg "params")))
+  "Dispatch a parsed JSON-RPC message with per-request _meta version and capability binding."
+  (let*
+      ((jsonrpc (href msg "jsonrpc"))
+       (id (href msg "id"))
+       (method (href msg "method"))
+       (params (href msg "params"))
+       (meta (and (hash-table-p params) (href params "_meta")))
+       (meta-ver
+         (and (hash-table-p meta) (href meta "io.modelcontextprotocol/protocolVersion")))
+       (meta-caps
+         (and (hash-table-p meta)
+              (href meta "io.modelcontextprotocol/clientCapabilities"))))
     (cond
       ((not (equal jsonrpc "2.0"))
-       (when id
-         (send-error id -32600 "Invalid Request: jsonrpc version must be \"2.0\"")))
+        (when id
+          (send-error id -32600 "Invalid Request: jsonrpc version must be \"2.0\"")))
+      ((and (stringp meta-ver)
+            (plusp (length meta-ver))
+            (not (member meta-ver +supported-protocol-versions+ :test #'string=)))
+        (when id
+          (send-error-with-data id
+                                +error-code-unsupported-protocol-version+
+                                (fmt "Unsupported protocol version: ~A" meta-ver)
+                                (dict "supportedVersions" +supported-protocol-versions+))))
       (t
-       (string-case (or method "")
-         ("initialize" (handle-initialize id params))
-         ("notifications/initialized" nil)
-         ("notifications/cancelled" nil)
-         ("ping" (when id (send-result id (dict))))
-         ("tools/list" (handle-tools-list id params))
-         ("tools/call" (handle-tools-call id params))
-         (t (when id (send-error id -32601 (fmt "Method not found: ~A" method)))))))))
+        (let
+            ((*request-protocol-version*
+               (or
+                 (and (stringp meta-ver) (plusp (length meta-ver)) meta-ver)
+                 *negotiated-protocol-version*
+                 +default-legacy-protocol-version+))
+             (*request-client-capabilities* (or meta-caps *negotiated-client-capabilities*)))
+          (string-case (or method "")
+                       ("initialize" (handle-initialize id params))
+                       ("server/discover" (handle-server-discover id params))
+                       ("notifications/initialized" (setf *session-initialized-p* t) nil)
+                       ("notifications/cancelled" nil)
+                       ("ping" (when id (send-result id (dict))))
+                       ("tools/list" (handle-tools-list id params))
+                       ("tools/call" (handle-tools-call id params))
+                       (t (when id (send-error id -32601 (fmt "Method not found: ~A" method))))))))))
 
 (defun start-server ()
   "Start the MCP server loop over stdin/stdout with worker thread pool."

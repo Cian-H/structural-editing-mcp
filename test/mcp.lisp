@@ -17,47 +17,88 @@
     (parse-mcp-response (get-output-stream-string capture))))
 
 (deftest test-mcp-initialize
-  (testing "handle-message parses initialize request from dictionary"
-    (let* ((msg (structural-editing-mcp.mcp::dict
-                  "jsonrpc" "2.0"
-                  "id" 1
-                  "method" "initialize"
-                  "params" (make-hash-table)))
+  (let
+      ((structural-editing-mcp.mcp:*negotiated-protocol-version* nil)
+       (structural-editing-mcp.mcp:*negotiated-client-capabilities* nil))
+    (testing
+        "handle-message defaults initialize to 2025-11-25 when protocolVersion omitted"
+      (let*
+          ((msg
+             (structural-editing-mcp.mcp::dict "jsonrpc"
+                                               "2.0"
+                                               "id"
+                                               1
+                                               "method"
+                                               "initialize"
+                                               "params"
+                                               (make-hash-table)))
            (result-json (call-mcp-msg msg)))
-      (ok (equal (gethash "jsonrpc" result-json) "2.0"))
-      (ok (equal (gethash "id" result-json) 1))
-      (let ((res (gethash "result" result-json)))
-        (ok (equal (gethash "protocolVersion" res) "2024-11-05"))
-        (let ((info (gethash "serverInfo" res)))
-          (ok (equal (gethash "name" info) "structural-editing-mcp"))))))
-
-  (testing "handle-message parses initialize request from raw parsed JSON string"
-    (let* ((json-str "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"initialize\",\"params\":{}}")
+        (ok (equal (gethash "jsonrpc" result-json) "2.0"))
+        (ok (equal (gethash "id" result-json) 1))
+        (let ((res (gethash "result" result-json)))
+          (ok (equal (gethash "protocolVersion" res) "2025-11-25"))
+          (let ((info (gethash "serverInfo" res)))
+            (ok (equal (gethash "name" info) "structural-editing-mcp"))))))
+    (testing
+        "handle-message negotiates 2024-11-05 when explicitly requested"
+      (let*
+          ((json-str
+             "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\"}}")
            (msg (let ((yason:*parse-json-arrays-as-vectors* nil)) (yason:parse json-str)))
            (result-json (call-mcp-msg msg)))
-      (ok (equal (gethash "jsonrpc" result-json) "2.0"))
-      (ok (equal (gethash "id" result-json) 10))
-      (let ((res (gethash "result" result-json)))
-        (ok (equal (gethash "protocolVersion" res) "2024-11-05"))
-        (let ((info (gethash "serverInfo" res)))
-          (ok (equal (gethash "name" info) "structural-editing-mcp"))))))
-
-  (testing "handle-message responds to ping"
-    (let* ((json-str "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"ping\"}")
+        (ok (equal (gethash "jsonrpc" result-json) "2.0"))
+        (ok (equal (gethash "id" result-json) 10))
+        (let ((res (gethash "result" result-json)))
+          (ok (equal (gethash "protocolVersion" res) "2024-11-05")))))
+    (testing
+        "handle-message supports server/discover for 2026-07-28"
+      (let*
+          ((json-str
+             "{\"jsonrpc\":\"2.0\",\"id\":\"d1\",\"method\":\"server/discover\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}")
+           (msg (let ((yason:*parse-json-arrays-as-vectors* nil)) (yason:parse json-str)))
+           (result-json (call-mcp-msg msg))
+           (res (gethash "result" result-json)))
+        (ok (equal (gethash "resultType" res) "complete"))
+        (ok (member "2026-07-28" (gethash "supportedVersions" res) :test #'equal))
+        (ok (hash-table-p (gethash "capabilities" res)))))
+    (testing
+        "handle-message attaches resultType complete for 2026-07-28 _meta requests and rejects unsupported versions"
+      (let*
+          ((ok-msg
+             (let ((yason:*parse-json-arrays-as-vectors* nil))
+               (yason:parse
+                 "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}")))
+           (ok-res (gethash "result" (call-mcp-msg ok-msg)))
+           (bad-msg
+             (let ((yason:*parse-json-arrays-as-vectors* nil))
+               (yason:parse
+                 "{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"1999-01-01\"}}}")))
+           (bad-json (call-mcp-msg bad-msg))
+           (bad-err (gethash "error" bad-json)))
+        (ok (equal (gethash "resultType" ok-res) "complete"))
+        (ok (= (gethash "code" bad-err) -32022))
+        (ok (listp (gethash "supportedVersions" (gethash "data" bad-err))))))
+    (testing "handle-message responds to ping"
+      (let*
+          ((json-str "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"ping\"}")
            (msg (let ((yason:*parse-json-arrays-as-vectors* nil)) (yason:parse json-str)))
            (result-json (call-mcp-msg msg)))
-      (ok (equal (gethash "jsonrpc" result-json) "2.0"))
-      (ok (equal (gethash "id" result-json) 99))
-      (ok (hash-table-p (gethash "result" result-json)))))
-
-  (testing "handle-message handles notifications without errors or responses"
-    (let ((notif-init (yason:parse "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"))
-          (notif-cancel (yason:parse "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1}}"))
-          (capture (make-string-output-stream)))
-      (let ((*standard-output* capture))
-        (structural-editing-mcp.mcp:handle-message notif-init)
-        (structural-editing-mcp.mcp:handle-message notif-cancel))
-      (ok (string= (get-output-stream-string capture) "")))))
+        (ok (equal (gethash "jsonrpc" result-json) "2.0"))
+        (ok (equal (gethash "id" result-json) 99))
+        (ok (hash-table-p (gethash "result" result-json)))))
+    (testing
+        "handle-message handles notifications without errors or responses"
+      (let
+          ((notif-init
+             (yason:parse "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"))
+           (notif-cancel
+             (yason:parse
+               "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1}}"))
+           (capture (make-string-output-stream)))
+        (let ((*standard-output* capture))
+          (structural-editing-mcp.mcp:handle-message notif-init)
+          (structural-editing-mcp.mcp:handle-message notif-cancel))
+        (ok (string= (get-output-stream-string capture) ""))))))
 
 (deftest test-mcp-tools-list
   (testing

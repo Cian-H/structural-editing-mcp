@@ -26,4 +26,14 @@
            :get-tools-list
            :*mcp-tool-definitions*
            :*mcp-tool-handlers*
-           :mutation-tool-p))
+           :mutation-tool-p
+           :+supported-protocol-versions+
+           :+default-legacy-protocol-version+
+           :*negotiated-protocol-version*
+           :*negotiated-client-capabilities*
+           :*request-protocol-version*
+           :*request-client-capabilities*
+           :*session-initialized-p*
+           :mcp-2-0-request-p
+           :send-error-with-data
+           :send-notification))
