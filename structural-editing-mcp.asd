@@ -34,6 +34,7 @@
                                                (:file "preview")
                                                (:file "core")
                                                (:file "resources")
+                                               (:file "skills")
                                                (:file "tools")
                                                (:file "server")))
                                      (:module "cli"

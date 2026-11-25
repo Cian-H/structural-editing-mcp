@@ -1661,4 +1661,73 @@
                                           "method"
                                           "resources/unsubscribe"
                                           "params"
-                                          (structural-editing-mcp.mcp::dict "uri" "workspace://default/status"))))))
+                                          (structural-editing-mcp.mcp::dict "uri" "workspace://default/status"))))))(deftest test-mcp-skills
+  (testing
+      "skills/list and skills/get expose SEP-2640 skills with SHA-256 digests"
+    (let*
+        ((list-res
+           (gethash "result"
+                    (call-mcp-msg
+                      (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                        "2.0"
+                                                        "id"
+                                                        401
+                                                        "method"
+                                                        "skills/list"
+                                                        "params"
+                                                        (make-hash-table)))))
+         (skills (gethash "skills" list-res))
+         (uris
+           (mapcar
+             (lambda (s)
+               (gethash "uri" s))
+             skills))
+         (first-skill (first skills))
+         (manifest-entry (first (gethash "resources" first-skill)))
+         (get-res
+           (gethash "result"
+                    (call-mcp-msg
+                      (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                        "2.0"
+                                                        "id"
+                                                        402
+                                                        "method"
+                                                        "skills/get"
+                                                        "params"
+                                                        (structural-editing-mcp.mcp::dict "uri"
+                                                                                          "skill://structural-editing-navigation/SKILL.md")))))
+         (read-res
+           (gethash "result"
+                    (call-mcp-msg
+                      (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                        "2.0"
+                                                        "id"
+                                                        403
+                                                        "method"
+                                                        "resources/read"
+                                                        "params"
+                                                        (structural-editing-mcp.mcp::dict "uri"
+                                                                                          "skill://structural-editing-navigation/SKILL.md")))))
+         (dir-res
+           (gethash "result"
+                    (call-mcp-msg
+                      (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                        "2.0"
+                                                        "id"
+                                                        404
+                                                        "method"
+                                                        "resources/directory/read"
+                                                        "params"
+                                                        (structural-editing-mcp.mcp::dict "uri"
+                                                                                          "skill://multi-agent-workspace-branching/"))))))
+      (ok (= (length skills) 3))
+      (ok
+        (member "skill://structural-editing-navigation/SKILL.md" uris :test #'equal))
+      (ok (= (length (gethash "sha256" manifest-entry)) 64))
+      (ok
+        (equal
+          (gethash "name" (gethash "frontmatter" get-res))
+          "structural-editing-navigation"))
+      (ok
+        (search "Skeleton first" (gethash "text" (first (gethash "contents" read-res)))))
+      (ok (= (length (gethash "resources" dir-res)) 1)))))

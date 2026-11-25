@@ -48,6 +48,9 @@
                        ("resources/read" (handle-resources-read id params))
                        ("resources/subscribe" (handle-resources-subscribe id params))
                        ("resources/unsubscribe" (handle-resources-unsubscribe id params))
+                       ("resources/directory/read" (handle-resources-directory-read id params))
+                       ("skills/list" (handle-skills-list id params))
+                       ("skills/get" (handle-skills-get id params))
                        (t (when id (send-error id -32601 (fmt "Method not found: ~A" method))))))))))
 
 (defun start-server ()

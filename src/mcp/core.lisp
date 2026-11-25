@@ -457,7 +457,9 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
   (dict "tools"
         (dict "listChanged" yason:false)
         "resources"
-        (dict "subscribe" t "listChanged" t)))
+        (dict "subscribe" t "listChanged" t)
+        "extensions"
+        (dict "io.modelcontextprotocol/skills" (dict "directoryRead" t))))
 
 (defun maybe-wrap-mcp-2-0-result (res)
   "Attach resultType=\"complete\" when responding to a 2026-07-28 MCP 2.0 request."
