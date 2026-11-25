@@ -830,13 +830,57 @@
            onto-id
            :strategy
            strat)))
-    (if (getf res :conflicts)
-      (format-rebase-conflict-summary ws-id (getf res :conflicts))
-      (fmt
-        "Workspace ~S successfully rebased onto ~S (~A file(s) updated)."
-        ws-id
-        onto-id
-        (length (getf res :updated-files))))))
+    (cond
+      ((and (getf res :conflicts) (client-supports-elicitation-p))
+        (signal 'input-required-signal
+                :input-requests
+                (dict "mode"
+                      "form"
+                      "message"
+                      (format-rebase-conflict-summary ws-id (getf res :conflicts))
+                      "requestedSchema"
+                      (dict "type"
+                            "object"
+                            "properties"
+                            (dict "resolution"
+                                  (dict "type"
+                                        "string"
+                                        "enum"
+                                        '("ours" "theirs" "abort")
+                                        "description"
+                                        "Conflict resolution strategy."))
+                            "required"
+                            '("resolution")))
+                :continuation
+                (lambda (responses)
+                  (let
+                      ((choice (and (hash-table-p responses) (href responses "resolution"))))
+                    (if
+                        (member choice '("ours" "theirs") :test #'string=)
+                      (let*
+                          ((r-strat (intern (string-upcase choice) :keyword))
+                           (r-res
+                             (structural-editing-mcp.workspace:rebase-workspace
+                               ws-id
+                               :onto-id
+                               onto-id
+                               :strategy
+                               r-strat)))
+                        (fmt
+                          "Workspace ~S rebased onto ~S using ~A (~A file(s) updated)."
+                          ws-id
+                          onto-id
+                          choice
+                          (length (getf r-res :updated-files))))
+                      (fmt "Rebase of workspace ~S aborted by user." ws-id))))))
+      ((getf res :conflicts)
+        (format-rebase-conflict-summary ws-id (getf res :conflicts)))
+      (t
+        (fmt
+          "Workspace ~S successfully rebased onto ~S (~A file(s) updated)."
+          ws-id
+          onto-id
+          (length (getf res :updated-files)))))))
 
 (define-mcp-tool "workspace_manage"
                  (:description
@@ -911,8 +955,36 @@
                   (structural-editing-mcp.workspace:delete-workspace ws-id)
                   (fmt "Workspace ~S deleted successfully." ws-id))
                  ("clear"
-                  (let
-                      ((ws (structural-editing-mcp.workspace:get-workspace ws-id)))
+                  (let*
+                      ((ws (structural-editing-mcp.workspace:get-workspace ws-id))
+                       (dirty (structural-editing-mcp.workspace:workspace-dirty-files-list ws)))
+                    (when
+                        (and dirty (not force) (client-supports-elicitation-p))
+                      (signal 'input-required-signal
+                              :input-requests
+                              (dict "mode"
+                                    "form"
+                                    "message"
+                                    (fmt
+                                      "Workspace ~S has ~D uncommitted file(s). Discard changes?"
+                                      ws-id
+                                      (length dirty))
+                                    "requestedSchema"
+                                    (dict "type"
+                                          "object"
+                                          "properties"
+                                          (dict "confirm"
+                                                (dict "type" "boolean" "description" "Confirm discarding uncommitted changes."))
+                                          "required"
+                                          '("confirm")))
+                              :continuation
+                              (lambda (responses)
+                                (if
+                                    (and (hash-table-p responses) (href responses "confirm"))
+                                  (progn
+                                    (structural-editing-mcp.workspace:clear-workspace ws :force t)
+                                    (fmt "Workspace ~S cleared successfully." ws-id))
+                                  (fmt "Clear of workspace ~S cancelled." ws-id)))))
                     (structural-editing-mcp.workspace:clear-workspace ws :force force)
                     (fmt "Workspace ~S cleared successfully." ws-id)))
                  ("fork"

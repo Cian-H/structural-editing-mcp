@@ -1797,4 +1797,49 @@
                                                             "params"
                                                             (make-hash-table))))))
           (ok (equal (gethash "taskId" cancel-res) task-id))
-          (ok (listp (gethash "tasks" list-res))))))))
+          (ok (listp (gethash "tasks" list-res))))))))(deftest test-mcp-mrtr-elicitation
+  (structural-editing-mcp.workspace:with-workspace-context
+    ((structural-editing-mcp.workspace:get-workspace "default"))
+    (structural-editing-mcp.workspace:init-workspace)
+    (structural-editing-mcp.workspace:add-file-to-workspace
+      "/tmp/mrtr-test.lisp"
+      :content
+      "(defun mrtr-fn () 1)"
+      :dialect
+      :common-lisp)
+    (testing
+        "workspace_manage clear emits input_required and completes on inputResponses"
+      (let*
+          ((req1
+             (let ((yason:*parse-json-arrays-as-vectors* nil))
+               (yason:parse
+                 "{\"jsonrpc\":\"2.0\",\"id\":601,\"method\":\"tools/call\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{\"elicitation\":{}}},\"name\":\"workspace_manage\",\"arguments\":{\"action\":\"clear\"}}}")))
+           (res1 (gethash "result" (call-mcp-msg req1)))
+           (state-tok (gethash "requestState" res1)))
+        (ok (equal (gethash "resultType" res1) "input_required"))
+        (ok (stringp state-tok))
+        (ok (hash-table-p (gethash "inputRequests" res1)))
+        (let*
+            ((req2
+               (structural-editing-mcp.mcp::dict "jsonrpc"
+                                                 "2.0"
+                                                 "id"
+                                                 602
+                                                 "method"
+                                                 "tools/call"
+                                                 "params"
+                                                 (structural-editing-mcp.mcp::dict "_meta"
+                                                                                   (structural-editing-mcp.mcp::dict
+                                                                                     "io.modelcontextprotocol/protocolVersion"
+                                                                                     "2026-07-28")
+                                                                                   "name"
+                                                                                   "workspace_manage"
+                                                                                   "arguments"
+                                                                                   (structural-editing-mcp.mcp::dict "action" "clear")
+                                                                                   "requestState"
+                                                                                   state-tok
+                                                                                   "inputResponses"
+                                                                                   (structural-editing-mcp.mcp::dict "confirm" t))))
+             (res2 (gethash "result" (call-mcp-msg req2))))
+          (ok (equal (gethash "resultType" res2) "complete"))
+          (ok (search "cleared successfully" (gethash "text" (mcp-result-content res2)))))))))

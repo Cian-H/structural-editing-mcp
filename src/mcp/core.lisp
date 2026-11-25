@@ -991,6 +991,53 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
         (dispatch-tool-call name path args dialect agent-id)))
     (t (dispatch-tool-call name path args dialect agent-id))))
 
+(define-condition input-required-signal
+                  (condition)
+  ((input-requests :initarg :input-requests :reader mrtr-input-requests)
+   (continuation :initarg :continuation :reader mrtr-continuation))
+  (:documentation
+    "Signaled by a tool handler to pause via MCP 2.0 MRTR input_required."))
+
+(defvar *pending-input-requests*
+  (make-hash-table :test #'equal)
+  "Registry mapping opaque requestState tokens to MRTR continuations.")
+
+(defvar *pending-input-lock*
+  (bt:make-lock "mcp-mrtr-lock")
+  "Lock protecting *PENDING-INPUT-REQUESTS*.")
+
+(defvar *pending-input-counter* 0
+                                "Counter for unique MRTR requestState tokens.")
+
+(defun client-supports-elicitation-p ()
+  "Return T if the active request client capabilities declare elicitation support."
+  (when
+      (hash-table-p *request-client-capabilities*)
+    (let
+        ((ext (href *request-client-capabilities* "extensions")))
+      (not
+        (null
+          (or
+            (href *request-client-capabilities* "elicitation")
+            (and (hash-table-p ext) (href ext "io.modelcontextprotocol/elicitation"))))))))
+
+(defun register-mrtr-continuation (cont)
+  "Store CONT in *PENDING-INPUT-REQUESTS* and return an opaque requestState token."
+  (bt:with-lock-held (*pending-input-lock*)
+                     (incf *pending-input-counter*)
+                     (let
+                         ((token (fmt "mrtr-~D-~D" *pending-input-counter* (get-universal-time))))
+                       (setf (gethash token *pending-input-requests*) cont)
+                       token)))
+
+(defun consume-mrtr-continuation (token)
+  "Retrieve and remove the continuation for TOKEN from *PENDING-INPUT-REQUESTS*."
+  (bt:with-lock-held (*pending-input-lock*)
+                     (let
+                         ((cont (gethash token *pending-input-requests*)))
+                       (when cont (remhash token *pending-input-requests*))
+                       cont)))
+
 (defun handle-tools-call (id params)
   (let*
       ((name (href params "name"))
@@ -998,7 +1045,33 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
        (path (to-list (href args "path")))
        (dialect (parse-dialect-arg (href args "dialect")))
        (agent-id (or (href args "agent_id") (href args "agent") "default"))
-       (ws-id (or (href args "workspace_id") (href args "workspace") "default")))
+       (ws-id (or (href args "workspace_id") (href args "workspace") "default"))
+       (req-state (and (hash-table-p params) (href params "requestState")))
+       (in-responses (and (hash-table-p params) (href params "inputResponses"))))
+    (when
+        (and (stringp req-state) (plusp (length req-state)))
+      (let
+          ((cont (consume-mrtr-continuation req-state)))
+        (unless cont
+          (return-from handle-tools-call
+                       (send-error-with-data id
+                                             +error-code-invalid-params+
+                                             (fmt "Expired or unknown requestState: ~A" req-state)
+                                             (dict "requestState" req-state))))
+        (handler-case
+            (multiple-value-bind (content structured)
+                                 (funcall cont in-responses)
+              (let
+                  ((res (dict "content" (list (dict "type" "text" "text" content)))))
+                (when structured (setf (gethash "structuredContent" res) structured))
+                (when (mcp-2-0-request-p) (setf (gethash "resultType" res) "complete"))
+                (return-from handle-tools-call (send-result id res))))
+          (error (e)
+            (return-from handle-tools-call
+                         (send-tool-error-response id
+                                                   (fmt "Error: ~A" e)
+                                                   structural-editing-mcp.conditions:+error-code-internal-error+
+                                                   "internal_error"))))))
     (when
         (and (fboundp 'task-requested-p) (funcall 'task-requested-p params))
       (handler-case
@@ -1050,6 +1123,16 @@ and its execution handler in *MCP-TOOL-HANDLERS*."
                          (not
                            (null
                              (member name '("workspace_create_file" "workspace_manage") :test #'string=))))))))
+      (input-required-signal (sig)
+        (let
+            ((token (register-mrtr-continuation (mrtr-continuation sig))))
+          (send-result id
+                       (dict "resultType"
+                             "input_required"
+                             "requestState"
+                             token
+                             "inputRequests"
+                             (mrtr-input-requests sig)))))
       (structural-editing-mcp.conditions:occ-conflict-error
           (c)
         (send-tool-error-response id
