@@ -201,6 +201,28 @@ return a verbatim (:raw . text) atom instead so that round-tripping never alters
   (declare (type string string) (type fixnum start end))
   (let ((val (classify-token string start end)))
     (cond
+      ((symbolp val)
+        (let*
+            ((name (symbol-name val))
+             (name-len (length name))
+             (kw-p (keywordp val))
+             (tok-len (- end start)))
+          (declare (type fixnum name-len tok-len))
+          (if
+              (and
+                (= tok-len
+                   (if kw-p
+                     (1+ name-len)
+                     name-len))
+                (or (not kw-p) (char= (char string start) #\:))
+                (loop with s-off of-type fixnum =
+                      (if kw-p
+                        (1+ start)
+                        start)
+                      for i of-type fixnum from 0 below name-len
+                      always (char= (char-downcase (char name i)) (char string (+ s-off i)))))
+            val
+            (cons :raw (subseq string start end)))))
       ((characterp val)
         (if
             (or
@@ -912,22 +934,31 @@ Returns (values file-node toplevel-sources) where toplevel-sources is a vector o
          ((leaf _ val) (format-atom val))
          ((comment _ text) (trim-whitespace text))
          ((node _ (guard tag (prefix-tag-p tag)) (list child))
-          (format nil "~A~A" (prefix-tag-string tag) (raw-form-text child)))
+          (concatenate 'string (prefix-tag-string tag) (raw-form-text child)))
          ((node _ tag children)
           (multiple-value-bind (open close)
                                (collection-delims tag)
             (if (null children)
-              (format nil "~A~A" open close)
+              (concatenate 'string open close)
               (let*
                   ((blocks (mapcar #'raw-form-text children))
-                   (flat (flat-collection-string open blocks close))
                    (op-cat (classify-form-operator (get-node-symbol-name (first children)))))
                 (if
-                    (and (every #'single-line-p blocks)
-                         (not (some #'line-comment-node-p children))
-                         (<= (length flat) *max-line-column*)
-                         (not (always-multiline-op-p op-cat children)))
-                  flat
+                    (and
+                      (not (always-multiline-op-p op-cat children))
+                      (every #'single-line-p blocks)
+                      (not (some #'line-comment-node-p children))
+                      (<=
+                        (+ (length open)
+                           (length close)
+                           (reduce #'+ blocks :key #'length)
+                           (max 0 (1- (length blocks))))
+                        *max-line-column*))
+                  (let
+                      ((flat (flat-collection-string open blocks close)))
+                    (if (<= (length flat) *max-line-column*)
+                      flat
+                      (raw-multiline-text open close blocks op-cat)))
                   (raw-multiline-text open close blocks op-cat))))))
          ((list :path _ val) (format-atom val))
          (_ (format-atom node))))

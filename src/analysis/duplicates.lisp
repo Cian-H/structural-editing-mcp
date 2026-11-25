@@ -20,23 +20,36 @@
                      (ash (logand h1 #x03FFFFFFFFFFFFFF) 6)
                      (ash (logand h1 #xFFFFFFFFFFFFFFFF) -2)))))
 
-(defun compute-structural-hash (node &key (exact t) (is-head t))
+(defun compute-structural-hash
+       (node &key (exact t) (is-head t))
   "Compute a Merkle-style 64-bit integer structural hash of NODE."
   (match node
          ((leaf _ val)
           (if (or exact is-head)
-            (let ((base-hash (sxhash val)))
-              (combine-hashes (sxhash (type-of val)) (logand base-hash #xFFFFFFFFFFFFFFFF)))
+            (let
+                ((base-hash (sxhash val))
+                 (type-tag
+                   (cond
+                     ((symbolp val) 1)
+                     ((stringp val) 2)
+                     ((numberp val) 3)
+                     ((characterp val) 4)
+                     ((consp val) 5)
+                     (t 6))))
+              (combine-hashes type-tag (logand base-hash #xFFFFFFFFFFFFFFFF)))
             (combine-hashes (sxhash :anonymized-leaf) (sxhash '?_))))
          ((comment _ text)
           (if exact
             (combine-hashes (sxhash :comment) (logand (sxhash text) #xFFFFFFFFFFFFFFFF))
             (sxhash :comment)))
          ((node _ tag children)
-          (let ((h (combine-hashes (sxhash :node) (sxhash tag))))
+          (let
+              ((h (combine-hashes (sxhash :node) (sxhash tag))))
             (loop for c in children
                   for idx of-type fixnum from 0
-                  do (setf h (combine-hashes h (compute-structural-hash c :exact exact :is-head (zerop idx)))))
+                  do
+                  (setf h
+                        (combine-hashes h (compute-structural-hash c :exact exact :is-head (zerop idx)))))
             h))
          (_ (sxhash node))))
 
@@ -63,13 +76,13 @@
        (not (member context '(:binding-list :binding-clause)))
        (not (member head-str *compiler-directive-heads* :test #'string=))))
 
-(defun record-duplicate-subtree (curr curr-path node-cnt depth exact buckets node-metadata)
+(defun record-duplicate-subtree
+       (curr curr-path node-cnt depth hash buckets node-metadata)
   "Record an eligible duplicate subtree node in BUCKETS and NODE-METADATA."
-  (let ((fingerprint (canonicalize-subtree curr :exact exact)))
-    (push (cons curr-path curr) (gethash fingerprint buckets nil))
-    (unless (gethash fingerprint node-metadata)
-      (setf (gethash fingerprint node-metadata)
-            (list :node-count node-cnt :depth depth :sample curr)))))
+  (push (cons curr-path curr) (gethash hash buckets nil))
+  (unless (gethash hash node-metadata)
+    (setf (gethash hash node-metadata)
+          (list :node-count node-cnt :depth depth :sample curr))))
 
 (defun loop-with-vector-bindings-p (head-str children)
   "Return T if form is a LOOP with a vector binding clause."
@@ -93,35 +106,160 @@
       (when (= idx 1) :binding-list))
     (t nil)))
 
-(defun harvest-duplicate-children (curr-path children tag head-str context exact min-nodes min-depth buckets node-metadata)
-  "Traverse children of a node with contextual rules."
-  (let ((skip-first (eq context :binding-clause)))
-    (loop for child in (if skip-first (rest children) children)
-          for idx from (if skip-first 1 0)
+(defun harvest-duplicate-children
+       (curr-path children
+        tag
+        head-str
+        context
+        exact
+        min-nodes
+        min-depth
+        buckets
+        node-metadata
+        &optional
+        skip-record-p)
+  "Traverse children of a node with contextual rules and return (values hash node-count depth)."
+  (let
+      ((skip-first (eq context :binding-clause))
+       (h (combine-hashes (sxhash :node) (sxhash tag)))
+       (total-nodes 1)
+       (max-child-depth 0))
+    (declare (type (unsigned-byte 64) h) (type fixnum total-nodes max-child-depth))
+    (loop for child in children
+          for idx of-type fixnum from 0
           for cp = (or (get-node-path child) (append curr-path (list idx)))
           for c-ctx = (harvest-child-context context tag head-str idx children)
-          do (harvest-duplicate-subtrees child cp exact min-nodes min-depth buckets node-metadata c-ctx))))
+          for effective-skip = (or skip-record-p (and skip-first (zerop idx)))
+          do
+          (multiple-value-bind (c-hash c-nodes c-depth)
+                               (harvest-duplicate-subtrees child
+                                                           cp
+                                                           exact
+                                                           min-nodes
+                                                           min-depth
+                                                           buckets
+                                                           node-metadata
+                                                           c-ctx
+                                                           (zerop idx)
+                                                           effective-skip)
+            (setf h (combine-hashes h c-hash))
+            (incf total-nodes c-nodes)
+            (when (> c-depth max-child-depth) (setf max-child-depth c-depth))))
+    (values h
+            total-nodes
+            (if children
+              (1+ max-child-depth)
+              0))))
 
-(defun maybe-record-duplicate-subtree (node curr-path exact min-nodes min-depth buckets node-metadata context head-str)
+(defun maybe-record-duplicate-subtree
+       (node curr-path
+        node-cnt
+        depth
+        hash
+        min-nodes
+        min-depth
+        buckets
+        node-metadata
+        context
+        head-str)
   "Check eligibility and record candidate duplicate subtree."
-  (when (duplicate-subtree-eligible-p (get-node-tag node) (get-node-children node) head-str context)
-    (let ((node-cnt (count-ast-nodes node))
-          (depth (compute-nesting-depth node 0)))
-      (when (and (>= node-cnt (or min-nodes 4))
-                 (>= depth (or min-depth 2)))
-        (record-duplicate-subtree node curr-path node-cnt depth exact buckets node-metadata)))))
+  (when
+      (and (>= node-cnt (or min-nodes 4))
+           (>= depth (or min-depth 2))
+           (duplicate-subtree-eligible-p (get-node-tag node)
+                                         (get-node-children node)
+                                         head-str
+                                         context))
+    (record-duplicate-subtree node
+                              curr-path
+                              node-cnt
+                              depth
+                              hash
+                              buckets
+                              node-metadata)))
 
-(defun harvest-duplicate-subtrees (node curr-path exact min-nodes min-depth buckets node-metadata &optional context)
-  "Recursively traverse NODE to collect candidate subtrees into BUCKETS and NODE-METADATA."
-  (let* ((children (get-node-children node))
-         (first-child (first children))
-         (first-val (when (and first-child (eq (get-node-tag first-child) :leaf))
-                      (nth-value 2 (parse-node first-child))))
-         (head-str (when (symbolp first-val) (string-upcase (symbol-name first-val)))))
-    (maybe-record-duplicate-subtree node curr-path exact min-nodes min-depth buckets node-metadata context head-str)
-    (unless (member head-str '("DECLARE" "DECLAIM" "PROCLAIM" "IN-PACKAGE" "DEFPACKAGE") :test #'string=)
-      (harvest-duplicate-children curr-path children (get-node-tag node)
-                                  head-str context exact min-nodes min-depth buckets node-metadata))))
+(defun harvest-duplicate-subtrees
+       (node curr-path
+        exact
+        min-nodes
+        min-depth
+        buckets
+        node-metadata
+        &optional
+        context
+        (is-head t)
+        skip-record-p)
+  "Recursively traverse NODE in a single bottom-up pass to collect candidate subtrees and return (values hash node-count depth)."
+  (if (and (consp node) (eq (first node) :path))
+    (let ((tag (third node)))
+      (cond
+        ((eq tag :leaf)
+          (let*
+              ((val (fourth node))
+               (h
+                 (if (or exact is-head)
+                   (let
+                       ((base-hash (sxhash val))
+                        (type-tag
+                          (cond
+                            ((symbolp val) 1)
+                            ((stringp val) 2)
+                            ((numberp val) 3)
+                            ((characterp val) 4)
+                            ((consp val) 5)
+                            (t 6))))
+                     (combine-hashes type-tag (logand base-hash #xFFFFFFFFFFFFFFFF)))
+                   (combine-hashes (sxhash :anonymized-leaf) (sxhash '?_)))))
+            (values h 1 0)))
+        ((eq tag :comment)
+          (let
+              ((h
+                 (if exact
+                   (combine-hashes (sxhash :comment)
+                                   (logand (sxhash (fourth node)) #xFFFFFFFFFFFFFFFF))
+                   (sxhash :comment))))
+            (values h 1 0)))
+        ((keywordp tag)
+          (let*
+              ((children (cdddr node))
+               (first-child (first children))
+               (first-val
+                 (when
+                     (and first-child (eq (get-node-tag first-child) :leaf))
+                   (nth-value 2 (parse-node first-child))))
+               (head-str (when (symbolp first-val) (string-upcase (symbol-name first-val))))
+               (directive-p
+                 (member head-str
+                         '("DECLARE" "DECLAIM" "PROCLAIM" "IN-PACKAGE" "DEFPACKAGE")
+                         :test
+                         #'string=)))
+            (multiple-value-bind (h node-cnt depth)
+                                 (harvest-duplicate-children curr-path
+                                                             children
+                                                             tag
+                                                             head-str
+                                                             context
+                                                             exact
+                                                             min-nodes
+                                                             min-depth
+                                                             buckets
+                                                             node-metadata
+                                                             (or skip-record-p directive-p))
+              (unless skip-record-p
+                (maybe-record-duplicate-subtree node
+                                                curr-path
+                                                node-cnt
+                                                depth
+                                                h
+                                                min-nodes
+                                                min-depth
+                                                buckets
+                                                node-metadata
+                                                context
+                                                head-str))
+              (values h node-cnt depth))))
+        (t (values (sxhash node) 1 0))))
+    (values (sxhash node) 1 0)))
 
 (defun extract-raw-duplicate-candidates
        (buckets node-metadata &optional (min-occurrences 2))
@@ -215,8 +353,8 @@ Groups matching subtrees, removes redundant subsumed sub-expressions, and genera
       ((start-node (resolve-tree-scope tree path)))
     (unless start-node (return-from find-duplicate-subtrees nil))
     (let
-        ((buckets (make-hash-table :test 'equal))
-         (node-metadata (make-hash-table :test 'equal))
+        ((buckets (make-hash-table :test 'eql))
+         (node-metadata (make-hash-table :test 'eql))
          (start-path (or (get-node-path start-node) path '())))
       (harvest-duplicate-subtrees start-node
                                   start-path

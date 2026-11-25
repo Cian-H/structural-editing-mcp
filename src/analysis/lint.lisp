@@ -766,40 +766,64 @@ Checks if the parent (or PARENT-NODE if supplied) is a sequence and NODE is not 
                     (t rule-or-id))))
       (member (string id) requested-rules :test #'string-equal))))
 
-(defun lint-node (node path &key (dialect :common-lisp) rules)
+(defun lint-node
+       (node path &key (dialect :common-lisp) rules active-rules)
   "Check a single NODE against active rules. Return a list of LINT-FINDING instances."
   (let ((findings '()))
-    (dolist (r *anti-pattern-rules*)
-      (when (and (rule-applicable-p r dialect)
-                 (rule-matches-filter-p r rules))
+    (if active-rules
+      (dolist (r active-rules)
         (let ((finding (check-rule r node path dialect)))
-          (when finding
-            (push finding findings)))))
-    (nreverse findings)))
+          (when finding (push finding findings))))
+      (dolist (r *anti-pattern-rules*)
+        (when
+            (and (rule-applicable-p r dialect) (rule-matches-filter-p r rules))
+          (let ((finding (check-rule r node path dialect)))
+            (when finding (push finding findings))))))
+    (when findings (nreverse findings))))
 
 (defun lint-ast (tree &key path dialect rules)
   "Recursively lint TREE (or subtree at PATH) for structural code smells and anti-patterns.
 Returns a list of LINT-FINDING instances."
-  (let* ((*current-lint-tree* tree)
-         (start-node (resolve-tree-scope tree path))
-         (findings '()))
+  (let*
+      ((*current-lint-tree* tree)
+       (start-node (resolve-tree-scope tree path))
+       (findings '())
+       (rule-cache '()))
     (when start-node
-      (labels ((walk (node current-dialect)
-                 (let* ((tag (get-node-tag node))
-                        (node-path (get-node-path node))
-                        (effective-dialect
-                          (cond
-                            ((supported-dialect-p tag)
-                              tag)
-                            (t (or current-dialect dialect :common-lisp))))
-                        (node-findings (lint-node node node-path
-                                                  :dialect effective-dialect
-                                                  :rules rules)))
-                   (dolist (f node-findings)
-                     (push f findings))
+      (labels
+          ((rules-for-dialect (d)
+             (let ((entry (assoc d rule-cache :test #'eq)))
+               (if entry
+                 (cdr entry)
+                 (let
+                     ((filtered
+                        (remove-if-not
+                          (lambda (r)
+                            (and (rule-applicable-p r d) (rule-matches-filter-p r rules)))
+                          *anti-pattern-rules*)))
+                   (push (cons d filtered) rule-cache)
+                   filtered))))
+           (walk (node current-dialect)
+             (let ((tag (get-node-tag node)))
+               (unless (or (eq tag :leaf) (eq tag :comment))
+                 (let*
+                     ((effective-dialect
+                        (cond
+                          ((supported-dialect-p tag) tag)
+                          (t (or current-dialect dialect :common-lisp))))
+                      (active-rules (rules-for-dialect effective-dialect))
+                      (node-findings
+                        (lint-node node
+                                   (get-node-path node)
+                                   :dialect
+                                   effective-dialect
+                                   :rules
+                                   rules
+                                   :active-rules
+                                   active-rules)))
+                   (dolist (f node-findings) (push f findings))
                    (let ((children (get-node-children node)))
-                     (dolist (child children)
-                       (walk child effective-dialect))))))
+                     (dolist (child children) (walk child effective-dialect))))))))
         (walk start-node dialect)))
     (nreverse findings)))
 

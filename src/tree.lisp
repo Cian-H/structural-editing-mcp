@@ -175,38 +175,101 @@ symbol-like raw atoms (e.g. case-sensitive identifiers such as Foo), otherwise N
 (defun compute-node-hash (node)
   "Compute a deterministic 64-bit FNV-1a structural hash of NODE, ignoring :path metadata."
   (let ((h #xCBF29CE484222325))
+    (declare (type (unsigned-byte 64) h))
     (labels
-        ((mix-byte (b)
-           (setf h
-                 (logand #xFFFFFFFFFFFFFFFF (* (logxor h (logand b #xFF)) #x100000001B3))))
-         (mix-str (s)
-           (loop for ch across s
-                 do
-                 (let ((code (char-code ch)))
-                   (mix-byte (logand code #xFF))
-                   (when (> code #xFF) (mix-byte (ash code -8)))))
-           (mix-byte #xFF))
-         (walk (n)
-           (match n
-                  ((leaf _ val) (mix-byte 1)
+        ((mix-byte (cur b)
+           (declare (type (unsigned-byte 64) cur)
+                    (type (unsigned-byte 8) b)
+                    (optimize (speed 3) (safety 0)))
+           (logand #xFFFFFFFFFFFFFFFF (* (logxor cur b) #x100000001B3)))
+         (mix-u32 (cur v)
+           (declare (type (unsigned-byte 64) cur)
+                    (type (unsigned-byte 32) v)
+                    (optimize (speed 3) (safety 0)))
+           (let*
+               ((c1 (mix-byte cur (ldb (byte 8 0) v)))
+                (c2 (mix-byte c1 (ldb (byte 8 8) v)))
+                (c3 (mix-byte c2 (ldb (byte 8 16) v))))
+             (mix-byte c3 (ldb (byte 8 24) v))))
+         (mix-str (cur s)
+           (declare (type (unsigned-byte 64) cur)
+                    (type string s)
+                    (optimize (speed 3) (safety 1)))
+           (let ((c cur))
+             (declare (type (unsigned-byte 64) c))
+             (loop for i of-type fixnum from 0 below (length s)
+                   for code of-type fixnum = (char-code (char s i))
+                   do (setf c (mix-byte c (logand code #xFF)))
+                   (when (> code #xFF) (setf c (mix-byte c (logand (ash code -8) #xFF)))))
+             (mix-byte c #xFF)))
+         (mix-val (cur val)
+           (declare (type (unsigned-byte 64) cur))
+           (cond
+             ((and (consp val) (eq (car val) :raw) (stringp (cdr val)))
+               (mix-str (mix-byte cur 10) (cdr val)))
+             ((symbolp val)
+               (let
+                   ((c
+                      (mix-byte cur
+                                (if (keywordp val)
+                                  12
+                                  11))))
+                 (mix-str c (symbol-name val))))
+             ((stringp val) (mix-str (mix-byte cur 13) val))
+             ((integerp val)
+               (let ((c (mix-byte cur 14)))
+                 (if (<= 0 val #xFFFFFFFF)
+                   (mix-u32 c val)
                    (let
                        ((*print-readably* nil) (*print-pretty* nil))
-                     (mix-str (format nil "~S" val))))
-                  ((comment _ text) (mix-byte 2) (mix-str text))
-                  ((node _ tag children) (mix-byte 3)
-                   (mix-str (symbol-name tag))
-                   (dolist (c children) (walk c))
-                   (mix-byte (logand (length children) #xFF)))
-                  (_ (mix-byte 4)
-                     (let
-                         ((*print-readably* nil) (*print-pretty* nil))
-                       (mix-str (format nil "~S" n)))))))
-      (walk node)
+                     (mix-str c (format nil "~S" val))))))
+             (t
+               (let
+                   ((*print-readably* nil) (*print-pretty* nil))
+                 (mix-str cur (format nil "~S" val))))))
+         (walk (cur n)
+           (declare (type (unsigned-byte 64) cur))
+           (if (and (consp n) (eq (first n) :path))
+             (let ((tag (third n)))
+               (cond
+                 ((eq tag :leaf) (mix-val (mix-byte cur 1) (fourth n)))
+                 ((eq tag :comment)
+                   (let ((c (mix-byte cur 2)) (txt (fourth n)))
+                     (if (stringp txt)
+                       (mix-str c txt)
+                       c)))
+                 ((keywordp tag)
+                   (let
+                       ((c (mix-u32 (mix-byte cur 3) (logand #xFFFFFFFF (sxhash tag))))
+                        (children (cdddr n))
+                        (len 0))
+                     (declare (type (unsigned-byte 64) c) (type fixnum len))
+                     (dolist (child children)
+                       (incf len)
+                       (setf c (walk c child)))
+                     (mix-byte c (logand len #xFF))))
+                 (t (mix-val (mix-byte cur 4) n))))
+             (mix-val (mix-byte cur 4) n))))
+      (declare (inline mix-byte mix-u32))
+      (setf h (walk h node))
       h)))
 
 (defun node-short-hash (node)
   "Return a 4-character lowercase hex structural hash for NODE."
-  (string-downcase (format nil "~4,'0x" (logand (compute-node-hash node) #xFFFF))))
+  (let*
+      ((h (logand (compute-node-hash node) #xFFFF))
+       (digits "0123456789abcdef")
+       (out (make-string 4 :element-type 'character)))
+    (declare (type (unsigned-byte 16) h))
+    (setf (char out 0)
+          (char digits (ldb (byte 4 12) h))
+          (char out 1)
+          (char digits (ldb (byte 4 8) h))
+          (char out 2)
+          (char digits (ldb (byte 4 4) h))
+          (char out 3)
+          (char digits (ldb (byte 4 0) h)))
+    out))
 
 (defun get-node-id-handle (node)
   "Return the Hybrid EASE hashnode handle string (e.g. \"#n402:3a9f\") for NODE."
@@ -434,27 +497,35 @@ symbol-like raw atoms (e.g. case-sensitive identifiers such as Foo), otherwise N
        (tree &optional (current-path '()))
   "Recompute and update all :path metadata in TREE starting at CURRENT-PATH, preserving Hybrid EASE node IDs."
   (declare (type list current-path))
-  (labels
-      ((reindex-aux (node rev-path)
-         (let
-             ((full-path (reverse rev-path))
-              (old-id (when (consp node) (gethash node *node-id-table*))))
-           (let
-               ((new-node
-                  (match node
-                         ((leaf _ val) (list :path full-path :leaf val))
-                         ((comment _ text) (list :path full-path :comment text))
-                         ((node _ tag children)
-                          (list* :path
-                                 full-path
-                                 tag
-                                 (loop for child in children for idx of-type
-                                       fixnum from 0 collect
-                                       (reindex-aux child (cons idx rev-path)))))
-                         (_ node))))
-             (when (consp new-node) (ensure-node-id new-node old-id))
-             new-node))))
-    (reindex-aux tree (reverse current-path))))
+  (bt:with-lock-held (*node-id-lock*)
+                     (let
+                         ((has-ids-p (plusp (hash-table-count *node-id-table*))))
+                       (labels
+                           ((reindex-aux (node rev-path)
+                              (if (and (consp node) (eq (first node) :path))
+                                (let*
+                                    ((full-path (reverse rev-path))
+                                     (old-id (when has-ids-p (gethash node *node-id-table*)))
+                                     (tag (third node))
+                                     (new-node
+                                       (cond
+                                         ((eq tag :leaf) (list :path full-path :leaf (fourth node)))
+                                         ((eq tag :comment) (list :path full-path :comment (fourth node)))
+                                         ((keywordp tag)
+                                           (list* :path
+                                                  full-path
+                                                  tag
+                                                  (loop for child in (cdddr node)
+                                                        for idx of-type fixnum from 0
+                                                        collect (reindex-aux child (cons idx rev-path)))))
+                                         (t node))))
+                                  (when (and old-id (consp new-node))
+                                    (setf (gethash new-node *node-id-table*) old-id)
+                                    (unless (gethash old-id *id-node-table*)
+                                      (setf (gethash old-id *id-node-table*) new-node)))
+                                  new-node)
+                                node)))
+                         (reindex-aux tree (reverse current-path))))))
 
 (defun update-node-at-path (tree path fn)
   "Navigate to PATH in TREE, apply FN to the node at PATH, and reconstruct the tree.

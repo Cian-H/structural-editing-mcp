@@ -71,23 +71,30 @@
 (defun search-ast (tree query &key path exact)
   "Search the AST in TREE (optionally starting under PATH) for leaf nodes matching QUERY.
 If EXACT is T, requires exact match; otherwise searches case-insensitively for substrings."
-  (let ((results '())
-        (lower-query (string-downcase query))
-        (start-node (resolve-tree-scope tree path)))
+  (let
+      ((results '()) (start-node (resolve-tree-scope tree path)))
     (when start-node
-      (labels ((walk (node)
-                 (match node
-                        ((leaf node-path val)
-                         (let* ((str (format-atom val))
-                                (lower-str (string-downcase str)))
-                           (when (if exact
-                                   (string= lower-query lower-str)
-                                   (search lower-query lower-str))
-                             (push node-path results))))
-                        ((node _ _ children)
-                         (dolist (child children)
-                           (walk child)))
-                        (_ nil))))
+      (labels
+          ((walk (node)
+             (if (and (consp node) (eq (first node) :path))
+               (let ((tag (third node)))
+                 (cond
+                   ((eq tag :leaf)
+                     (let*
+                         ((val (fourth node))
+                          (str
+                            (cond
+                              ((and (consp val) (eq (car val) :raw) (stringp (cdr val))) (cdr val))
+                              ((and (symbolp val) (not (keywordp val))) (symbol-name val))
+                              (t (format-atom val)))))
+                       (when
+                           (if exact
+                             (string-equal query str)
+                             (search query str :test #'char-equal))
+                         (push (second node) results))))
+                   ((keywordp tag) (dolist (child (cdddr node)) (walk child)))
+                   (t nil)))
+               nil)))
         (walk start-node)))
     (nreverse results)))
 
